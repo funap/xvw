@@ -9,6 +9,7 @@ use std::sync::Arc;
 pub struct LayoutEngine {
     cached_line_map: RefCell<Option<LineMap>>,
     cached_layout_version: Cell<usize>,
+    bytes_per_row: Cell<usize>,
 }
 
 impl Default for LayoutEngine {
@@ -23,6 +24,30 @@ impl LayoutEngine {
         Self {
             cached_line_map: RefCell::new(None),
             cached_layout_version: Cell::new(initial_layout_version),
+            bytes_per_row: Cell::new(BYTES_PER_ROW),
+        }
+    }
+
+    /// Creates a new `LayoutEngine` with an initial layout version and custom bytes per row.
+    pub fn with_bytes_per_row(initial_layout_version: usize, bytes_per_row: usize) -> Self {
+        Self {
+            cached_line_map: RefCell::new(None),
+            cached_layout_version: Cell::new(initial_layout_version),
+            bytes_per_row: Cell::new(bytes_per_row.max(1)),
+        }
+    }
+
+    /// Returns the number of bytes displayed per standard row.
+    pub fn bytes_per_row(&self) -> usize {
+        self.bytes_per_row.get()
+    }
+
+    /// Sets the number of bytes displayed per row and invalidates the cached layout if changed.
+    pub fn set_bytes_per_row(&self, bytes_per_row: usize) {
+        let bytes_per_row = bytes_per_row.max(1);
+        if self.bytes_per_row.get() != bytes_per_row {
+            self.bytes_per_row.set(bytes_per_row);
+            self.invalidate();
         }
     }
 
@@ -122,6 +147,7 @@ impl LayoutEngine {
             return cached.clone();
         }
 
+        let bytes_per_row = self.bytes_per_row.get();
         let meta = &doc.metadata;
 
         // The parser prepares the default expanded structure layout before it
@@ -137,6 +163,7 @@ impl LayoutEngine {
             && !doc.address_map.has_gaps()
             && let Some(parse_res) = &meta.parse_result
             && let Some(line_map) = &parse_res.structure_line_map
+            && line_map.bytes_per_row() == bytes_per_row
         {
             let map = (**line_map).clone();
             *self.cached_line_map.borrow_mut() = Some(map.clone());
@@ -145,7 +172,7 @@ impl LayoutEngine {
 
         let total_size = doc.buffer.len();
         let map = if !Self::has_custom_layout(doc, show_inline_structure_view, is_parsing_structure) {
-            LineMap::Standard { total_size }
+            LineMap::Standard { total_size, bytes_per_row }
         } else {
             let folded_regions_guard = doc.computed_folded_regions();
             let mut segments = Vec::new();
@@ -238,11 +265,11 @@ impl LayoutEngine {
                     };
 
                     match next_event {
-                        Some(ev) if ev - current > BYTES_PER_ROW => {
-                            // We can fit one or more standard lines of BYTES_PER_ROW
-                            let n = (ev - current - 1) / BYTES_PER_ROW;
+                        Some(ev) if ev - current > bytes_per_row => {
+                            // We can fit one or more standard lines of bytes_per_row
+                            let n = (ev - current - 1) / bytes_per_row;
                             if n > 0 {
-                                let len_bytes = n * BYTES_PER_ROW;
+                                let len_bytes = n * bytes_per_row;
                                 segments.push(LayoutSegment {
                                     start_offset: current,
                                     start_line: current_line,
@@ -255,11 +282,11 @@ impl LayoutEngine {
                                 continue;
                             }
                         }
-                        None if total_size - current >= BYTES_PER_ROW => {
+                        None if total_size - current >= bytes_per_row => {
                             // No more events, and we have at least one full standard line remaining
                             let remaining_bytes = total_size - current;
-                            let n = remaining_bytes / BYTES_PER_ROW;
-                            let len_bytes = n * BYTES_PER_ROW;
+                            let n = remaining_bytes / bytes_per_row;
+                            let len_bytes = n * bytes_per_row;
                             segments.push(LayoutSegment {
                                 start_offset: current,
                                 start_line: current_line,
@@ -303,8 +330,8 @@ impl LayoutEngine {
                             };
 
                             let can_transition = match next_ev {
-                                Some(ev) => ev - current > BYTES_PER_ROW,
-                                None => total_size - current >= BYTES_PER_ROW,
+                                Some(ev) => ev - current > bytes_per_row,
+                                None => total_size - current >= bytes_per_row,
                             };
 
                             if can_transition {
@@ -327,10 +354,10 @@ impl LayoutEngine {
                         }
                         let next_event_break = break_events.get(break_idx).copied();
 
-                        // Advance in BYTES_PER_ROW increments, skipping joined boundaries
-                        let mut next_pos = current + BYTES_PER_ROW;
+                        // Advance in bytes_per_row increments, skipping joined boundaries
+                        let mut next_pos = current + bytes_per_row;
                         while custom_joins.contains(&next_pos) && next_pos < total_size {
-                            next_pos += BYTES_PER_ROW;
+                            next_pos += bytes_per_row;
                         }
 
                         match next_event_break {
@@ -358,7 +385,7 @@ impl LayoutEngine {
             }
 
             // Quick final pass to compute max_bytes_per_row and total_lines
-            let mut max_bytes_per_row = BYTES_PER_ROW;
+            let mut max_bytes_per_row = bytes_per_row;
             let mut total_lines = 0;
             for i in 0..segments.len() {
                 let seg = &segments[i];
@@ -366,7 +393,7 @@ impl LayoutEngine {
                 match &seg.kind {
                     SegmentKind::Standard => {
                         if i + 1 == segments.len() {
-                            let last_line_start = seg.start_offset + (seg.line_count - 1) * BYTES_PER_ROW;
+                            let last_line_start = seg.start_offset + (seg.line_count - 1) * bytes_per_row;
                             let last_line_len = total_size - last_line_start;
                             max_bytes_per_row = max_bytes_per_row.max(last_line_len);
                         }
@@ -390,6 +417,7 @@ impl LayoutEngine {
                 total_lines,
                 total_size,
                 max_bytes_per_row,
+                bytes_per_row,
             }))
         };
 
@@ -425,5 +453,29 @@ mod tests {
         // Invalidate cached map
         engine.invalidate();
         assert!(engine.cached_line_map.borrow().is_none());
+    }
+
+    #[test]
+    fn test_layout_engine_custom_bytes_per_row() {
+        let engine = LayoutEngine::with_bytes_per_row(0, 8);
+        assert_eq!(engine.bytes_per_row(), 8);
+        let doc = Document::new(PathBuf::from("test.bin"), Buffer::new(vec![0; 48]));
+        let collapsed = HashSet::new();
+
+        let map = engine.line_starts(&doc, false, false, &collapsed);
+        assert_eq!(map.len(), 6); // 48 / 8 = 6 lines
+        assert_eq!(map.get(0), Some(0));
+        assert_eq!(map.get(1), Some(8));
+        assert_eq!(map.get(2), Some(16));
+        assert_eq!(map.bytes_per_row(), 8);
+
+        // Update bytes_per_row to 24
+        engine.set_bytes_per_row(24);
+        assert_eq!(engine.bytes_per_row(), 24);
+        let map2 = engine.line_starts(&doc, false, false, &collapsed);
+        assert_eq!(map2.len(), 2); // 48 / 24 = 2 lines
+        assert_eq!(map2.get(0), Some(0));
+        assert_eq!(map2.get(1), Some(24));
+        assert_eq!(map2.bytes_per_row(), 24);
     }
 }

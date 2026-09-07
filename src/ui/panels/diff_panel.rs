@@ -44,24 +44,27 @@ pub struct DiffPanel {
 impl DiffPanel {
     pub fn new(left_document: Arc<RwLock<Document>>, right_document: Arc<RwLock<Document>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let default_encoding = *cx.global::<Encoding>();
+        let bytes_per_row = cx.global::<crate::core::layout::BytesPerRow>().0;
         let left_editor = cx.new(|_cx| {
             let mut editor = Editor::new(left_document.clone());
             editor.set_encoding(default_encoding);
+            editor.set_bytes_per_row(bytes_per_row);
             editor
         });
         let right_editor = cx.new(|_cx| {
             let mut editor = Editor::new(right_document.clone());
             editor.set_encoding(default_encoding);
+            editor.set_bytes_per_row(bytes_per_row);
             editor
         });
         let appearance = cx.global::<Appearance>().clone();
         let left_view = cx.new(|cx| {
-            HexView::new(left_editor, window, cx)
+            HexView::new(left_editor.clone(), window, cx)
                 .font_family(appearance.font_family.clone())
                 .font_size(px(appearance.font_size))
         });
         let right_view = cx.new(|cx| {
-            HexView::new(right_editor, window, cx)
+            HexView::new(right_editor.clone(), window, cx)
                 .font_family(appearance.font_family.clone())
                 .font_size(px(appearance.font_size))
         });
@@ -138,6 +141,27 @@ impl DiffPanel {
                 view.set_font_family(font_family, cx);
                 view.set_font_size(px(font_size), cx);
             });
+        }));
+
+        let left_editor_clone = left_editor.clone();
+        let right_editor_clone = right_editor.clone();
+        subscriptions.push(cx.observe_global::<crate::core::layout::BytesPerRow>(move |this, cx| {
+            let bytes_per_row = cx.global::<crate::core::layout::BytesPerRow>().0;
+            left_editor_clone.update(cx, |editor, cx| {
+                if editor.bytes_per_row() != bytes_per_row {
+                    editor.set_bytes_per_row(bytes_per_row);
+                    cx.notify();
+                }
+            });
+            right_editor_clone.update(cx, |editor, cx| {
+                if editor.bytes_per_row() != bytes_per_row {
+                    editor.set_bytes_per_row(bytes_per_row);
+                    cx.notify();
+                }
+            });
+            this.left_view.update(cx, |_, cx| cx.notify());
+            this.right_view.update(cx, |_, cx| cx.notify());
+            cx.notify();
         }));
 
         Self {

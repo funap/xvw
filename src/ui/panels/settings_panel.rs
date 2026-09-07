@@ -1,5 +1,6 @@
 use crate::core::appearance::Appearance;
 use crate::core::encoding::Encoding;
+use crate::core::layout::{BytesPerRow, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
 use gpui::prelude::*;
 use gpui::{
     Action, Anchor, App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString, Subscription, Window, div,
@@ -8,7 +9,7 @@ use gpui_kit::component::{
     ActiveTheme, Sizable as _, Size, StyledExt,
     button::Button,
     dock::{Panel, PanelEvent},
-    input::{self, Input, InputState},
+    input::{self, Input, InputState, NumberInput},
     menu::{DropdownMenu as _, PopupMenuItem},
     theme::Theme,
 };
@@ -20,6 +21,7 @@ pub struct SettingsPanel {
     focus_handle: FocusHandle,
     font_family_input: Entity<InputState>,
     font_size_input: Entity<InputState>,
+    bytes_per_row_input: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -29,11 +31,18 @@ impl SettingsPanel {
 
         let font_family_input = cx.new(|cx| InputState::new(window, cx));
         let font_size_input = cx.new(|cx| InputState::new(window, cx));
+        let bytes_per_row_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .step(1.0)
+                .min(MIN_BYTES_PER_ROW as f64)
+                .max(MAX_BYTES_PER_ROW as f64)
+        });
 
         // The global must be retrieved after the entities have been created.
-        let (family, size) = {
+        let (family, size, bytes_per_row) = {
             let appearance = cx.global::<Appearance>();
-            (appearance.font_family.clone(), appearance.font_size.to_string())
+            let bytes_per_row = cx.global::<BytesPerRow>().0;
+            (appearance.font_family.clone(), appearance.font_size.to_string(), bytes_per_row.to_string())
         };
 
         // Set initial values
@@ -45,9 +54,17 @@ impl SettingsPanel {
             input.set_value(size, window, cx);
         });
 
+        bytes_per_row_input.update(cx, |input: &mut InputState, cx| {
+            input.set_value(bytes_per_row, window, cx);
+        });
+
         let mut subscriptions = Vec::new();
 
         subscriptions.push(cx.observe_global::<Appearance>(|_, cx| {
+            cx.dispatch_action(&UpdateSettingInput);
+        }));
+
+        subscriptions.push(cx.observe_global::<BytesPerRow>(|_, cx| {
             cx.dispatch_action(&UpdateSettingInput);
         }));
 
@@ -81,10 +98,27 @@ impl SettingsPanel {
             }
         }));
 
+        subscriptions.push(
+            cx.subscribe(&bytes_per_row_input, |_, input: Entity<InputState>, event: &input::InputEvent, cx| {
+                if let input::InputEvent::Change = event {
+                    let value = input.read(cx).value().to_string();
+                    if let Ok(bpr) = value.parse::<usize>()
+                        && (MIN_BYTES_PER_ROW..=MAX_BYTES_PER_ROW).contains(&bpr)
+                    {
+                        cx.update_global::<BytesPerRow, _>(|bytes_per_row, _| {
+                            bytes_per_row.0 = bpr;
+                        });
+                        crate::settings::save_current(cx);
+                    }
+                }
+            }),
+        );
+
         Self {
             focus_handle,
             font_family_input,
             font_size_input,
+            bytes_per_row_input,
             _subscriptions: subscriptions,
         }
     }
@@ -93,6 +127,7 @@ impl SettingsPanel {
         let appearance = cx.global::<Appearance>();
         let family = appearance.font_family.clone();
         let size_str = appearance.font_size.to_string();
+        let bytes_per_row_str = cx.global::<BytesPerRow>().0.to_string();
 
         self.font_family_input.update(cx, |input, cx| {
             if input.value() != family.as_str() {
@@ -102,6 +137,11 @@ impl SettingsPanel {
         self.font_size_input.update(cx, |input, cx| {
             if input.value() != size_str.as_str() {
                 input.set_value(size_str, window, cx);
+            }
+        });
+        self.bytes_per_row_input.update(cx, |input, cx| {
+            if input.value() != bytes_per_row_str.as_str() {
+                input.set_value(bytes_per_row_str, window, cx);
             }
         });
     }
@@ -166,6 +206,14 @@ impl Render for SettingsPanel {
                             .gap_4()
                             .child(div().w_32().child("Font Size"))
                             .child(div().w_48().child(Input::new(&self.font_size_input))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_4()
+                            .child(div().w_32().child("Bytes Per Row"))
+                            .child(div().w_48().child(NumberInput::new(&self.bytes_per_row_input))),
                     )
                     .child({
                         let default_encoding = *cx.global::<Encoding>();

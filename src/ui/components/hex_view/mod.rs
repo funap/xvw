@@ -157,6 +157,7 @@ pub struct HexView {
     cached_desc_content_width: std::cell::Cell<Option<f32>>,
     resizing_column: Option<(ResizingColumn, f32, f32)>,
     last_cursor_offset: Option<usize>,
+    last_max_bytes_per_row: Option<usize>,
     cursor_reveal_pending: bool,
     _editor_subscription: Subscription,
     _insert_mode_subscription: Subscription,
@@ -298,12 +299,17 @@ impl HexView {
             cached_desc_content_width: std::cell::Cell::new(None),
             resizing_column: None,
             last_cursor_offset: None,
+            last_max_bytes_per_row: None,
             cursor_reveal_pending: true,
             _editor_subscription,
             _insert_mode_subscription,
             _cursor_blink_subscription,
             _window_activation_subscription,
         }
+    }
+
+    pub fn editor(&self) -> &Entity<Editor> {
+        &self.editor
     }
 
     pub fn layout_state(&self) -> HexViewLayoutState {
@@ -2304,6 +2310,11 @@ impl Render for HexView {
                 editor.structure.show_inline_structure_view && editor.parse_result().is_some(),
             )
         };
+        let max_bytes_per_row_changed = self.last_max_bytes_per_row != Some(max_bytes_per_row);
+        if max_bytes_per_row_changed {
+            self.last_max_bytes_per_row = Some(max_bytes_per_row);
+            self.ascii_col_width = Self::default_ascii_col_width(max_bytes_per_row);
+        }
         let ascii_col_width = self.effective_ascii_col_width(max_bytes_per_row);
 
         let container = div()
@@ -2336,7 +2347,7 @@ impl Render for HexView {
         };
         let total_data_width = f32::from(hex_grid_width(probe_source.text.len(), hex_cell_width));
         self.hex_content_width = total_data_width;
-        if self.hex_col_width <= 0.0 {
+        if max_bytes_per_row_changed || self.hex_col_width <= 0.0 {
             self.hex_col_width = total_data_width;
         }
         let max_hex_scroll = (total_data_width - self.hex_col_width).max(0.0);

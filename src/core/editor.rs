@@ -453,6 +453,14 @@ impl Editor {
         &self.layout
     }
 
+    pub fn bytes_per_row(&self) -> usize {
+        self.layout.bytes_per_row()
+    }
+
+    pub fn set_bytes_per_row(&mut self, bytes_per_row: usize) {
+        self.layout.set_bytes_per_row(bytes_per_row);
+    }
+
     pub fn total_size(&self) -> usize {
         let binding = self.document.read().expect("document read lock");
         let buffer = &binding.buffer;

@@ -1,12 +1,43 @@
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::sync::Arc;
 
-pub const BYTES_PER_ROW: usize = 16;
+pub const DEFAULT_BYTES_PER_ROW: usize = 16;
+pub const MIN_BYTES_PER_ROW: usize = 1;
+pub const MAX_BYTES_PER_ROW: usize = 64;
+pub const BYTES_PER_ROW: usize = DEFAULT_BYTES_PER_ROW;
+
+/// Application-wide setting for the number of bytes displayed per row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct BytesPerRow(pub usize);
+
+impl Default for BytesPerRow {
+    fn default() -> Self {
+        Self(DEFAULT_BYTES_PER_ROW)
+    }
+}
+
+impl std::ops::Deref for BytesPerRow {
+    type Target = usize;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<usize> for BytesPerRow {
+    fn from(value: usize) -> Self {
+        Self(value)
+    }
+}
+
+impl gpui::Global for BytesPerRow {}
 
 #[derive(Clone, Debug)]
 pub enum LineMap {
-    Standard { total_size: usize },
+    Standard { total_size: usize, bytes_per_row: usize },
     Sparse(Arc<SparseLineMap>),
 }
 
@@ -16,6 +47,7 @@ pub struct SparseLineMap {
     pub total_lines: usize,
     pub total_size: usize,
     pub max_bytes_per_row: usize,
+    pub bytes_per_row: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,7 +68,16 @@ pub enum SegmentKind {
 impl PartialEq for LineMap {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (LineMap::Standard { total_size: s1 }, LineMap::Standard { total_size: s2 }) => s1 == s2,
+            (
+                LineMap::Standard {
+                    total_size: s1,
+                    bytes_per_row: b1,
+                },
+                LineMap::Standard {
+                    total_size: s2,
+                    bytes_per_row: b2,
+                },
+            ) => s1 == s2 && b1 == b2,
             (LineMap::Sparse(sm1), LineMap::Sparse(sm2)) => sm1 == sm2,
             _ => {
                 if self.len() != other.len() {
@@ -104,7 +145,7 @@ impl SparseLineMap {
         match &seg.kind {
             SegmentKind::Standard => {
                 let rel_line = index - seg.start_line;
-                Some(seg.start_offset + rel_line * BYTES_PER_ROW)
+                Some(seg.start_offset + rel_line * self.bytes_per_row)
             }
             SegmentKind::Custom { starts } => {
                 let rel_line = index - seg.start_line;
@@ -136,10 +177,10 @@ impl SparseLineMap {
         match &seg.kind {
             SegmentKind::Standard => {
                 let rel_offset = offset - seg.start_offset;
-                if rel_offset.is_multiple_of(BYTES_PER_ROW) {
-                    Ok(seg.start_line + rel_offset / BYTES_PER_ROW)
+                if rel_offset.is_multiple_of(self.bytes_per_row) {
+                    Ok(seg.start_line + rel_offset / self.bytes_per_row)
                 } else {
-                    Err(seg.start_line + rel_offset / BYTES_PER_ROW + 1)
+                    Err(seg.start_line + rel_offset / self.bytes_per_row + 1)
                 }
             }
             SegmentKind::Custom { starts } => match starts.binary_search(offset) {
@@ -153,11 +194,11 @@ impl SparseLineMap {
 impl LineMap {
     pub fn len(&self) -> usize {
         match self {
-            LineMap::Standard { total_size } => {
+            LineMap::Standard { total_size, bytes_per_row } => {
                 if *total_size == 0 {
                     1
                 } else {
-                    (*total_size).div_ceil(BYTES_PER_ROW)
+                    (*total_size).div_ceil(*bytes_per_row)
                 }
             }
             LineMap::Sparse(sparse) => sparse.len(),
@@ -170,9 +211,9 @@ impl LineMap {
 
     pub fn get(&self, index: usize) -> Option<usize> {
         match self {
-            LineMap::Standard { .. } => {
+            LineMap::Standard { bytes_per_row, .. } => {
                 let len = self.len();
-                if index < len { Some(index * BYTES_PER_ROW) } else { None }
+                if index < len { Some(index * *bytes_per_row) } else { None }
             }
             LineMap::Sparse(sparse) => sparse.get(index),
         }
@@ -180,14 +221,14 @@ impl LineMap {
 
     pub fn binary_search(&self, offset: &usize) -> Result<usize, usize> {
         match self {
-            LineMap::Standard { total_size } => {
+            LineMap::Standard { total_size, bytes_per_row } => {
                 if *total_size == 0 {
                     return if *offset == 0 { Ok(0) } else { Err(1) };
                 }
-                let row = *offset / BYTES_PER_ROW;
+                let row = *offset / *bytes_per_row;
                 let len = self.len();
                 if row < len {
-                    if (*offset).is_multiple_of(BYTES_PER_ROW) { Ok(row) } else { Err(row + 1) }
+                    if (*offset).is_multiple_of(*bytes_per_row) { Ok(row) } else { Err(row + 1) }
                 } else {
                     Err(len)
                 }
@@ -198,8 +239,15 @@ impl LineMap {
 
     pub fn max_bytes_per_row(&self) -> usize {
         match self {
-            LineMap::Standard { .. } => BYTES_PER_ROW,
+            LineMap::Standard { bytes_per_row, .. } => *bytes_per_row,
             LineMap::Sparse(sparse) => sparse.max_bytes_per_row,
+        }
+    }
+
+    pub fn bytes_per_row(&self) -> usize {
+        match self {
+            LineMap::Standard { bytes_per_row, .. } => *bytes_per_row,
+            LineMap::Sparse(sparse) => sparse.bytes_per_row,
         }
     }
 }
@@ -208,11 +256,22 @@ impl LineMap {
 /// deduplicated. The default expanded structure layout uses the same boundary
 /// list for both event streams, so this avoids a second allocation and sort.
 pub fn build_line_map_from_sorted_events(total_size: usize, events: &[usize], custom_joins: &BTreeSet<usize>, empty_lines: &BTreeMap<usize, usize>) -> LineMap {
+    build_line_map_from_sorted_events_with_bytes_per_row(total_size, events, custom_joins, empty_lines, BYTES_PER_ROW)
+}
+
+pub fn build_line_map_from_sorted_events_with_bytes_per_row(
+    total_size: usize,
+    events: &[usize],
+    custom_joins: &BTreeSet<usize>,
+    empty_lines: &BTreeMap<usize, usize>,
+    bytes_per_row: usize,
+) -> LineMap {
+    let bytes_per_row = bytes_per_row.max(1);
     if events.is_empty() && custom_joins.is_empty() && empty_lines.is_empty() {
-        return LineMap::Standard { total_size };
+        return LineMap::Standard { total_size, bytes_per_row };
     }
 
-    build_line_map_from_sorted_event_lists(total_size, events, events, custom_joins, empty_lines)
+    build_line_map_from_sorted_event_lists(total_size, events, events, custom_joins, empty_lines, bytes_per_row)
 }
 
 fn build_line_map_from_sorted_event_lists(
@@ -221,6 +280,7 @@ fn build_line_map_from_sorted_event_lists(
     break_events: &[usize],
     custom_joins: &BTreeSet<usize>,
     empty_lines: &BTreeMap<usize, usize>,
+    bytes_per_row: usize,
 ) -> LineMap {
     let mut segments = Vec::new();
 
@@ -250,11 +310,11 @@ fn build_line_map_from_sorted_event_lists(
             };
 
             match next_event {
-                Some(ev) if ev - current > BYTES_PER_ROW => {
-                    // We can fit one or more standard lines of BYTES_PER_ROW.
-                    let n = (ev - current - 1) / BYTES_PER_ROW;
+                Some(ev) if ev - current > bytes_per_row => {
+                    // We can fit one or more standard lines of bytes_per_row.
+                    let n = (ev - current - 1) / bytes_per_row;
                     if n > 0 {
-                        let len_bytes = n * BYTES_PER_ROW;
+                        let len_bytes = n * bytes_per_row;
                         segments.push(LayoutSegment {
                             start_offset: current,
                             start_line: current_line,
@@ -267,11 +327,11 @@ fn build_line_map_from_sorted_event_lists(
                         continue;
                     }
                 }
-                None if total_size - current >= BYTES_PER_ROW => {
+                None if total_size - current >= bytes_per_row => {
                     // No more events, and we have at least one full standard line remaining.
                     let remaining_bytes = total_size - current;
-                    let n = remaining_bytes / BYTES_PER_ROW;
-                    let len_bytes = n * BYTES_PER_ROW;
+                    let n = remaining_bytes / bytes_per_row;
+                    let len_bytes = n * bytes_per_row;
                     segments.push(LayoutSegment {
                         start_offset: current,
                         start_line: current_line,
@@ -305,8 +365,8 @@ fn build_line_map_from_sorted_event_lists(
                     };
 
                     let can_transition = match next_ev {
-                        Some(ev) => ev - current > BYTES_PER_ROW,
-                        None => total_size - current >= BYTES_PER_ROW,
+                        Some(ev) => ev - current > bytes_per_row,
+                        None => total_size - current >= bytes_per_row,
                     };
 
                     if can_transition {
@@ -330,10 +390,10 @@ fn build_line_map_from_sorted_event_lists(
                 }
                 let next_event_break = break_events.get(break_idx).copied();
 
-                // Advance in BYTES_PER_ROW increments, skipping joined boundaries.
-                let mut next_pos = current + BYTES_PER_ROW;
+                // Advance in bytes_per_row increments, skipping joined boundaries.
+                let mut next_pos = current + bytes_per_row;
                 while custom_joins.contains(&next_pos) && next_pos < total_size {
-                    next_pos += BYTES_PER_ROW;
+                    next_pos += bytes_per_row;
                 }
 
                 match next_event_break {
@@ -361,7 +421,7 @@ fn build_line_map_from_sorted_event_lists(
     }
 
     // Compute max_bytes_per_row and total_lines once from the compact segments.
-    let mut max_bytes_per_row = BYTES_PER_ROW;
+    let mut max_bytes_per_row = bytes_per_row;
     let mut total_lines = 0;
     for i in 0..segments.len() {
         let segment = &segments[i];
@@ -369,7 +429,7 @@ fn build_line_map_from_sorted_event_lists(
         match &segment.kind {
             SegmentKind::Standard => {
                 if i + 1 == segments.len() {
-                    let last_line_start = segment.start_offset + (segment.line_count - 1) * BYTES_PER_ROW;
+                    let last_line_start = segment.start_offset + (segment.line_count - 1) * bytes_per_row;
                     let last_line_len = total_size - last_line_start;
                     max_bytes_per_row = max_bytes_per_row.max(last_line_len);
                 }
@@ -389,6 +449,7 @@ fn build_line_map_from_sorted_event_lists(
         total_lines,
         total_size,
         max_bytes_per_row,
+        bytes_per_row,
     }))
 }
 
@@ -441,13 +502,14 @@ impl CustomLayoutRules {
         self.breaks.insert(offset);
         self.joins.remove(&offset);
 
-        if line_length > BYTES_PER_ROW && offset != line_start {
-            let mut step = offset + BYTES_PER_ROW;
+        let bytes_per_row = line_starts.bytes_per_row();
+        if line_length > bytes_per_row && offset != line_start {
+            let mut step = offset + bytes_per_row;
             while step < line_end {
                 self.joins.insert(step);
-                step += BYTES_PER_ROW;
+                step += bytes_per_row;
             }
-            if line_end < total_size && !(line_end - offset).is_multiple_of(BYTES_PER_ROW) && !self.breaks.contains(&line_end) {
+            if line_end < total_size && !(line_end - offset).is_multiple_of(bytes_per_row) && !self.breaks.contains(&line_end) {
                 self.breaks.insert(line_end);
             }
         }
@@ -572,11 +634,12 @@ impl CustomLayoutRules {
             self.empty_lines.remove(&el);
         }
 
-        // 4. s から BYTES_PER_ROW ずつ進むステップを joins に追加し、1行に結合する
-        let mut step = s + BYTES_PER_ROW;
+        // 4. s から bytes_per_row ずつ進むステップを joins に追加し、1行に結合する
+        let bytes_per_row = line_starts.bytes_per_row();
+        let mut step = s + bytes_per_row;
         while step < e {
             self.joins.insert(step);
-            step += BYTES_PER_ROW;
+            step += bytes_per_row;
         }
     }
 
@@ -612,7 +675,10 @@ mod tests {
 
     #[test]
     fn test_standard_linemap() {
-        let map = LineMap::Standard { total_size: 32 };
+        let map = LineMap::Standard {
+            total_size: 32,
+            bytes_per_row: 16,
+        };
         assert_eq!(map.len(), 2);
         assert!(!map.is_empty());
         assert_eq!(map.get(0), Some(0));
@@ -622,11 +688,34 @@ mod tests {
         assert_eq!(map.binary_search(&16), Ok(1));
         assert_eq!(map.binary_search(&8), Err(1));
         assert_eq!(map.max_bytes_per_row(), 16);
+        assert_eq!(map.bytes_per_row(), 16);
+    }
+
+    #[test]
+    fn test_standard_linemap_custom_bytes_per_row() {
+        let map = LineMap::Standard {
+            total_size: 32,
+            bytes_per_row: 8,
+        };
+        assert_eq!(map.len(), 4);
+        assert_eq!(map.get(0), Some(0));
+        assert_eq!(map.get(1), Some(8));
+        assert_eq!(map.get(2), Some(16));
+        assert_eq!(map.get(3), Some(24));
+        assert_eq!(map.get(4), None);
+        assert_eq!(map.binary_search(&0), Ok(0));
+        assert_eq!(map.binary_search(&8), Ok(1));
+        assert_eq!(map.binary_search(&12), Err(2));
+        assert_eq!(map.max_bytes_per_row(), 8);
+        assert_eq!(map.bytes_per_row(), 8);
     }
 
     #[test]
     fn test_standard_linemap_empty() {
-        let map = LineMap::Standard { total_size: 0 };
+        let map = LineMap::Standard {
+            total_size: 0,
+            bytes_per_row: 16,
+        };
         assert_eq!(map.len(), 1);
         assert_eq!(map.get(0), Some(0));
         assert_eq!(map.binary_search(&0), Ok(0));
@@ -647,11 +736,13 @@ mod tests {
             total_lines: 1,
             total_size: 10,
             max_bytes_per_row: 10,
+            bytes_per_row: 16,
         };
         let map = LineMap::Sparse(Arc::new(sparse));
         assert_eq!(map.len(), 1);
         assert_eq!(map.get(0), Some(0));
         assert_eq!(map.binary_search(&0), Ok(0));
         assert_eq!(map.max_bytes_per_row(), 10);
+        assert_eq!(map.bytes_per_row(), 16);
     }
 }

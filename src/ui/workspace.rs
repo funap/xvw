@@ -519,9 +519,11 @@ impl Workspace {
 
     pub(crate) fn open_editor_panel(&mut self, document: Arc<RwLock<crate::core::document::Document>>, window: &mut Window, cx: &mut Context<Self>) {
         let default_encoding = *cx.global::<Encoding>();
+        let bytes_per_row = cx.global::<crate::core::layout::BytesPerRow>().0;
         let editor = cx.new(|_| {
             let mut editor = Editor::new(document);
             editor.set_encoding(default_encoding);
+            editor.set_bytes_per_row(bytes_per_row);
             editor
         });
 

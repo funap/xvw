@@ -55,6 +55,7 @@ pub struct EditorPanel {
     structure_reparse_task: Option<Task<()>>,
     tab_group: Option<WeakEntity<TabGroup>>,
     _appearance_subscription: Subscription,
+    _bytes_per_row_subscription: Subscription,
     _editor_subscription: Subscription,
     _document_lease: Option<EditorDocumentLease>,
 }
@@ -142,6 +143,11 @@ impl EditorPanel {
         })
         .detach();
 
+        let bytes_per_row = cx.global::<crate::core::layout::BytesPerRow>().0;
+        editor.update(cx, |editor, _| {
+            editor.set_bytes_per_row(bytes_per_row);
+        });
+
         let _appearance_subscription = cx.observe_global::<Appearance>(|this, cx| {
             let appearance = cx.global::<Appearance>();
             let font_family = appearance.font_family.clone();
@@ -150,6 +156,20 @@ impl EditorPanel {
                 this_hex_view.set_font_family(font_family, cx);
                 this_hex_view.set_font_size(px(font_size), cx);
             });
+        });
+
+        let _bytes_per_row_subscription = cx.observe_global::<crate::core::layout::BytesPerRow>(|this, cx| {
+            let bytes_per_row = cx.global::<crate::core::layout::BytesPerRow>().0;
+            this.editor.update(cx, |editor, cx| {
+                if editor.bytes_per_row() != bytes_per_row {
+                    editor.set_bytes_per_row(bytes_per_row);
+                    cx.notify();
+                }
+            });
+            this.hex_view.update(cx, |_, cx| {
+                cx.notify();
+            });
+            cx.notify();
         });
 
         let _editor_subscription = cx.observe(&editor, |this, editor, cx| {
@@ -198,6 +218,7 @@ impl EditorPanel {
             structure_reparse_task: None,
             tab_group: None,
             _appearance_subscription,
+            _bytes_per_row_subscription,
             _editor_subscription,
             _document_lease: document_lease,
         }
@@ -264,7 +285,7 @@ impl EditorPanel {
 
     #[allow(dead_code)]
     pub fn create_split_clone(&self, window: &mut Window, cx: &mut App) -> Entity<EditorPanel> {
-        let (doc, options, show_inline_structure_view, collapsed_struct_ids, cursor_state) = {
+        let (doc, options, show_inline_structure_view, collapsed_struct_ids, cursor_state, bytes_per_row) = {
             let ed = self.editor.read(cx);
             (
                 ed.document.clone(),
@@ -272,6 +293,7 @@ impl EditorPanel {
                 ed.structure.show_inline_structure_view,
                 ed.structure.collapsed_struct_ids.clone(),
                 ed.cursor_state(),
+                ed.bytes_per_row(),
             )
         };
 
@@ -284,6 +306,7 @@ impl EditorPanel {
             editor.structure.show_inline_structure_view = show_inline_structure_view;
             editor.structure.collapsed_struct_ids = collapsed_struct_ids;
             editor.restore_cursor_state(cursor_state);
+            editor.set_bytes_per_row(bytes_per_row);
             editor
         });
 

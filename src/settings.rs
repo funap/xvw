@@ -1,5 +1,6 @@
 use crate::core::appearance::Appearance;
 use crate::core::encoding::Encoding;
+use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
 use crate::core::structure::{DefinitionHistory, FileHistory, RecentFileEntry};
 use gpui::App;
 use gpui_kit::component::theme::{Theme, ThemeMode};
@@ -29,9 +30,15 @@ pub struct Settings {
     pub dark_theme: String,
     pub theme_mode: ThemeMode,
     pub default_encoding: Encoding,
+    #[serde(default = "default_bytes_per_row")]
+    pub bytes_per_row: usize,
     pub recent_definition_paths: Vec<PathBuf>,
     pub recent_file_paths: Vec<PathBuf>,
     pub recent_files: Vec<RecentFileEntry>,
+}
+
+fn default_bytes_per_row() -> usize {
+    DEFAULT_BYTES_PER_ROW
 }
 
 /// Application-wide recent-path histories shared by all workspace windows.
@@ -66,6 +73,7 @@ impl Default for Settings {
             dark_theme: DEFAULT_DARK_THEME.to_string(),
             theme_mode: ThemeMode::Light,
             default_encoding: Encoding::default(),
+            bytes_per_row: DEFAULT_BYTES_PER_ROW,
             recent_definition_paths: Vec::new(),
             recent_file_paths: Vec::new(),
             recent_files: Vec::new(),
@@ -110,6 +118,7 @@ impl Settings {
             dark_theme: theme.dark_theme.name.to_string(),
             theme_mode: theme.mode,
             default_encoding: *cx.global::<Encoding>(),
+            bytes_per_row: cx.global::<BytesPerRow>().0,
             recent_definition_paths: recent_history.definitions.paths().to_vec(),
             recent_file_paths: recent_history.files.paths(),
             recent_files: recent_history.files.entries().to_vec(),
@@ -167,6 +176,9 @@ impl Settings {
         }
         if self.dark_theme.trim().is_empty() {
             self.dark_theme = DEFAULT_DARK_THEME.to_string();
+        }
+        if !(MIN_BYTES_PER_ROW..=MAX_BYTES_PER_ROW).contains(&self.bytes_per_row) {
+            self.bytes_per_row = DEFAULT_BYTES_PER_ROW;
         }
 
         self.recent_definition_paths = DefinitionHistory::from_paths(self.recent_definition_paths).paths().to_vec();
@@ -287,6 +299,7 @@ mod tests {
             dark_theme: "Tokyo Night".into(),
             theme_mode: ThemeMode::Dark,
             default_encoding: Encoding::Utf16Le,
+            bytes_per_row: 24,
             recent_definition_paths: vec![PathBuf::from("definition.ksy")],
             recent_file_paths: vec![PathBuf::from("binary.bin")],
             recent_files: vec![RecentFileEntry::new(PathBuf::from("binary.bin"), None)],
@@ -342,6 +355,7 @@ mod tests {
         assert_eq!(settings.dark_theme, DEFAULT_DARK_THEME);
         assert_eq!(settings.theme_mode, ThemeMode::Light);
         assert_eq!(settings.default_encoding, Encoding::default());
+        assert_eq!(settings.bytes_per_row, DEFAULT_BYTES_PER_ROW);
     }
 
     #[test]
@@ -354,5 +368,21 @@ mod tests {
         assert_eq!(settings.appearance, Appearance::default());
         assert_eq!(settings.light_theme, DEFAULT_LIGHT_THEME);
         assert_eq!(settings.dark_theme, DEFAULT_DARK_THEME);
+        assert_eq!(settings.bytes_per_row, DEFAULT_BYTES_PER_ROW);
+    }
+
+    #[test]
+    fn invalid_bytes_per_row_is_replaced_with_defaults() {
+        let file = TestSettingsFile::new("sanitize-bytes-zero");
+        fs::write(&file.path, "bytes_per_row = 0\n").expect("write settings");
+
+        let settings = Settings::load_from(&file.path).expect("load settings");
+        assert_eq!(settings.bytes_per_row, DEFAULT_BYTES_PER_ROW);
+
+        let file_high = TestSettingsFile::new("sanitize-bytes-high");
+        fs::write(&file_high.path, "bytes_per_row = 100\n").expect("write settings");
+
+        let settings_high = Settings::load_from(&file_high.path).expect("load settings");
+        assert_eq!(settings_high.bytes_per_row, DEFAULT_BYTES_PER_ROW);
     }
 }

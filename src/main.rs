@@ -118,6 +118,7 @@ fn init_app_state(cx: &mut App) {
     app_state::AppState::init(cx);
     cx.set_global(settings.appearance.clone());
     cx.set_global(settings.default_encoding);
+    cx.set_global(crate::core::layout::BytesPerRow(settings.bytes_per_row));
     cx.set_global(settings::RecentHistoryState::from_settings(&settings));
 
     gpui_kit::init(cx);
