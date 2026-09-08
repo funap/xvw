@@ -27,8 +27,8 @@ use crate::actions::{
     ClearAllCustomBreaks, ClearBookmark, ClearStructureDefinition, Copy, CopyAsBase64, CopyAsBinary, CopyAsCppArray, CopyAsEscapedString, CopyAsHexDump,
     CopyAsHexSpaces, CopyAsHexStream, CopyAsJsonArray, CopyAsPrintableText, CopyAsRustArray, Cut, ExportBookmarks, FillSelection, HideAllBookmarks,
     ImportBookmarks, JoinLine, LoadStructureDefinition, Paste, Redo, RemoveCustomBreakBackward, RemoveCustomBreakForward, SearchNext, SearchPrev,
-    SelectAll as AppSelectAll, SetByteOrderBigEndian, SetByteOrderLittleEndian, SetEncoding, SetGroupSize1, SetGroupSize2, SetGroupSize4, SetGroupSize8,
-    SetRadixBin, SetRadixDec, SetRadixHex, SetRadixOct, ShowAllBookmarks, ShowBookmarksTab, ShowOnlyBookmarkBlue, ShowOnlyBookmarkCyan, ShowOnlyBookmarkGreen,
+    SelectAll as AppSelectAll, SetByteOrderBigEndian, SetByteOrderLittleEndian, SetGroupSize1, SetGroupSize2, SetGroupSize4, SetGroupSize8, SetRadixBin,
+    SetRadixDec, SetRadixHex, SetRadixOct, ShowAllBookmarks, ShowBookmarksTab, ShowOnlyBookmarkBlue, ShowOnlyBookmarkCyan, ShowOnlyBookmarkGreen,
     ShowOnlyBookmarkOrange, ShowOnlyBookmarkPink, ShowOnlyBookmarkPurple, ShowOnlyBookmarkRed, ShowOnlyBookmarkYellow, ShowStructureTab, ToggleBookmarkBlue,
     ToggleBookmarkCyan, ToggleBookmarkGreen, ToggleBookmarkOrange, ToggleBookmarkPink, ToggleBookmarkPurple, ToggleBookmarkRed, ToggleBookmarkYellow,
     ToggleByteOrder, ToggleHideUnbookmarked, ToggleInlineStructureView, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
@@ -3470,32 +3470,6 @@ impl Render for HexView {
                         (ed.is_read_only(), ed.can_undo(), ed.can_redo(), ed.has_selection())
                     };
                     menu.action_context(focus_handle.clone())
-                        .submenu("Radix", window, cx, move |menu, _window, _cx| {
-                            menu.menu("Hexadecimal (16)", Box::new(SetRadixHex))
-                                .menu("Decimal (10)", Box::new(SetRadixDec))
-                                .menu("Octal (8)", Box::new(SetRadixOct))
-                                .menu("Binary (2)", Box::new(SetRadixBin))
-                        })
-                        .submenu("Grouping", window, cx, move |menu, _window, _cx| {
-                            menu.menu("1 Byte (8-bit)", Box::new(SetGroupSize1))
-                                .menu("2 Bytes (16-bit)", Box::new(SetGroupSize2))
-                                .menu("4 Bytes (32-bit)", Box::new(SetGroupSize4))
-                                .menu("8 Bytes (64-bit)", Box::new(SetGroupSize8))
-                        })
-                        .submenu("Byte Order", window, cx, move |menu, _window, _cx| {
-                            menu.menu("Little Endian", Box::new(SetByteOrderLittleEndian))
-                                .menu("Big Endian", Box::new(SetByteOrderBigEndian))
-                        })
-                        .submenu("Text Encoding", window, cx, move |menu, window, cx| {
-                            Encoding::categories().iter().fold(menu, |menu, (cat, encs)| {
-                                menu.submenu(cat.label(), window, cx, move |menu, _window, _cx| {
-                                    encs.iter()
-                                        .copied()
-                                        .fold(menu, |menu, encoding| menu.menu(encoding.label(), Box::new(SetEncoding { encoding })))
-                                })
-                            })
-                        })
-                        .separator()
                         .menu_with_disabled("Undo", Box::new(Undo), is_read_only || !can_undo)
                         .menu_with_disabled("Redo", Box::new(Redo), is_read_only || !can_redo)
                         .menu_with_disabled("Cut", Box::new(Cut), is_read_only || !has_selection)
