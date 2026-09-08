@@ -68,6 +68,7 @@ struct HexInsertCursorParams {
     group_size: ByteGroupSize,
     is_big_endian: bool,
     selection_active: bool,
+    has_pending_nibble: bool,
     origin_x: Pixels,
     cell_width: Pixels,
 }
@@ -103,8 +104,13 @@ fn hex_insert_cursor_geometry(group: HexGroupInfo, cursor_in_row: usize, params:
         // column.
         DisplayRadix::Decimal | DisplayRadix::Octal => (group.text_end.saturating_sub(group.text_start) as f32 / expected_len.max(1) as f32).max(1.0),
     };
+    let nibble_offset = if params.radix == DisplayRadix::Hexadecimal && params.has_pending_nibble {
+        1.0
+    } else {
+        0.0
+    };
     Some((
-        params.origin_x + px((group.text_start as f32 + display_index as f32 * slot_width) * f32::from(params.cell_width)),
+        params.origin_x + px((group.text_start as f32 + display_index as f32 * slot_width + nibble_offset) * f32::from(params.cell_width)),
         px(slot_width * f32::from(params.cell_width)),
     ))
 }
@@ -166,10 +172,12 @@ pub fn darken_cursor_color(color: Hsla) -> Hsla {
 /// Paint every glyph centered in its fixed Hex cell while reusing the line
 /// shaped for the row. This keeps shaping batched and avoids a per-row glyph
 /// position allocation.
+#[allow(clippy::too_many_arguments)]
 pub fn paint_centered_hex_glyphs(
     shaped: &ShapedLine,
     groups: &[HexGroupInfo],
     group_colors: &[Hsla],
+    pending_edit_colors: Option<(usize, Hsla, Hsla)>,
     cell_width: Pixels,
     origin: Point<Pixels>,
     line_height: Pixels,
@@ -198,15 +206,21 @@ pub fn paint_centered_hex_glyphs(
             while group_idx < groups.len() && glyph.index >= groups[group_idx].text_end {
                 group_idx += 1;
             }
-            if group_idx < groups.len()
-                && groups[group_idx].text_start <= glyph.index
-                && glyph.index < groups[group_idx].text_end
-                && let Some(&color) = group_colors.get(group_idx)
-            {
-                if glyph.is_emoji {
-                    let _ = window.paint_emoji(glyph_origin, font_id, glyph.id, shaped.font_size);
-                } else {
-                    let _ = window.paint_glyph(glyph_origin, font_id, glyph.id, shaped.font_size, color);
+            if group_idx < groups.len() && groups[group_idx].text_start <= glyph.index && glyph.index < groups[group_idx].text_end {
+                let mut color = group_colors.get(group_idx).copied();
+                if let Some((p_char, typed_color, placeholder_color)) = pending_edit_colors {
+                    if glyph.index == p_char {
+                        color = Some(typed_color);
+                    } else if glyph.index == p_char + 1 {
+                        color = Some(placeholder_color);
+                    }
+                }
+                if let Some(color) = color {
+                    if glyph.is_emoji {
+                        let _ = window.paint_emoji(glyph_origin, font_id, glyph.id, shaped.font_size);
+                    } else {
+                        let _ = window.paint_glyph(glyph_origin, font_id, glyph.id, shaped.font_size, color);
+                    }
                 }
             }
         }
@@ -291,6 +305,7 @@ pub struct RowPaintParams<'a> {
     pub insert_mode: bool,
     pub active_column: EditColumn,
     pub cursor_visible: bool,
+    pub pending_hex_digit: Option<(usize, u8)>,
     pub outer_scroll_x: f32,
     pub hex_scroll_x: f32,
     pub desc_scroll_x: f32,
@@ -613,6 +628,35 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     // Group geometry uses the fixed cell grid; glyphs are centered in that
     // grid during the text pass.
     let hex_source = build_hex_text_source(chunk, offset, params.radix, params.group_size, params.is_big_endian);
+    let mut hex_text = hex_source.text.to_string();
+    let mut pending_byte_char_start: Option<usize> = None;
+
+    if let Some((pending_pos, pending_digit)) = params.pending_hex_digit
+        && params.active_column == EditColumn::Hex
+        && pending_pos >= offset
+        && pending_pos < next_offset
+    {
+        let chunk_pos = pending_pos - offset;
+        if let Some(group) = hex_source.groups.iter().find(|g| g.chunk_start <= chunk_pos && chunk_pos < g.chunk_end) {
+            let byte_index = chunk_pos - group.chunk_start;
+            let group_len = group.chunk_end - group.chunk_start;
+            let visual_byte = if !params.is_big_endian && group_len > 1 {
+                group_len.saturating_sub(byte_index + 1)
+            } else {
+                byte_index
+            };
+            let char_start = group.text_start + visual_byte * 2;
+            if char_start + 1 < hex_text.len() {
+                let digit_char = char::from_digit(pending_digit as u32, 16).unwrap_or('?');
+                let mut bytes = hex_text.into_bytes();
+                bytes[char_start] = digit_char as u8;
+                bytes[char_start + 1] = b'_';
+                hex_text = String::from_utf8(bytes).expect("valid utf8");
+                pending_byte_char_start = Some(char_start);
+            }
+        }
+    }
+
     let mut hex_runs: Vec<TextRun> = Vec::with_capacity(hex_source.groups.len() * 2);
     let mut group_visuals: Vec<(Option<Hsla>, bool, bool)> = Vec::with_capacity(hex_source.groups.len());
     let mut group_text_colors: Vec<Hsla> = Vec::with_capacity(hex_source.groups.len());
@@ -662,7 +706,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         });
     }
 
-    let shaped_hex = window.text_system().shape_line(hex_source.text.clone(), params.font_size, &hex_runs, None);
+    let shaped_hex = window.text_system().shape_line(SharedString::from(hex_text), params.font_size, &hex_runs, None);
+    let pending_edit_colors = pending_byte_char_start.map(|char_start| (char_start, caret_color, muted_color.opacity(0.6)));
     let text_origin_x = hex_start_x - px(params.hex_scroll_x);
     let total_data_width = f32::from(hex_grid_width(hex_source.text.len(), params.hex_cell_width));
 
@@ -676,6 +721,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         |window| {
             window.with_content_mask(Some(ContentMask { bounds: hex_mask_bounds }), |window| {
                 for (item_idx, group) in hex_source.groups.iter().enumerate() {
+                    let item_start_offset = offset + group.chunk_start;
                     let (hl_color, is_selected, is_cursor) = group_visuals[item_idx];
                     let (group_start_x, group_end_x) = hex_group_x(*group, text_origin_x, params.hex_cell_width);
                     let previous_group_end_x = if item_idx > 0 {
@@ -741,31 +787,52 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         } else {
                             darken_cursor_color(muted_color).opacity(0.8)
                         };
-                        let has_bg = hl_color.is_some() || is_selected;
-                        let prev_has_bg = item_idx > 0 && (group_visuals[item_idx - 1].0.is_some() || group_visuals[item_idx - 1].1);
-                        let next_has_bg = has_next && (group_visuals[item_idx + 1].0.is_some() || group_visuals[item_idx + 1].1);
-                        let (cursor_start_x, cursor_end_x) = if has_bg {
-                            (
-                                if prev_has_bg {
-                                    pixel_midpoint(previous_group_end_x, group_start_x)
-                                } else {
-                                    group_start_x
-                                },
-                                if next_has_bg {
-                                    pixel_midpoint(group_end_x, next_group_start_x)
-                                } else {
-                                    group_end_x
-                                },
-                            )
+
+                        if params.radix == DisplayRadix::Hexadecimal {
+                            let byte_index = params.cursor_offset.saturating_sub(item_start_offset);
+                            let group_len = group.chunk_end.saturating_sub(group.chunk_start);
+                            let visual_byte = if !params.is_big_endian && group_len > 1 {
+                                group_len.saturating_sub(byte_index + 1)
+                            } else {
+                                byte_index
+                            };
+                            let byte_char_start = group.text_start + visual_byte * 2;
+                            let byte_start_x = text_origin_x + hex_grid_x(byte_char_start, params.hex_cell_width);
+                            let byte_width = hex_grid_x(2, params.hex_cell_width);
+                            let byte_box_bounds = Bounds::new(point(byte_start_x, params.bounds.top() + px(1.0)), size(byte_width, px(ROW_HEIGHT - 2.0)));
+
+                            if params.active_column == EditColumn::Hex {
+                                paint_cursor_border(window, byte_box_bounds, cursor_border_color);
+                            } else {
+                                paint_underscore_cursor_at(window, byte_box_bounds, byte_start_x, byte_width, cursor_border_color);
+                            }
                         } else {
-                            (group_start_x, group_end_x)
-                        };
-                        let cursor_width = cursor_end_x - cursor_start_x;
-                        let item_box_bounds = Bounds::new(point(cursor_start_x, params.bounds.top() + px(1.0)), size(cursor_width, px(ROW_HEIGHT - 2.0)));
-                        if params.active_column == EditColumn::Hex {
-                            paint_cursor_border(window, item_box_bounds, cursor_border_color);
-                        } else {
-                            paint_underscore_cursor_at(window, item_box_bounds, cursor_start_x, cursor_width, cursor_border_color);
+                            let has_bg = hl_color.is_some() || is_selected;
+                            let prev_has_bg = item_idx > 0 && (group_visuals[item_idx - 1].0.is_some() || group_visuals[item_idx - 1].1);
+                            let next_has_bg = has_next && (group_visuals[item_idx + 1].0.is_some() || group_visuals[item_idx + 1].1);
+                            let (cursor_start_x, cursor_end_x) = if has_bg {
+                                (
+                                    if prev_has_bg {
+                                        pixel_midpoint(previous_group_end_x, group_start_x)
+                                    } else {
+                                        group_start_x
+                                    },
+                                    if next_has_bg {
+                                        pixel_midpoint(group_end_x, next_group_start_x)
+                                    } else {
+                                        group_end_x
+                                    },
+                                )
+                            } else {
+                                (group_start_x, group_end_x)
+                            };
+                            let cursor_width = cursor_end_x - cursor_start_x;
+                            let item_box_bounds = Bounds::new(point(cursor_start_x, params.bounds.top() + px(1.0)), size(cursor_width, px(ROW_HEIGHT - 2.0)));
+                            if params.active_column == EditColumn::Hex {
+                                paint_cursor_border(window, item_box_bounds, cursor_border_color);
+                            } else {
+                                paint_underscore_cursor_at(window, item_box_bounds, cursor_start_x, cursor_width, cursor_border_color);
+                            }
                         }
                     }
                 }
@@ -776,6 +843,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         &shaped_hex,
                         &hex_source.groups,
                         &group_text_colors,
+                        pending_edit_colors,
                         params.hex_cell_width,
                         point(text_origin_x, params.bounds.top() + px(2.0)),
                         line_height,
@@ -784,11 +852,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 }
 
                 if insert_cursor_active {
+                    let has_pending_nibble = params.pending_hex_digit.is_some_and(|(offset, _)| offset == params.insert_cursor_offset);
                     let insert_cursor_params = HexInsertCursorParams {
                         radix: params.radix,
                         group_size: params.group_size,
                         is_big_endian: params.is_big_endian,
                         selection_active: insert_selection_active,
+                        has_pending_nibble,
                         origin_x: text_origin_x,
                         cell_width: params.hex_cell_width,
                     };
@@ -1379,6 +1449,7 @@ mod tests {
                         group_size: ByteGroupSize::Four,
                         is_big_endian: false,
                         selection_active: true,
+                        has_pending_nibble: false,
                         origin_x: px(0.0),
                         cell_width: px(1.0),
                     },
@@ -1389,5 +1460,22 @@ mod tests {
             .collect();
 
         assert_eq!(positions, vec![0.0, 2.0, 4.0, 6.0]);
+
+        // When has_pending_nibble is true, cursor advances by 1 character
+        let (x_nibble1, _) = hex_insert_cursor_geometry(
+            group,
+            0,
+            HexInsertCursorParams {
+                radix: DisplayRadix::Hexadecimal,
+                group_size: ByteGroupSize::Four,
+                is_big_endian: false,
+                selection_active: true,
+                has_pending_nibble: true,
+                origin_x: px(0.0),
+                cell_width: px(1.0),
+            },
+        )
+        .expect("cursor is inside the group");
+        assert_eq!(f32::from(x_nibble1), 1.0);
     }
 }

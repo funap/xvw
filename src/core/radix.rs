@@ -263,6 +263,55 @@ pub fn is_group_zero(bytes: &[u8]) -> bool {
     !bytes.is_empty() && bytes.iter().all(|&b| b == 0)
 }
 
+/// Returns the next byte offset in visual reading order (left to right) on screen.
+pub fn next_visual_byte(pos: usize, total_len: usize, group_size: ByteGroupSize, is_big_endian: bool) -> usize {
+    if total_len == 0 {
+        return 0;
+    }
+    let g = group_size.byte_count();
+    if is_big_endian || g <= 1 {
+        return (pos + 1).min(total_len.saturating_sub(1));
+    }
+
+    let group_start = (pos / g) * g;
+    let slot = pos.saturating_sub(group_start);
+    // In Little Endian, visual slots within a group run from (group_len - 1) down to 0.
+    if slot > 0 {
+        pos - 1
+    } else {
+        let next_group_start = group_start + g;
+        if next_group_start >= total_len {
+            pos
+        } else {
+            let next_group_len = (total_len - next_group_start).min(g);
+            next_group_start + next_group_len - 1
+        }
+    }
+}
+
+/// Returns the previous byte offset in visual reading order (right to left) on screen.
+pub fn prev_visual_byte(pos: usize, total_len: usize, group_size: ByteGroupSize, is_big_endian: bool) -> usize {
+    if total_len == 0 || pos >= total_len {
+        return 0;
+    }
+    let g = group_size.byte_count();
+    if is_big_endian || g <= 1 {
+        return pos.saturating_sub(1);
+    }
+
+    let group_start = (pos / g) * g;
+    let slot = pos.saturating_sub(group_start);
+    let current_group_len = (total_len - group_start).min(g);
+
+    if slot + 1 < current_group_len {
+        pos + 1
+    } else if group_start == 0 {
+        pos
+    } else {
+        group_start.saturating_sub(g)
+    }
+}
+
 /// Formats a contiguous slice of bytes using the specified display radix, group size, and endianness.
 pub fn format_display_content(bytes: &[u8], start_offset: usize, radix: DisplayRadix, group_size: ByteGroupSize, is_big_endian: bool) -> String {
     if bytes.is_empty() {
@@ -525,5 +574,81 @@ mod tests {
 
         // 2-byte Decimal BE
         assert_eq!(format_display_content(&bytes, 0, DisplayRadix::Decimal, ByteGroupSize::Two, true), "4660 22136");
+    }
+
+    #[test]
+    fn test_visual_byte_navigation_one_byte() {
+        let total = 4;
+        assert_eq!(next_visual_byte(0, total, ByteGroupSize::One, false), 1);
+        assert_eq!(next_visual_byte(1, total, ByteGroupSize::One, false), 2);
+        assert_eq!(next_visual_byte(2, total, ByteGroupSize::One, false), 3);
+        assert_eq!(next_visual_byte(3, total, ByteGroupSize::One, false), 3);
+
+        assert_eq!(prev_visual_byte(3, total, ByteGroupSize::One, false), 2);
+        assert_eq!(prev_visual_byte(2, total, ByteGroupSize::One, false), 1);
+        assert_eq!(prev_visual_byte(1, total, ByteGroupSize::One, false), 0);
+        assert_eq!(prev_visual_byte(0, total, ByteGroupSize::One, false), 0);
+    }
+
+    #[test]
+    fn test_visual_byte_navigation_two_bytes_le() {
+        let total = 4;
+        assert_eq!(next_visual_byte(1, total, ByteGroupSize::Two, false), 0);
+        assert_eq!(next_visual_byte(0, total, ByteGroupSize::Two, false), 3);
+        assert_eq!(next_visual_byte(3, total, ByteGroupSize::Two, false), 2);
+        assert_eq!(next_visual_byte(2, total, ByteGroupSize::Two, false), 2);
+
+        assert_eq!(prev_visual_byte(2, total, ByteGroupSize::Two, false), 3);
+        assert_eq!(prev_visual_byte(3, total, ByteGroupSize::Two, false), 0);
+        assert_eq!(prev_visual_byte(0, total, ByteGroupSize::Two, false), 1);
+        assert_eq!(prev_visual_byte(1, total, ByteGroupSize::Two, false), 1);
+    }
+
+    #[test]
+    fn test_visual_byte_navigation_two_bytes_le_odd_length() {
+        let total = 3;
+        assert_eq!(next_visual_byte(1, total, ByteGroupSize::Two, false), 0);
+        assert_eq!(next_visual_byte(0, total, ByteGroupSize::Two, false), 2);
+        assert_eq!(next_visual_byte(2, total, ByteGroupSize::Two, false), 2);
+
+        assert_eq!(prev_visual_byte(2, total, ByteGroupSize::Two, false), 0);
+        assert_eq!(prev_visual_byte(0, total, ByteGroupSize::Two, false), 1);
+        assert_eq!(prev_visual_byte(1, total, ByteGroupSize::Two, false), 1);
+    }
+
+    #[test]
+    fn test_visual_byte_navigation_two_bytes_be() {
+        let total = 4;
+        assert_eq!(next_visual_byte(0, total, ByteGroupSize::Two, true), 1);
+        assert_eq!(next_visual_byte(1, total, ByteGroupSize::Two, true), 2);
+        assert_eq!(next_visual_byte(2, total, ByteGroupSize::Two, true), 3);
+        assert_eq!(next_visual_byte(3, total, ByteGroupSize::Two, true), 3);
+
+        assert_eq!(prev_visual_byte(3, total, ByteGroupSize::Two, true), 2);
+        assert_eq!(prev_visual_byte(2, total, ByteGroupSize::Two, true), 1);
+        assert_eq!(prev_visual_byte(1, total, ByteGroupSize::Two, true), 0);
+        assert_eq!(prev_visual_byte(0, total, ByteGroupSize::Two, true), 0);
+    }
+
+    #[test]
+    fn test_visual_byte_navigation_four_bytes_le() {
+        let total = 8;
+        assert_eq!(next_visual_byte(3, total, ByteGroupSize::Four, false), 2);
+        assert_eq!(next_visual_byte(2, total, ByteGroupSize::Four, false), 1);
+        assert_eq!(next_visual_byte(1, total, ByteGroupSize::Four, false), 0);
+        assert_eq!(next_visual_byte(0, total, ByteGroupSize::Four, false), 7);
+        assert_eq!(next_visual_byte(7, total, ByteGroupSize::Four, false), 6);
+        assert_eq!(next_visual_byte(6, total, ByteGroupSize::Four, false), 5);
+        assert_eq!(next_visual_byte(5, total, ByteGroupSize::Four, false), 4);
+        assert_eq!(next_visual_byte(4, total, ByteGroupSize::Four, false), 4);
+
+        assert_eq!(prev_visual_byte(4, total, ByteGroupSize::Four, false), 5);
+        assert_eq!(prev_visual_byte(5, total, ByteGroupSize::Four, false), 6);
+        assert_eq!(prev_visual_byte(6, total, ByteGroupSize::Four, false), 7);
+        assert_eq!(prev_visual_byte(7, total, ByteGroupSize::Four, false), 0);
+        assert_eq!(prev_visual_byte(0, total, ByteGroupSize::Four, false), 1);
+        assert_eq!(prev_visual_byte(1, total, ByteGroupSize::Four, false), 2);
+        assert_eq!(prev_visual_byte(2, total, ByteGroupSize::Four, false), 3);
+        assert_eq!(prev_visual_byte(3, total, ByteGroupSize::Four, false), 3);
     }
 }

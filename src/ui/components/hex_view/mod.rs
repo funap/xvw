@@ -8,6 +8,7 @@ pub mod types;
 
 pub use clipboard_handler::ClipboardHandler;
 pub use input_controller::InputController;
+use input_controller::{HexCommit, HexInputResult};
 pub use scroll_controller::ScrollController;
 
 #[cfg(test)]
@@ -275,7 +276,7 @@ impl HexView {
             scroll: ScrollController::default(),
             is_selecting: false,
             mouse_selection_anchor: None,
-            input: InputController::default(),
+            input: InputController::new(),
             bounds: std::cell::Cell::new(None),
             list_bounds: std::cell::Cell::new(None),
             highlights: Arc::new(Vec::new()),
@@ -1043,6 +1044,49 @@ impl HexView {
         self.input.clear_pending();
     }
 
+    fn apply_hex_commit(&mut self, commit: HexCommit, advance_cursor: bool, cx: &mut Context<Self>) -> bool {
+        let insert_mode = InsertModeState::is_enabled(cx);
+        let (group_size, is_big_endian) = {
+            let ed = self.editor.read(cx);
+            (ed.options.group_size, ed.options.is_big_endian)
+        };
+        let changed = self.editor.update(cx, |ed, editor_cx| {
+            let total = ed.total_size();
+            let changed = if let Some(range) = commit.replacement_range {
+                let cursor_after = if advance_cursor { range.start.saturating_add(1) } else { commit.offset };
+                ed.replace_range_with_cursor(range, vec![commit.value], cursor_after)
+            } else if insert_mode {
+                let pos = commit.offset.min(total);
+                let cursor_after = if advance_cursor { pos.saturating_add(1) } else { pos };
+                ed.replace_range_with_cursor(pos..pos, vec![commit.value], cursor_after)
+            } else {
+                if commit.offset >= total {
+                    return false;
+                }
+                let next_cursor = if advance_cursor {
+                    crate::core::radix::next_visual_byte(commit.offset, total, group_size, is_big_endian)
+                } else {
+                    commit.offset
+                };
+                ed.replace_range_with_cursor(commit.offset..commit.offset + 1, vec![commit.value], next_cursor)
+            };
+            editor_cx.notify();
+            changed
+        });
+        self.edit_changed(changed, cx);
+        changed
+    }
+
+    fn commit_pending_hex_with_zero(&mut self, cx: &mut Context<Self>) {
+        if !self.input.has_pending() {
+            return;
+        }
+        let is_read_only = self.editor.read(cx).is_read_only();
+        if let Some(commit) = self.input.commit_pending_with_zero(self.radix, is_read_only) {
+            self.apply_hex_commit(commit, false, cx);
+        }
+    }
+
     fn edit_column_is_hex(&self) -> bool {
         self.input.is_hex()
     }
@@ -1071,10 +1115,27 @@ impl HexView {
         }
 
         cx.focus_self(window);
-        if let Some(changed) = self.input.handle_hex_digit(digit, &self.editor, self.radix, cx) {
-            self.edit_changed(changed, cx);
-        } else {
-            cx.notify();
+        let (cursor_offset, selected_range, is_read_only) = {
+            let ed = self.editor.read(cx);
+            let sel = ed.has_selection().then(|| ed.edit_range()).flatten();
+            (ed.cursor.offset, sel, ed.is_read_only())
+        };
+
+        if let Some(ref range) = selected_range {
+            self.editor.update(cx, |ed, cx| {
+                ed.set_cursor_offset_exact(range.start);
+                cx.notify();
+            });
+        }
+
+        match self.input.handle_hex_digit(digit, cursor_offset, selected_range, is_read_only, self.radix) {
+            HexInputResult::Pending(_) => {
+                cx.notify();
+            }
+            HexInputResult::Commit(commit) => {
+                self.apply_hex_commit(commit, true, cx);
+            }
+            HexInputResult::Ignored => {}
         }
     }
 
@@ -1084,23 +1145,64 @@ impl HexView {
         }
 
         cx.focus_self(window);
-        if let Some(changed) = self.input.handle_ascii_character(character, &self.editor, self.encoding, cx) {
-            self.edit_changed(changed, cx);
-        }
+        let is_read_only = self.editor.read(cx).is_read_only();
+        let Some(replacement) = self.input.encode_ascii_char(character, self.encoding, is_read_only) else {
+            return;
+        };
+
+        let insert_mode = InsertModeState::is_enabled(cx);
+        let changed = self.editor.update(cx, |ed, editor_cx| {
+            let has_selection = ed.has_selection();
+            let changed = if insert_mode && !has_selection {
+                let position = ed.cursor.offset;
+                ed.insert_bytes(position, replacement)
+            } else if has_selection {
+                let range = ed.edit_range().expect("selection has an edit range");
+                if insert_mode {
+                    let cursor_after = range.start.saturating_add(replacement.len());
+                    ed.replace_range_with_cursor(range, replacement, cursor_after)
+                } else {
+                    ed.replace_range(range, replacement)
+                }
+            } else {
+                let position = ed.cursor.offset;
+                let range = position..position.saturating_add(replacement.len()).min(ed.total_size());
+                ed.replace_range(range, replacement)
+            };
+            editor_cx.notify();
+            changed
+        });
+        self.edit_changed(changed, cx);
     }
 
     fn delete_backward_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.focus_self(window);
-        if let Some(changed) = self.input.delete_backward(&self.editor, cx) {
-            self.edit_changed(changed, cx);
+        if self.edit_column_is_hex() && self.input.cancel_pending() {
+            cx.notify();
+            return;
         }
+        self.input.clear_pending();
+        let changed = self.editor.update(cx, |ed, editor_cx| {
+            let changed = ed.delete_backward();
+            if changed {
+                editor_cx.notify();
+            }
+            changed
+        });
+        self.edit_changed(changed, cx);
     }
 
     fn delete_forward_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.focus_self(window);
-        if let Some(changed) = self.input.delete_forward(&self.editor, cx) {
-            self.edit_changed(changed, cx);
-        }
+        self.input.clear_pending();
+        let changed = self.editor.update(cx, |ed, editor_cx| {
+            let changed = ed.delete_forward();
+            if changed {
+                editor_cx.notify();
+            }
+            changed
+        });
+        self.edit_changed(changed, cx);
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -1283,7 +1385,7 @@ impl HexView {
     fn exec_move(&mut self, window: &mut Window, cx: &mut Context<Self>, f: impl FnOnce(&mut Editor)) {
         cx.focus_self(window);
         self.pause_cursor_blink(cx);
-        self.clear_pending_hex_input();
+        self.commit_pending_hex_with_zero(cx);
         self.editor.update(cx, |editor, cx| {
             f(editor);
             cx.notify();
@@ -1295,7 +1397,7 @@ impl HexView {
     fn exec_select(&mut self, window: &mut Window, cx: &mut Context<Self>, f: impl FnOnce(&mut Editor)) {
         cx.focus_self(window);
         self.pause_cursor_blink(cx);
-        self.clear_pending_hex_input();
+        self.commit_pending_hex_with_zero(cx);
         self.editor.update(cx, |editor, cx| {
             f(editor);
             cx.notify();
@@ -1345,7 +1447,9 @@ impl HexView {
                 if insert_mode {
                     editor.move_left_for_insert();
                 } else {
-                    editor.move_left();
+                    let cur = editor.cursor.offset;
+                    let prev = crate::core::radix::prev_visual_byte(cur, editor.total_size(), editor.options.group_size, editor.options.is_big_endian);
+                    editor.set_cursor_offset_exact(prev);
                 }
             });
         }
@@ -1393,7 +1497,9 @@ impl HexView {
                 if insert_mode {
                     editor.move_right_for_insert();
                 } else {
-                    editor.move_right();
+                    let cur = editor.cursor.offset;
+                    let next = crate::core::radix::next_visual_byte(cur, editor.total_size(), editor.options.group_size, editor.options.is_big_endian);
+                    editor.set_cursor_offset_exact(next);
                 }
             });
         }
@@ -3044,12 +3150,8 @@ impl Render for HexView {
                     }
 
                     if let Some(edit_target) = this.edit_target_from_point(event.position, window, cx) {
-                        this.input.active_column = edit_target.column();
-                        this.input.hex_nibble = match edit_target {
-                            EditTarget::Hex { nibble, .. } => nibble,
-                            EditTarget::Ascii { .. } => 0,
-                        };
-                        this.input.pending_hex_digit = None;
+                        this.commit_pending_hex_with_zero(cx);
+                        this.input.set_active_column(edit_target.column());
                         let target_pos = edit_target.offset();
                         let selection_anchor = {
                             let editor = this.editor.read(cx);
@@ -3128,12 +3230,8 @@ impl Render for HexView {
                         return;
                     }
                     if let Some(edit_target) = this.edit_target_from_point(event.position, window, cx) {
-                        this.input.active_column = edit_target.column();
-                        this.input.hex_nibble = match edit_target {
-                            EditTarget::Hex { nibble, .. } => nibble,
-                            EditTarget::Ascii { .. } => 0,
-                        };
-                        this.input.pending_hex_digit = None;
+                        this.commit_pending_hex_with_zero(cx);
+                        this.input.set_active_column(edit_target.column());
                         let target_pos = edit_target.offset();
                         let is_ascii = matches!(edit_target, EditTarget::Ascii { .. });
                         let (char_start, char_end) = if is_ascii {
@@ -3303,7 +3401,8 @@ impl Render for HexView {
                 let radix = self.radix;
                 let group_size = self.group_size;
                 let is_big_endian = self.is_big_endian;
-                let active_column = self.input.active_column;
+                let active_column = self.input.active_column();
+                let pending_hex_digit = self.input.pending_hex_digit();
                 let _max_highlight_len = self.max_highlight_len;
                 let highlights = self.highlights.clone();
                 let is_dragging_scrollbar = self.scroll.is_dragging_scrollbar;
@@ -3419,6 +3518,7 @@ impl Render for HexView {
                                     insert_mode,
                                     active_column,
                                     cursor_visible,
+                                    pending_hex_digit,
                                     outer_scroll_x,
                                     hex_scroll_x,
                                     desc_scroll_x,

@@ -385,6 +385,90 @@ fn check_calculate_scroll_top_for_range() {
     assert_eq!(calculate_scroll_top_for_range(0, 10, 1, 0, 0), None); // single-row document
 }
 
+fn check_hex_editing_state() {
+    use super::input_controller::{HexCommit, HexInputResult, PendingHexInput};
+    use crate::ui::components::hex_view::types::EditColumn;
+
+    let mut input = crate::ui::components::hex_view::InputController::new();
+    assert!(!input.has_pending());
+    assert_eq!(input.pending_hex_digit(), None);
+    assert!(input.is_hex());
+    assert!(!input.is_ascii());
+
+    // Switch column
+    input.set_active_column(EditColumn::Ascii);
+    assert!(input.is_ascii());
+    assert!(!input.is_hex());
+    input.set_active_column(EditColumn::Hex);
+
+    // 1. Two-digit typing sequence (0x0A then 0x0B -> 0xAB)
+    let res1 = input.handle_hex_digit(0x0a, 0, None, false, DisplayRadix::Hexadecimal);
+    assert_eq!(res1, HexInputResult::Pending(PendingHexInput { offset: 0, digit: 0x0a }));
+    assert!(input.has_pending());
+    assert_eq!(input.pending_hex_digit(), Some((0, 0x0a)));
+
+    let res2 = input.handle_hex_digit(0x0b, 0, None, false, DisplayRadix::Hexadecimal);
+    assert_eq!(
+        res2,
+        HexInputResult::Commit(HexCommit {
+            offset: 0,
+            value: 0xab,
+            replacement_range: None,
+        })
+    );
+    assert!(!input.has_pending());
+    assert_eq!(input.pending_hex_digit(), None);
+
+    // 2. Navigation commit with zero padding (typing 0x01 then moving away -> 0x01)
+    let res3 = input.handle_hex_digit(0x01, 2, None, false, DisplayRadix::Hexadecimal);
+    assert_eq!(res3, HexInputResult::Pending(PendingHexInput { offset: 2, digit: 0x01 }));
+    let commit = input.commit_pending_with_zero(DisplayRadix::Hexadecimal, false);
+    assert_eq!(
+        commit,
+        Some(HexCommit {
+            offset: 2,
+            value: 0x01,
+            replacement_range: None,
+        })
+    );
+    assert!(!input.has_pending());
+
+    // 3. Selection replacement
+    let res4 = input.handle_hex_digit(0x0f, 0, Some(3..7), false, DisplayRadix::Hexadecimal);
+    assert_eq!(res4, HexInputResult::Pending(PendingHexInput { offset: 3, digit: 0x0f }));
+    let res5 = input.handle_hex_digit(0x0e, 3, None, false, DisplayRadix::Hexadecimal);
+    assert_eq!(
+        res5,
+        HexInputResult::Commit(HexCommit {
+            offset: 3,
+            value: 0xfe,
+            replacement_range: Some(3..7),
+        })
+    );
+
+    // 4. Cancel pending (e.g. Backspace / Escape)
+    input.handle_hex_digit(0x09, 10, None, false, DisplayRadix::Hexadecimal);
+    assert!(input.has_pending());
+    assert!(input.cancel_pending());
+    assert!(!input.has_pending());
+    assert!(!input.cancel_pending());
+
+    // 5. Read-only and non-hex radix rejection
+    assert_eq!(input.handle_hex_digit(0x01, 0, None, true, DisplayRadix::Hexadecimal), HexInputResult::Ignored);
+    assert_eq!(input.handle_hex_digit(0x01, 0, None, false, DisplayRadix::Binary), HexInputResult::Ignored);
+
+    // 6. ASCII encoding
+    assert_eq!(input.encode_ascii_char('A', Encoding::Utf8, false), Some(vec![0x41]));
+    assert_eq!(input.encode_ascii_char('\n', Encoding::Utf8, false), None);
+    assert_eq!(input.encode_ascii_char('A', Encoding::Utf8, true), None);
+
+    // 7. 16-bit LE navigation
+    assert_eq!(crate::core::radix::next_visual_byte(1, 4, ByteGroupSize::Two, false), 0);
+    assert_eq!(crate::core::radix::next_visual_byte(0, 4, ByteGroupSize::Two, false), 3);
+    assert_eq!(crate::core::radix::prev_visual_byte(0, 4, ByteGroupSize::Two, false), 1);
+    assert_eq!(crate::core::radix::prev_visual_byte(3, 4, ByteGroupSize::Two, false), 0);
+}
+
 #[test]
 fn test_hex_view_layout_suite() {
     check_layout_and_scrolling();
@@ -392,4 +476,5 @@ fn test_hex_view_layout_suite() {
     check_structure_and_highlights();
     check_ascii_non_printable_mapping();
     check_calculate_scroll_top_for_range();
+    check_hex_editing_state();
 }

@@ -2096,3 +2096,19 @@ fn test_fill_selection_sequential_multi_width_and_undo() {
     let doc = editor.document.read().unwrap();
     assert_eq!(doc.buffer.data(), &[0u8; 16]);
 }
+
+#[test]
+fn test_single_hex_digit_commit_cursor_advance() {
+    let mut editor = create_editor_with_content(&[0x00, 0x00, 0x00]);
+    assert_eq!(editor.cursor.offset, 0);
+
+    // Commit single digit at offset 0 keeping cursor at 0
+    assert!(editor.replace_range_with_cursor(0..1, vec![0x01], 0));
+    assert_eq!(editor.cursor.offset, 0);
+
+    // Subsequent move right advances cursor to 1 (not 2)
+    let total = editor.total_size();
+    let next = crate::core::radix::next_visual_byte(editor.cursor.offset, total, editor.options.group_size, editor.options.is_big_endian);
+    editor.set_cursor_offset_exact(next);
+    assert_eq!(editor.cursor.offset, 1);
+}

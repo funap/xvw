@@ -1,30 +1,55 @@
-use crate::app_state::InsertModeState;
-use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::radix::DisplayRadix;
 use crate::ui::components::hex_view::types::EditColumn;
-use gpui_kit::*;
 use std::ops::Range;
 
-/// Manages active column editing, nibble input buffering, and text/byte deletions.
+/// Represents buffered single-nibble hexadecimal input waiting for a second digit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingHexInput {
+    pub offset: usize,
+    pub digit: u8,
+}
+
+/// A resolved byte modification ready to be applied to the document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HexCommit {
+    pub offset: usize,
+    pub value: u8,
+    pub replacement_range: Option<Range<usize>>,
+}
+
+/// The state transition result of feeding a hexadecimal digit to the controller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HexInputResult {
+    /// The first nibble was buffered; UI should display visual feedback (e.g. `1_`).
+    Pending(PendingHexInput),
+    /// A complete byte was formed; the commit should be applied to the document.
+    Commit(HexCommit),
+    /// The input was rejected (read-only document or non-hexadecimal radix).
+    Ignored,
+}
+
+/// Manages active column state and multi-step hexadecimal/ASCII input buffering.
+///
+/// This is a pure, framework-independent state machine with zero GPUI or Editor dependencies.
 #[derive(Default, Debug, Clone)]
 pub struct InputController {
-    pub active_column: EditColumn,
-    pub pending_hex_digit: Option<(usize, u8)>,
-    pub pending_hex_range: Option<Range<usize>>,
-    pub hex_nibble: u8,
+    active_column: EditColumn,
+    pending: Option<PendingHexInput>,
+    pending_range: Option<Range<usize>>,
 }
 
 impl InputController {
-    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn clear_pending(&mut self) {
-        self.pending_hex_digit = None;
-        self.pending_hex_range = None;
-        self.hex_nibble = 0;
+    pub fn active_column(&self) -> EditColumn {
+        self.active_column
+    }
+
+    pub fn set_active_column(&mut self, column: EditColumn) {
+        self.active_column = column;
     }
 
     pub fn is_hex(&self) -> bool {
@@ -35,118 +60,86 @@ impl InputController {
         self.active_column == EditColumn::Ascii
     }
 
-    pub fn handle_hex_digit(&mut self, digit: u8, editor: &Entity<Editor>, radix: DisplayRadix, cx: &mut App) -> Option<bool> {
-        if radix != DisplayRadix::Hexadecimal || editor.read(cx).is_read_only() {
-            return None;
+    pub fn pending_hex_digit(&self) -> Option<(usize, u8)> {
+        self.pending.map(|p| (p.offset, p.digit))
+    }
+
+    pub fn has_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    pub fn clear_pending(&mut self) {
+        self.pending = None;
+        self.pending_range = None;
+    }
+
+    /// Cancels any pending input and returns `true` if a pending edit was active.
+    pub fn cancel_pending(&mut self) -> bool {
+        let had_pending = self.pending.is_some();
+        self.clear_pending();
+        had_pending
+    }
+
+    /// Handles a hexadecimal digit input.
+    pub fn handle_hex_digit(
+        &mut self,
+        digit: u8,
+        cursor_offset: usize,
+        selected_range: Option<Range<usize>>,
+        is_read_only: bool,
+        radix: DisplayRadix,
+    ) -> HexInputResult {
+        if radix != DisplayRadix::Hexadecimal || is_read_only {
+            return HexInputResult::Ignored;
         }
 
-        let selected_range = {
-            let ed = editor.read(cx);
-            ed.has_selection().then(|| ed.edit_range()).flatten()
+        let target_pos = if let Some(range) = selected_range {
+            self.pending_range = Some(range.clone());
+            self.pending = None;
+            range.start
+        } else {
+            cursor_offset
         };
-        if let Some(range) = selected_range {
-            editor.update(cx, |ed, _| {
-                ed.set_cursor_offset_exact(range.start);
-            });
-            self.pending_hex_range = Some(range);
-            self.pending_hex_digit = None;
-            self.hex_nibble = 0;
-        }
 
-        let position = editor.read(cx).cursor.offset;
-        if self.hex_nibble == 0 {
-            self.pending_hex_digit = Some((position, digit));
-            self.hex_nibble = 1;
-            return None;
+        if self.pending.as_ref().map(|p| p.offset) != Some(target_pos) {
+            let pending = PendingHexInput { offset: target_pos, digit };
+            self.pending = Some(pending);
+            HexInputResult::Pending(pending)
+        } else {
+            let high = self.pending.take().map(|p| p.digit).unwrap_or(0);
+            let value = (high << 4) | digit;
+            let replacement_range = self.pending_range.take();
+            HexInputResult::Commit(HexCommit {
+                offset: target_pos,
+                value,
+                replacement_range,
+            })
         }
-
-        let high = self
-            .pending_hex_digit
-            .filter(|(pending_position, _)| *pending_position == position)
-            .map(|(_, high)| high)
-            .unwrap_or_else(|| editor.read(cx).value_at_cursor().unwrap_or(0) >> 4);
-        let value = (high << 4) | digit;
-        let insert_mode = InsertModeState::is_enabled(cx);
-        let replacement_range = self.pending_hex_range.take();
-        let changed = editor.update(cx, |ed, editor_cx| {
-            let changed = if let Some(range) = replacement_range {
-                if insert_mode {
-                    let cursor_after = range.start.saturating_add(1);
-                    ed.replace_range_with_cursor(range, vec![value], cursor_after)
-                } else {
-                    ed.replace_range(range, vec![value])
-                }
-            } else if insert_mode {
-                ed.insert_bytes(position, vec![value])
-            } else {
-                ed.replace_byte(position, value)
-            };
-            editor_cx.notify();
-            changed
-        });
-        self.clear_pending();
-        Some(changed)
     }
 
-    pub fn handle_ascii_character(&mut self, character: char, editor: &Entity<Editor>, encoding: Encoding, cx: &mut App) -> Option<bool> {
-        if character.is_control() || editor.read(cx).is_read_only() {
+    /// Commits a pending single digit padded with leading zero (e.g. `'a'` -> `0x0A`),
+    /// as triggered by navigation away from the byte (HexEd.it style).
+    pub fn commit_pending_with_zero(&mut self, radix: DisplayRadix, is_read_only: bool) -> Option<HexCommit> {
+        if radix != DisplayRadix::Hexadecimal || is_read_only {
+            self.clear_pending();
             return None;
         }
 
-        let replacement = encoding.encode_char(character)?;
-        self.clear_pending();
-        let insert_mode = InsertModeState::is_enabled(cx);
-        let changed = editor.update(cx, |ed, editor_cx| {
-            let has_selection = ed.has_selection();
-            let changed = if insert_mode && !has_selection {
-                let position = ed.cursor.offset;
-                ed.insert_bytes(position, replacement)
-            } else if has_selection {
-                let range = ed.edit_range().expect("selection has an edit range");
-                if insert_mode {
-                    let cursor_after = range.start.saturating_add(replacement.len());
-                    ed.replace_range_with_cursor(range, replacement, cursor_after)
-                } else {
-                    ed.replace_range(range, replacement)
-                }
-            } else {
-                let position = ed.cursor.offset;
-                let range = position..position.saturating_add(replacement.len()).min(ed.total_size());
-                ed.replace_range(range, replacement)
-            };
-            editor_cx.notify();
-            changed
-        });
-        Some(changed)
+        let pending = self.pending.take()?;
+        let replacement_range = self.pending_range.take();
+        Some(HexCommit {
+            offset: pending.offset,
+            value: pending.digit,
+            replacement_range,
+        })
     }
 
-    pub fn delete_backward(&mut self, editor: &Entity<Editor>, cx: &mut App) -> Option<bool> {
-        if editor.read(cx).is_read_only() {
+    /// Validates and encodes a typed ASCII character.
+    pub fn encode_ascii_char(&mut self, character: char, encoding: Encoding, is_read_only: bool) -> Option<Vec<u8>> {
+        if character.is_control() || is_read_only {
             return None;
         }
         self.clear_pending();
-        let changed = editor.update(cx, |ed, editor_cx| {
-            let changed = ed.delete_backward();
-            if changed {
-                editor_cx.notify();
-            }
-            changed
-        });
-        Some(changed)
-    }
-
-    pub fn delete_forward(&mut self, editor: &Entity<Editor>, cx: &mut App) -> Option<bool> {
-        if editor.read(cx).is_read_only() {
-            return None;
-        }
-        self.clear_pending();
-        let changed = editor.update(cx, |ed, editor_cx| {
-            let changed = ed.delete_forward();
-            if changed {
-                editor_cx.notify();
-            }
-            changed
-        });
-        Some(changed)
+        encoding.encode_char(character)
     }
 }
