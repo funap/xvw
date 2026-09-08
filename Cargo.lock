@@ -8860,6 +8860,7 @@ dependencies = [
  "dirs 7.0.0",
  "encoding_rs",
  "flate2",
+ "getrandom 0.4.3",
  "gpui-kit",
  "gpui-pre",
  "image",

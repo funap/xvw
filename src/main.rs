@@ -127,6 +127,7 @@ fn init_app_state(cx: &mut App) {
     settings::register_quit_handler(cx);
     ui::workspace::init(cx);
     ui::components::new_file_modal::init(cx);
+    ui::components::fill_selection_modal::init(cx);
     ui::components::data_table::init(cx);
     ui::components::file_tree_view::init(cx);
     ui::components::goto_offset_bar::init(cx);

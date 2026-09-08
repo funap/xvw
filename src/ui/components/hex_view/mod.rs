@@ -24,13 +24,13 @@ pub use types::*;
 use crate::actions::{
     AddCustomBreak, BookmarkBlue, BookmarkCyan, BookmarkGreen, BookmarkOrange, BookmarkPink, BookmarkPurple, BookmarkRed, BookmarkYellow, ClearAllBookmarks,
     ClearAllCustomBreaks, ClearBookmark, ClearStructureDefinition, Copy, CopyAsBase64, CopyAsBinary, CopyAsCppArray, CopyAsEscapedString, CopyAsHexDump,
-    CopyAsHexSpaces, CopyAsHexStream, CopyAsJsonArray, CopyAsPrintableText, CopyAsRustArray, Cut, ExportBookmarks, HideAllBookmarks, ImportBookmarks, JoinLine,
-    LoadStructureDefinition, Paste, Redo, RemoveCustomBreakBackward, RemoveCustomBreakForward, SearchNext, SearchPrev, SelectAll as AppSelectAll,
-    SetByteOrderBigEndian, SetByteOrderLittleEndian, SetEncoding, SetGroupSize1, SetGroupSize2, SetGroupSize4, SetGroupSize8, SetRadixBin, SetRadixDec,
-    SetRadixHex, SetRadixOct, ShowAllBookmarks, ShowBookmarksTab, ShowOnlyBookmarkBlue, ShowOnlyBookmarkCyan, ShowOnlyBookmarkGreen, ShowOnlyBookmarkOrange,
-    ShowOnlyBookmarkPink, ShowOnlyBookmarkPurple, ShowOnlyBookmarkRed, ShowOnlyBookmarkYellow, ShowStructureTab, ToggleBookmarkBlue, ToggleBookmarkCyan,
-    ToggleBookmarkGreen, ToggleBookmarkOrange, ToggleBookmarkPink, ToggleBookmarkPurple, ToggleBookmarkRed, ToggleBookmarkYellow, ToggleByteOrder,
-    ToggleHideUnbookmarked, ToggleInlineStructureView, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
+    CopyAsHexSpaces, CopyAsHexStream, CopyAsJsonArray, CopyAsPrintableText, CopyAsRustArray, Cut, ExportBookmarks, FillSelection, HideAllBookmarks,
+    ImportBookmarks, JoinLine, LoadStructureDefinition, Paste, Redo, RemoveCustomBreakBackward, RemoveCustomBreakForward, SearchNext, SearchPrev,
+    SelectAll as AppSelectAll, SetByteOrderBigEndian, SetByteOrderLittleEndian, SetEncoding, SetGroupSize1, SetGroupSize2, SetGroupSize4, SetGroupSize8,
+    SetRadixBin, SetRadixDec, SetRadixHex, SetRadixOct, ShowAllBookmarks, ShowBookmarksTab, ShowOnlyBookmarkBlue, ShowOnlyBookmarkCyan, ShowOnlyBookmarkGreen,
+    ShowOnlyBookmarkOrange, ShowOnlyBookmarkPink, ShowOnlyBookmarkPurple, ShowOnlyBookmarkRed, ShowOnlyBookmarkYellow, ShowStructureTab, ToggleBookmarkBlue,
+    ToggleBookmarkCyan, ToggleBookmarkGreen, ToggleBookmarkOrange, ToggleBookmarkPink, ToggleBookmarkPurple, ToggleBookmarkRed, ToggleBookmarkYellow,
+    ToggleByteOrder, ToggleHideUnbookmarked, ToggleInlineStructureView, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
 };
 use crate::app_state::InsertModeState;
 use crate::core::editor::Editor;
@@ -3516,6 +3516,7 @@ impl Render for HexView {
                                 .menu_with_disabled("as JSON Array", Box::new(CopyAsJsonArray), !has_selection)
                         })
                         .menu_with_disabled("Paste", Box::new(Paste), is_read_only)
+                        .menu_with_disabled("Fill Selection...", Box::new(FillSelection), is_read_only || !has_selection)
                         .separator()
                         .submenu("Bookmark", window, cx, move |menu, _window, _cx| {
                             menu.menu("Red", Box::new(BookmarkRed))

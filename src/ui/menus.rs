@@ -183,6 +183,9 @@ fn build_edit_menu() -> MenuDef {
             MenuItemDef::action_with_condition("Cut", crate::actions::Cut, |s| !s.is_read_only && s.has_doc && s.has_selection),
             MenuItemDef::action_with_condition("Copy", crate::actions::Copy, |s| s.has_selection),
             MenuItemDef::action_with_condition("Paste", crate::actions::Paste, |s| !s.is_read_only && s.has_doc),
+            MenuItemDef::action_with_condition("Fill Selection...", crate::actions::FillSelection, |s| {
+                !s.is_read_only && s.has_doc && s.has_selection
+            }),
             MenuItemDef::action_with_condition("Toggle Insert Mode", crate::actions::ToggleInsertMode, |s| !s.is_read_only && s.has_doc),
             MenuItemDef::action_with_condition("Toggle Read-only", crate::actions::ToggleReadOnly, |s| s.has_doc),
             MenuItemDef::separator(),

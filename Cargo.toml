@@ -29,6 +29,7 @@ flate2 = "1.1.10"
 image = "0.25.10"
 sha2 = "0.11.0"
 encoding_rs = "0.8.35"
+getrandom = "0.4.3"
 
 [profile.test]
 # Keep test builds fast enough for IDE test-runner timeouts. The tests cover

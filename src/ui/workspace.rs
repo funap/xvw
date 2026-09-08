@@ -33,6 +33,7 @@ pub struct Workspace {
     pub recent_file_history: crate::core::structure::FileHistory,
     pub is_left_panel_visible: bool,
     pub new_file_modal: Option<Entity<crate::ui::components::new_file_modal::NewFileModal>>,
+    pub fill_selection_modal: Option<Entity<crate::ui::components::fill_selection_modal::FillSelectionModal>>,
     pub untitled_count: usize,
     focus_handle: FocusHandle,
     last_active_editor_id: Cell<Option<EntityId>>,
@@ -67,6 +68,11 @@ pub fn init(cx: &mut App) {
     cx.on_action::<NewFile>(|_, cx| {
         defer_in_active_workspace(cx, |workspace, window, cx| {
             workspace.on_action_new_file(&NewFile, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::FillSelection>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_fill_selection(window, cx);
         });
     });
     cx.on_action::<OpenFile>(|action, cx| {
@@ -368,6 +374,7 @@ impl Workspace {
             recent_file_history: recent_history.files,
             is_left_panel_visible: true,
             new_file_modal: None,
+            fill_selection_modal: None,
             untitled_count: 0,
             focus_handle: cx.focus_handle(),
             last_active_editor_id: Cell::new(None),
@@ -576,6 +583,78 @@ impl Workspace {
         let document = Arc::new(RwLock::new(crate::core::document::Document::new(path, buffer)));
 
         self.open_editor_panel(document, window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn on_action_fill_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::ui::components::fill_selection_modal::{FillSelectionModal, FillSelectionModalEvent};
+
+        let Some(active_editor) = self.active_editor(cx) else {
+            return;
+        };
+        let (range_opt, is_read_only) = {
+            let ed = active_editor.read(cx);
+            (ed.selection_range(), ed.is_read_only())
+        };
+        if is_read_only {
+            return;
+        }
+        let Some(range) = range_opt else {
+            return;
+        };
+        if range.is_empty() {
+            return;
+        }
+
+        let modal = cx.new(|cx| FillSelectionModal::new(range.clone(), window, cx));
+        let editor_entity = active_editor.clone();
+        let target_range = range.clone();
+        cx.subscribe_in(&modal, window, move |this, _, event: &FillSelectionModalEvent, window, cx| match event {
+            FillSelectionModalEvent::Fill(pattern) => {
+                this.execute_fill_selection(&editor_entity, target_range.clone(), pattern, window, cx);
+            }
+            FillSelectionModalEvent::Cancel => {
+                this.close_fill_selection_modal(window, cx);
+            }
+        })
+        .detach();
+
+        modal.update(cx, |m, cx| {
+            m.focus(window, cx);
+        });
+
+        self.fill_selection_modal = Some(modal);
+        cx.notify();
+    }
+
+    fn close_fill_selection_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.fill_selection_modal = None;
+        self.sync_active_editor(window, cx);
+        cx.notify();
+    }
+
+    fn execute_fill_selection(
+        &mut self,
+        editor: &Entity<Editor>,
+        range: std::ops::Range<usize>,
+        pattern: &crate::core::fill::FillPattern,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.fill_selection_modal = None;
+        let len = range.len();
+        let bytes = pattern.generate(len);
+        let start = range.start;
+        let end = range.end;
+
+        editor.update(cx, |ed, cx| {
+            if ed.replace_range(start..end, bytes) {
+                ed.set_selection_range(start..end);
+                cx.notify();
+            }
+        });
+
+        self.sync_active_editor(window, cx);
         cx.notify();
     }
 
@@ -907,6 +986,21 @@ impl Render for Workspace {
             )
             .child(self.status_bar.clone())
             .when_some(self.new_file_modal.clone(), |el, modal| {
+                el.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .bg(gpui::rgba(0x00000080))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .child(modal),
+                )
+            })
+            .when_some(self.fill_selection_modal.clone(), |el, modal| {
                 el.child(
                     div()
                         .absolute()

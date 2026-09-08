@@ -1996,3 +1996,103 @@ fn test_adjacent_consecutive_bookmarks_do_not_merge() {
     assert_eq!(sum3.color, BookmarkColor::Red);
     assert_eq!(sum3.comment, "Red2");
 }
+
+#[test]
+fn test_fill_selection_single_byte_and_undo() {
+    use crate::core::fill::FillPattern;
+
+    let mut editor = create_editor_with_content(b"Hello, World!");
+    let range = 7..12; // "World"
+    editor.set_selection_range(range.clone());
+    assert_eq!(editor.selection_range(), Some(range.clone()));
+
+    let pattern = FillPattern::SingleByte(b'X');
+    let bytes = pattern.generate(range.len());
+    assert!(editor.replace_range(range.clone(), bytes));
+    editor.set_selection_range(range.clone());
+
+    let doc = editor.document.read().unwrap();
+    assert_eq!(doc.buffer.data(), b"Hello, XXXXX!");
+    drop(doc);
+
+    // Test Undo (Ctrl+Z)
+    assert!(editor.undo());
+    let doc = editor.document.read().unwrap();
+    assert_eq!(doc.buffer.data(), b"Hello, World!");
+    drop(doc);
+
+    // Test Redo
+    assert!(editor.redo());
+    let doc = editor.document.read().unwrap();
+    assert_eq!(doc.buffer.data(), b"Hello, XXXXX!");
+}
+
+#[test]
+fn test_fill_selection_pattern_and_undo() {
+    use crate::core::fill::FillPattern;
+
+    let mut editor = create_editor_with_content(&[0u8; 16]);
+    let range = 4..12;
+    editor.set_selection_range(range.clone());
+
+    let pattern = FillPattern::Pattern(vec![0xAA, 0xBB]);
+    let bytes = pattern.generate(range.len());
+    assert!(editor.replace_range(range.clone(), bytes));
+
+    let doc = editor.document.read().unwrap();
+    assert_eq!(doc.buffer.data(), &[0, 0, 0, 0, 0xAA, 0xBB, 0xAA, 0xBB, 0xAA, 0xBB, 0xAA, 0xBB, 0, 0, 0, 0]);
+    drop(doc);
+
+    // Undo
+    assert!(editor.undo());
+    let doc = editor.document.read().unwrap();
+    assert_eq!(doc.buffer.data(), &[0u8; 16]);
+}
+
+#[test]
+fn test_fill_selection_sequential_multi_width_and_undo() {
+    use crate::core::fill::{FillPattern, SequentialWidth};
+    use crate::core::radix::ByteOrder;
+
+    let mut editor = create_editor_with_content(&[0u8; 16]);
+    let range = 0..8;
+
+    // 2-byte LE sequential
+    let pattern_u16 = FillPattern::Sequential {
+        width: SequentialWidth::U16,
+        start: 1,
+        step: 1,
+        byte_order: ByteOrder::LittleEndian,
+    };
+    let bytes = pattern_u16.generate(range.len());
+    assert!(editor.replace_range(range.clone(), bytes));
+
+    let doc = editor.document.read().unwrap();
+    assert_eq!(&doc.buffer.data()[..8], &[0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00]);
+    drop(doc);
+
+    // 4-byte BE sequential over same range
+    let pattern_u32 = FillPattern::Sequential {
+        width: SequentialWidth::U32,
+        start: 0x12345678,
+        step: 1,
+        byte_order: ByteOrder::BigEndian,
+    };
+    let bytes = pattern_u32.generate(range.len());
+    assert!(editor.replace_range(range.clone(), bytes));
+
+    let doc = editor.document.read().unwrap();
+    assert_eq!(&doc.buffer.data()[..8], &[0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0x56, 0x79]);
+    drop(doc);
+
+    // Undo 4-byte BE -> returns to 2-byte LE
+    assert!(editor.undo());
+    let doc = editor.document.read().unwrap();
+    assert_eq!(&doc.buffer.data()[..8], &[0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00]);
+    drop(doc);
+
+    // Undo 2-byte LE -> returns to all zeros
+    assert!(editor.undo());
+    let doc = editor.document.read().unwrap();
+    assert_eq!(doc.buffer.data(), &[0u8; 16]);
+}

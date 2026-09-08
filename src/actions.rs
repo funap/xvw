@@ -398,6 +398,9 @@ pub struct Cut;
 pub struct Paste;
 
 #[derive(Clone, PartialEq, Action)]
+pub struct FillSelection;
+
+#[derive(Clone, PartialEq, Action)]
 pub struct Undo;
 
 #[derive(Clone, PartialEq, Action)]

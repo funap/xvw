@@ -5,6 +5,7 @@ pub mod checksum_panel;
 pub mod data_inspector;
 pub mod data_table;
 pub mod file_tree_view;
+pub mod fill_selection_modal;
 pub mod goto_offset_bar;
 pub mod hex_view;
 pub mod new_file_modal;
