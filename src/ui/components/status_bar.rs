@@ -5,11 +5,11 @@ use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::ui::icon::IconName;
 use crate::ui::style::{decode_uint_value, format_binary_repr, format_size_friendly, format_text_repr};
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _};
 use gpui_kit::component::{ActiveTheme, Sizable as _, Size, StyledExt};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 
 pub enum StatusBarEvent {
     #[allow(dead_code)]
@@ -215,7 +215,7 @@ impl Render for StatusBar {
                             .on_mouse_down(MouseButton::Left, {
                                 let copy_str = position_copy_val.clone();
                                 move |_, _, cx| {
-                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_str.clone()));
+                                    cx.write_to_clipboard(ClipboardItem::new_string(copy_str.clone()));
                                 }
                             })
                             .context_menu({
@@ -249,7 +249,7 @@ impl Render for StatusBar {
                                 .tooltip(|_window, cx| cx.new(|_| gpui_kit::component::tooltip::Tooltip::new("Click to copy value")).into())
                                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                     if !raw_copy.is_empty() {
-                                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(raw_copy.clone()));
+                                        cx.write_to_clipboard(ClipboardItem::new_string(raw_copy.clone()));
                                     }
                                 })
                                 .child(val_str),
@@ -273,7 +273,7 @@ impl Render for StatusBar {
                             .hover(|s| s.bg(theme.muted.opacity(0.4)))
                             .tooltip(|_window, cx| cx.new(|_| gpui_kit::component::tooltip::Tooltip::new("Click to copy exact file size")).into())
                             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(total_size.to_string()));
+                                cx.write_to_clipboard(ClipboardItem::new_string(total_size.to_string()));
                             })
                             .child(
                                 div()

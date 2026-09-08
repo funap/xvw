@@ -1,5 +1,5 @@
 use crate::core::format::FileFormat;
-use gpui::Action;
+use gpui_kit::Action;
 use schemars::JsonSchema;
 use serde::Deserialize;
 

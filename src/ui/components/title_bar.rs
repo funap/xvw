@@ -1,14 +1,14 @@
 use crate::ui::icon::IconName;
 use crate::ui::menus::MenuEditorState;
-use gpui::prelude::FluentBuilder;
-use gpui::{
+use gpui_kit::component::button::ButtonVariants;
+use gpui_kit::component::menu::PopupMenu;
+use gpui_kit::component::{Selectable, Sizable, TitleBar, button::Button, h_flex};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::{
     Action, Anchor, App, AppContext as _, ClickEvent, Context, DismissEvent, Entity, EventEmitter, Focusable as _, InteractiveElement as _, IntoElement,
     KeyBinding, MouseButton, ParentElement, Render, SharedString, StatefulInteractiveElement as _, Styled, Subscription, WeakEntity, Window, anchored,
     deferred, div, px,
 };
-use gpui_kit::component::button::ButtonVariants;
-use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::component::{Selectable, Sizable, TitleBar, button::Button, h_flex};
 
 const CONTEXT: &str = "AppMenuBar";
 

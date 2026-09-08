@@ -3,7 +3,7 @@ use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::radix::DisplayRadix;
 use crate::ui::components::hex_view::types::EditColumn;
-use gpui::*;
+use gpui_kit::*;
 use std::ops::Range;
 
 /// Manages active column editing, nibble input buffering, and text/byte deletions.

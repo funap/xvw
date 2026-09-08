@@ -4,12 +4,12 @@ use crate::core::encoding::Encoding;
 use crate::core::search::{SearchLimit, SearchMode, find_occurrences_segmented, parse_hex_pattern, parse_text_pattern};
 use crate::ui::components::data_table::{self as table, TableColumn, VirtualTable, VirtualTableState};
 use crate::ui::icon::IconName;
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{self, Input, InputState};
 use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::{ActiveTheme as _, Disableable, Sizable, Size, StyledExt, WindowExt as _, h_flex, v_flex};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 
 actions!(search_panel, [FocusTable, ClearResults]);
 

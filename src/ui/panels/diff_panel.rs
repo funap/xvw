@@ -1,11 +1,11 @@
 use crate::core::diff::{DiffChunk, DiffResult};
 use crate::core::document::Document;
 use crate::ui::icon::IconName;
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{Panel, PanelEvent};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 use std::sync::{Arc, RwLock};
 
 use crate::actions::{NextDifference, PrevDifference, RefreshDiff, SwapDiffFiles, ToggleSyncScroll};

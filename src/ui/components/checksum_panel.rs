@@ -2,12 +2,12 @@ use crate::core::appearance::Appearance;
 use crate::core::checksum::{ChecksumAlgorithm, ChecksumResults};
 use crate::core::editor::Editor;
 use crate::ui::icon::IconName;
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme as _, button::Button, button::ButtonVariants, h_flex, v_flex};
 use gpui_kit::component::{Disableable, Selectable, Sizable, Size};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 use std::ops::Range;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -176,19 +176,19 @@ impl ChecksumPanel {
 
     fn copy_value(&mut self, action: &CopyValue, _window: &mut Window, cx: &mut Context<Self>) {
         if !action.value.is_empty() {
-            cx.write_to_clipboard(gpui::ClipboardItem::new_string(action.value.clone()));
+            cx.write_to_clipboard(ClipboardItem::new_string(action.value.clone()));
         }
     }
 
     fn copy_row(&mut self, action: &CopyRow, _window: &mut Window, cx: &mut Context<Self>) {
         if !action.text.is_empty() {
-            cx.write_to_clipboard(gpui::ClipboardItem::new_string(action.text.clone()));
+            cx.write_to_clipboard(ClipboardItem::new_string(action.text.clone()));
         }
     }
 
     fn copy_all_checksums(&mut self, action: &CopyAllChecksums, _window: &mut Window, cx: &mut Context<Self>) {
         if !action.text.is_empty() {
-            cx.write_to_clipboard(gpui::ClipboardItem::new_string(action.text.clone()));
+            cx.write_to_clipboard(ClipboardItem::new_string(action.text.clone()));
         }
     }
 
@@ -218,7 +218,7 @@ impl ChecksumPanel {
             .cursor_pointer()
             .hover(|style| style.bg(theme.muted.opacity(0.4)))
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_val_for_click.clone()));
+                cx.write_to_clipboard(ClipboardItem::new_string(copy_val_for_click.clone()));
             })
             .on_mouse_down(
                 MouseButton::Right,
@@ -258,7 +258,7 @@ impl ChecksumPanel {
                             .on_click({
                                 let copy_v = copy_value.clone();
                                 move |_, _, cx| {
-                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_v.clone()));
+                                    cx.write_to_clipboard(ClipboardItem::new_string(copy_v.clone()));
                                 }
                             }),
                     ),
@@ -281,7 +281,7 @@ impl Render for ChecksumPanel {
                     .with_size(Size::XSmall)
                     .tooltip("Copy All Checksums")
                     .on_click(move |_, _, cx| {
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(all_copy.clone()));
+                        cx.write_to_clipboard(ClipboardItem::new_string(all_copy.clone()));
                     })
                     .into_any_element(),
             )
@@ -455,7 +455,7 @@ impl Render for ChecksumPanel {
             .on_action(cx.listener(Self::copy_row))
             .on_action(cx.listener(Self::copy_all_checksums))
             .on_mouse_down(
-                gpui::MouseButton::Left,
+                MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
                     this.focus_handle.focus(window, cx);
                 }),

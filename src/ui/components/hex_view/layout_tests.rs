@@ -11,7 +11,7 @@ use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::radix::{ByteGroupSize, DisplayRadix};
 use crate::core::structure::types::{FieldValue, ParseResult, ParsedField};
-use gpui::{hsla, px};
+use gpui_kit::{hsla, px};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 

@@ -2,7 +2,7 @@ use crate::app_state::InsertModeState;
 use crate::core::clipboard::parse_paste_bytes;
 use crate::core::editor::Editor;
 use crate::core::format::{CopyFormat, format_bytes, format_hex_spaces};
-use gpui::*;
+use gpui_kit::*;
 
 /// Handles clipboard interactions (copy with various formats, cut, paste) for hex views.
 pub struct ClipboardHandler;
@@ -29,10 +29,10 @@ impl ClipboardHandler {
 
         focus_handle.focus(window, cx);
         let item = if raw_bytes.is_empty() {
-            gpui::ClipboardItem::new_string(formatted)
+            ClipboardItem::new_string(formatted)
         } else {
             let raw = format_hex_spaces(&raw_bytes);
-            gpui::ClipboardItem::new_string_with_metadata(formatted, format!("xvw-bytes:{raw}"))
+            ClipboardItem::new_string_with_metadata(formatted, format!("xvw-bytes:{raw}"))
         };
         cx.write_to_clipboard(item);
     }
@@ -62,10 +62,10 @@ impl ClipboardHandler {
 
         focus_handle.focus(window, cx);
         let item = if raw_bytes.is_empty() {
-            gpui::ClipboardItem::new_string(formatted)
+            ClipboardItem::new_string(formatted)
         } else {
             let raw = format_hex_spaces(&raw_bytes);
-            gpui::ClipboardItem::new_string_with_metadata(formatted, format!("xvw-bytes:{raw}"))
+            ClipboardItem::new_string_with_metadata(formatted, format!("xvw-bytes:{raw}"))
         };
         cx.write_to_clipboard(item);
     }
@@ -94,7 +94,7 @@ impl ClipboardHandler {
         }
 
         let clipboard_text = format_hex_spaces(&bytes);
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string_with_metadata(
+        cx.write_to_clipboard(ClipboardItem::new_string_with_metadata(
             clipboard_text.clone(),
             format!("xvw-bytes:{clipboard_text}"),
         ));

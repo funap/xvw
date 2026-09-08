@@ -1,7 +1,7 @@
 use super::types::*;
 use crate::core::encoding::Encoding;
 use crate::core::radix::{ByteGroupSize, DisplayRadix, format_group};
-use gpui::*;
+use gpui_kit::*;
 use std::ops::Range;
 
 const HEX_METRIC_CHARS: &str = "0123456789abcdef.";
@@ -182,7 +182,7 @@ pub fn measure_hex_cell_width(window: &Window, font: Font, font_size: Pixels) ->
 
     for character in HEX_METRIC_CHARS.chars() {
         let text = SharedString::from(character.to_string());
-        let run = gpui::TextRun {
+        let run = TextRun {
             len: text.len(),
             font: font.clone(),
             color: hsla(0.0, 0.0, 0.0, 0.0),

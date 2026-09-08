@@ -2,7 +2,7 @@ use crate::core::appearance::Appearance;
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
 use crate::core::structure::{DefinitionHistory, FileHistory, RecentFileEntry};
-use gpui::App;
+use gpui_kit::App;
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
@@ -48,7 +48,7 @@ pub struct RecentHistoryState {
     pub files: FileHistory,
 }
 
-impl gpui::Global for RecentHistoryState {}
+impl gpui_kit::Global for RecentHistoryState {}
 
 impl RecentHistoryState {
     /// Creates the in-memory histories from persisted settings.

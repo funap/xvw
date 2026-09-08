@@ -1,9 +1,9 @@
-use gpui::prelude::*;
-use gpui::{App, ClipboardItem, FontWeight, Window, div, px};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme as _, Icon, WindowExt as _, h_flex, v_flex};
+use gpui_kit::prelude::*;
+use gpui_kit::{App, ClipboardItem, FontWeight, MouseButton, Window, div, px};
 
 use crate::ui::icon::IconName;
 
@@ -131,7 +131,7 @@ pub fn open_about_dialog(window: &mut Window, cx: &mut App) {
                                                 .gap_1()
                                                 .cursor_pointer()
                                                 .text_color(theme.link)
-                                                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                                     cx.open_url(APP_REPOSITORY);
                                                 })
                                                 .child(div().child("funap/xvw"))

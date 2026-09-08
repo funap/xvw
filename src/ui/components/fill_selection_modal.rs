@@ -1,10 +1,10 @@
 use std::ops::Range;
 
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{self, Input, InputState};
 use gpui_kit::component::{ActiveTheme as _, Disableable, Icon, Sizable, Size, h_flex, v_flex};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 
 use crate::core::appearance::Appearance;
 use crate::core::fill::{FillPattern, RandomMode, SequentialWidth, parse_pattern_hex, parse_pattern_text, parse_step_val, parse_u64_val};

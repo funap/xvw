@@ -1,6 +1,6 @@
-use gpui::{Bounds, Corners, Hsla, Pixels, Window, fill, point, px, size};
 use gpui_kit::component::scroll::ScrollbarStyles;
 use gpui_kit::component::theme::Theme;
+use gpui_kit::{Bounds, Corners, Hsla, Pixels, Window, fill, point, px, size};
 
 /// Standard scrollbar track thickness (width for vertical, height for horizontal).
 pub const SCROLLBAR_WIDTH: Pixels = px(12.0);

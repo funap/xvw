@@ -1,10 +1,12 @@
-use gpui::prelude::*;
-use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, SharedString, Subscription, Task, WeakEntity, Window, div, px};
 use gpui_kit::base::dock::TabGroup;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::dock::{Panel, PanelEvent};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::{ActiveTheme, Sizable};
+use gpui_kit::prelude::*;
+use gpui_kit::{
+    App, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable, IntoElement, SharedString, Subscription, Task, WeakEntity, Window, div, hsla, px,
+};
 
 use crate::actions::{
     AddCustomBreak, BookmarkBlue, BookmarkCyan, BookmarkGreen, BookmarkOrange, BookmarkPink, BookmarkPurple, BookmarkRed, BookmarkYellow, ClearAllBookmarks,
@@ -30,7 +32,7 @@ const CONTEXT: &str = "EditorPanel";
 struct EditorDocumentLease {
     service: DocumentService,
     path: PathBuf,
-    editor_id: gpui::EntityId,
+    editor_id: EntityId,
 }
 
 impl Drop for EditorDocumentLease {
@@ -417,16 +419,16 @@ impl EditorPanel {
                     let (search_color, current_result_color) = if is_dark {
                         (
                             // Translucent amber/gold for matches in dark mode
-                            gpui::hsla(48.0 / 360.0, 0.85, 0.45, 0.35),
+                            hsla(48.0 / 360.0, 0.85, 0.45, 0.35),
                             // Richer warm amber/orange for the current match at cursor
-                            gpui::hsla(36.0 / 360.0, 0.95, 0.50, 0.55),
+                            hsla(36.0 / 360.0, 0.95, 0.50, 0.55),
                         )
                     } else {
                         (
                             // Translucent yellow for matches in light mode
-                            gpui::hsla(48.0 / 360.0, 0.90, 0.55, 0.35),
+                            hsla(48.0 / 360.0, 0.90, 0.55, 0.35),
                             // Warm amber for the current match at cursor in light mode
-                            gpui::hsla(36.0 / 360.0, 0.95, 0.50, 0.50),
+                            hsla(36.0 / 360.0, 0.95, 0.50, 0.50),
                         )
                     };
                     let cursor_offset = editor.cursor.offset;

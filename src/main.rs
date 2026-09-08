@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use gpui::App;
+use gpui_kit::{App, KeyBinding};
 use std::path::PathBuf;
 
 mod actions;
@@ -152,110 +152,110 @@ fn setup_keybindings(cx: &mut App) {
     cx.bind_keys([
         // File / Folder dialogs
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-n", crate::actions::NewFile, None),
+        KeyBinding::new("cmd-n", crate::actions::NewFile, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-n", crate::actions::NewFile, None),
+        KeyBinding::new("ctrl-n", crate::actions::NewFile, None),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-o", crate::actions::OpenFileDialog, None),
+        KeyBinding::new("cmd-o", crate::actions::OpenFileDialog, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-o", crate::actions::OpenFileDialog, None),
+        KeyBinding::new("ctrl-o", crate::actions::OpenFileDialog, None),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-shift-o", crate::actions::OpenFolder, None),
+        KeyBinding::new("cmd-shift-o", crate::actions::OpenFolder, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-shift-o", crate::actions::OpenFolder, None),
+        KeyBinding::new("ctrl-shift-o", crate::actions::OpenFolder, None),
         // Save
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-s", crate::actions::Save, None),
+        KeyBinding::new("cmd-s", crate::actions::Save, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-s", crate::actions::Save, None),
+        KeyBinding::new("ctrl-s", crate::actions::Save, None),
         // Panels & Views
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-b", crate::actions::ToggleLeftPanel, None),
+        KeyBinding::new("cmd-b", crate::actions::ToggleLeftPanel, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-b", crate::actions::ToggleLeftPanel, None),
+        KeyBinding::new("ctrl-b", crate::actions::ToggleLeftPanel, None),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-shift-f", crate::actions::ToggleSearchPanel, None),
+        KeyBinding::new("cmd-shift-f", crate::actions::ToggleSearchPanel, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-shift-f", crate::actions::ToggleSearchPanel, None),
+        KeyBinding::new("ctrl-shift-f", crate::actions::ToggleSearchPanel, None),
         // Tab switching
-        gpui::KeyBinding::new("ctrl-tab", crate::actions::ActivateNextTab, None),
-        gpui::KeyBinding::new("ctrl-shift-tab", crate::actions::ActivatePreviousTab, None),
+        KeyBinding::new("ctrl-tab", crate::actions::ActivateNextTab, None),
+        KeyBinding::new("ctrl-shift-tab", crate::actions::ActivatePreviousTab, None),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("alt-cmd-right", crate::actions::ActivateNextTab, None),
+        KeyBinding::new("alt-cmd-right", crate::actions::ActivateNextTab, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("alt-ctrl-right", crate::actions::ActivateNextTab, None),
+        KeyBinding::new("alt-ctrl-right", crate::actions::ActivateNextTab, None),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("alt-cmd-left", crate::actions::ActivatePreviousTab, None),
+        KeyBinding::new("alt-cmd-left", crate::actions::ActivatePreviousTab, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("alt-ctrl-left", crate::actions::ActivatePreviousTab, None),
+        KeyBinding::new("alt-ctrl-left", crate::actions::ActivatePreviousTab, None),
         // Direct Tab Selection (1..9)
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-1", crate::actions::ActivateTab { index: 1 }, None),
+        KeyBinding::new("cmd-1", crate::actions::ActivateTab { index: 1 }, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-1", crate::actions::ActivateTab { index: 1 }, None),
+        KeyBinding::new("ctrl-1", crate::actions::ActivateTab { index: 1 }, None),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-2", crate::actions::ActivateTab { index: 2 }, None),
+        KeyBinding::new("cmd-2", crate::actions::ActivateTab { index: 2 }, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-2", crate::actions::ActivateTab { index: 2 }, None),
+        KeyBinding::new("ctrl-2", crate::actions::ActivateTab { index: 2 }, None),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-3", crate::actions::ActivateTab { index: 3 }, None),
+        KeyBinding::new("cmd-3", crate::actions::ActivateTab { index: 3 }, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-3", crate::actions::ActivateTab { index: 3 }, None),
+        KeyBinding::new("ctrl-3", crate::actions::ActivateTab { index: 3 }, None),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-4", crate::actions::ActivateTab { index: 4 }, None),
+        KeyBinding::new("cmd-4", crate::actions::ActivateTab { index: 4 }, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-4", crate::actions::ActivateTab { index: 4 }, None),
+        KeyBinding::new("ctrl-4", crate::actions::ActivateTab { index: 4 }, None),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-5", crate::actions::ActivateTab { index: 5 }, None),
+        KeyBinding::new("cmd-5", crate::actions::ActivateTab { index: 5 }, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-5", crate::actions::ActivateTab { index: 5 }, None),
+        KeyBinding::new("ctrl-5", crate::actions::ActivateTab { index: 5 }, None),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-6", crate::actions::ActivateTab { index: 6 }, None),
+        KeyBinding::new("cmd-6", crate::actions::ActivateTab { index: 6 }, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-6", crate::actions::ActivateTab { index: 6 }, None),
+        KeyBinding::new("ctrl-6", crate::actions::ActivateTab { index: 6 }, None),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-7", crate::actions::ActivateTab { index: 7 }, None),
+        KeyBinding::new("cmd-7", crate::actions::ActivateTab { index: 7 }, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-7", crate::actions::ActivateTab { index: 7 }, None),
+        KeyBinding::new("ctrl-7", crate::actions::ActivateTab { index: 7 }, None),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-8", crate::actions::ActivateTab { index: 8 }, None),
+        KeyBinding::new("cmd-8", crate::actions::ActivateTab { index: 8 }, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-8", crate::actions::ActivateTab { index: 8 }, None),
+        KeyBinding::new("ctrl-8", crate::actions::ActivateTab { index: 8 }, None),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-9", crate::actions::ActivateTab { index: 9 }, None),
+        KeyBinding::new("cmd-9", crate::actions::ActivateTab { index: 9 }, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-9", crate::actions::ActivateTab { index: 9 }, None),
+        KeyBinding::new("ctrl-9", crate::actions::ActivateTab { index: 9 }, None),
         // Close & Quit
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-w", crate::actions::CloseActivePanel, None),
+        KeyBinding::new("cmd-w", crate::actions::CloseActivePanel, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-w", crate::actions::CloseActivePanel, None),
+        KeyBinding::new("ctrl-w", crate::actions::CloseActivePanel, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-f4", crate::actions::CloseActivePanel, None),
+        KeyBinding::new("ctrl-f4", crate::actions::CloseActivePanel, None),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-q", crate::actions::Quit, None),
+        KeyBinding::new("cmd-q", crate::actions::Quit, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-q", crate::actions::Quit, None),
+        KeyBinding::new("ctrl-q", crate::actions::Quit, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("alt-f4", crate::actions::Quit, None),
+        KeyBinding::new("alt-f4", crate::actions::Quit, None),
         // Settings
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-,", crate::actions::OpenSettings, None),
+        KeyBinding::new("cmd-,", crate::actions::OpenSettings, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-,", crate::actions::OpenSettings, None),
+        KeyBinding::new("ctrl-,", crate::actions::OpenSettings, None),
         // Compare / Diff
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("alt-cmd-d", crate::actions::CompareOpenFiles, None),
+        KeyBinding::new("alt-cmd-d", crate::actions::CompareOpenFiles, None),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("alt-ctrl-d", crate::actions::CompareOpenFiles, None),
+        KeyBinding::new("alt-ctrl-d", crate::actions::CompareOpenFiles, None),
         // Standard text input shortcuts on non-macOS platforms
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-home", gpui_kit::component::input::MoveToStart, Some("Input")),
+        KeyBinding::new("ctrl-home", gpui_kit::component::input::MoveToStart, Some("Input")),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-end", gpui_kit::component::input::MoveToEnd, Some("Input")),
+        KeyBinding::new("ctrl-end", gpui_kit::component::input::MoveToEnd, Some("Input")),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-shift-home", gpui_kit::component::input::SelectToStart, Some("Input")),
+        KeyBinding::new("ctrl-shift-home", gpui_kit::component::input::SelectToStart, Some("Input")),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-shift-end", gpui_kit::component::input::SelectToEnd, Some("Input")),
+        KeyBinding::new("ctrl-shift-end", gpui_kit::component::input::SelectToEnd, Some("Input")),
     ]);
 }

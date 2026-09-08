@@ -4,13 +4,13 @@ use crate::core::encoding::Encoding;
 use crate::core::strings::{DEFAULT_MIN_STRING_LENGTH, StringMatch, find_strings_segmented_limited};
 use crate::ui::components::data_table::{self as table, TableColumn, TableSortDirection, VirtualTable, VirtualTableState};
 use crate::ui::icon::IconName;
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{self, Input, InputState};
 use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Disableable, Sizable, Size, h_flex, v_flex};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 use std::collections::HashMap;
 
 actions!(strings_panel, [FocusTable, ClearResults]);
@@ -1058,6 +1058,7 @@ mod tests {
         use super::strings_row_colors;
         use crate::assets::Assets;
         use crate::theme::EmbeddedThemes;
+        use gpui_kit::{Hsla, Rgba};
 
         let embedded = EmbeddedThemes::load_from_assets(&Assets);
         assert!(!embedded.theme_names().is_empty());
@@ -1066,12 +1067,12 @@ mod tests {
             if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
         }
 
-        fn rel_luminance(c: gpui::Hsla) -> f32 {
-            let rgba = gpui::Rgba::from(c);
+        fn rel_luminance(c: Hsla) -> f32 {
+            let rgba = Rgba::from(c);
             0.2126 * channel_to_linear(rgba.r) + 0.7152 * channel_to_linear(rgba.g) + 0.0722 * channel_to_linear(rgba.b)
         }
 
-        fn contrast_ratio(c1: gpui::Hsla, c2: gpui::Hsla) -> f32 {
+        fn contrast_ratio(c1: Hsla, c2: Hsla) -> f32 {
             let l1 = rel_luminance(c1);
             let l2 = rel_luminance(c2);
             let (lighter, darker) = if l1 > l2 { (l1, l2) } else { (l2, l1) };

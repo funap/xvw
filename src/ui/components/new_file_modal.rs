@@ -1,10 +1,10 @@
 use crate::core::new_file::{format_fill_preview, format_size_preview, parse_buffer_size, parse_fill_byte};
 use crate::ui::icon::IconName;
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{self, Input, InputState};
 use gpui_kit::component::{ActiveTheme as _, Disableable, Icon, Sizable, Size, h_flex, v_flex};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 
 #[derive(Clone, PartialEq, Action)]
 pub struct ConfirmCreate;

@@ -1,5 +1,5 @@
-use gpui::prelude::*;
-use gpui::*;
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 

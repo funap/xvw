@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use gpui::{Action, Context, Window};
 use gpui_kit::component::menu::PopupMenu;
+use gpui_kit::{Action, Context, Menu, MenuItem, Window};
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct MenuEditorState {
@@ -54,21 +54,21 @@ impl MenuItemDef {
         Self::Separator
     }
 
-    pub fn to_gpui_menu_item(&self) -> gpui::MenuItem {
+    pub fn to_gpui_menu_item(&self) -> MenuItem {
         match self {
-            MenuItemDef::Action { label, action, .. } => gpui::MenuItem::Action {
+            MenuItemDef::Action { label, action, .. } => MenuItem::Action {
                 name: (*label).into(),
                 action: (action)(),
                 os_action: None,
                 checked: false,
                 disabled: false,
             },
-            MenuItemDef::Submenu { label, items } => gpui::MenuItem::submenu(gpui::Menu {
+            MenuItemDef::Submenu { label, items } => MenuItem::submenu(Menu {
                 name: (*label).into(),
                 items: items.iter().map(|item| item.to_gpui_menu_item()).collect(),
                 disabled: false,
             }),
-            MenuItemDef::Separator => gpui::MenuItem::separator(),
+            MenuItemDef::Separator => MenuItem::separator(),
         }
     }
 
@@ -97,8 +97,8 @@ pub struct MenuDef {
 }
 
 impl MenuDef {
-    pub fn to_gpui_menu(&self) -> gpui::Menu {
-        gpui::Menu {
+    pub fn to_gpui_menu(&self) -> Menu {
+        Menu {
             name: self.name.into(),
             items: self.items.iter().map(|item| item.to_gpui_menu_item()).collect(),
             disabled: false,

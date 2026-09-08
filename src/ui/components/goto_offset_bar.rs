@@ -1,13 +1,13 @@
 use crate::core::address_map::AddressMap;
 use crate::core::goto::{GotoParseError, GotoRadix, ParsedGotoOffset, parse_goto_offset_with_map};
 use crate::ui::icon::IconName;
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::{
     ActiveTheme, Icon,
     button::{Button, ButtonVariants},
     input::{self, Input, InputState},
 };
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 
 #[derive(Clone, PartialEq, Action)]
 pub struct GotoJump;
@@ -195,8 +195,8 @@ impl Render for GotoOffsetBar {
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        gpui::KeyBinding::new("enter", GotoJump, Some("GotoOffsetBar")),
-        gpui::KeyBinding::new("shift-enter", GotoJumpExtend, Some("GotoOffsetBar")),
-        gpui::KeyBinding::new("escape", GotoDismiss, Some("GotoOffsetBar")),
+        KeyBinding::new("enter", GotoJump, Some("GotoOffsetBar")),
+        KeyBinding::new("shift-enter", GotoJumpExtend, Some("GotoOffsetBar")),
+        KeyBinding::new("escape", GotoDismiss, Some("GotoOffsetBar")),
     ]);
 }

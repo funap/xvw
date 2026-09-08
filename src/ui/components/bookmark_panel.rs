@@ -3,11 +3,11 @@ use crate::core::bookmark::{BookmarkColor, BookmarkItem};
 use crate::core::editor::Editor;
 use crate::ui::icon::IconName;
 use crate::ui::style::BookmarkColorExt;
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{self, Input, InputState};
 use gpui_kit::component::{ActiveTheme as _, Disableable, Sizable, Size, StyledExt, h_flex, v_flex};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 
 actions!(
     bookmark_panel,
@@ -267,7 +267,7 @@ impl BookmarkPanel {
         }
 
         let prompt = window.prompt(
-            gpui::PromptLevel::Warning,
+            PromptLevel::Warning,
             "Clear all bookmarks?",
             Some(&format!(
                 "Are you sure you want to clear all {} bookmark{} and comments? This action cannot be undone.",

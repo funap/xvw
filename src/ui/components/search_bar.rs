@@ -1,11 +1,11 @@
 use crate::ui::icon::IconName;
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::{
     ActiveTheme, Icon,
     button::{Button, ButtonVariants},
     input::{self, Input, InputState},
 };
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 
 use crate::core::search::SearchMode;
 
@@ -149,8 +149,8 @@ impl Render for SearchBar {
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        gpui::KeyBinding::new("enter", crate::actions::SearchNext, Some("SearchBar")),
-        gpui::KeyBinding::new("shift-enter", crate::actions::SearchPrev, Some("SearchBar")),
-        gpui::KeyBinding::new("escape", crate::actions::ToggleSearch, Some("SearchBar")),
+        KeyBinding::new("enter", crate::actions::SearchNext, Some("SearchBar")),
+        KeyBinding::new("shift-enter", crate::actions::SearchPrev, Some("SearchBar")),
+        KeyBinding::new("escape", crate::actions::ToggleSearch, Some("SearchBar")),
     ]);
 }

@@ -1,4 +1,4 @@
-use gpui::*;
+use gpui_kit::*;
 
 use crate::core::editor::Editor;
 use crate::ui::components::bookmark_panel::BookmarkPanel;

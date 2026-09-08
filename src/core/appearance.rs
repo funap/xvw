@@ -24,7 +24,7 @@ impl Default for Appearance {
     }
 }
 
-impl gpui::Global for Appearance {}
+impl gpui_kit::Global for Appearance {}
 
 #[cfg(test)]
 mod tests {

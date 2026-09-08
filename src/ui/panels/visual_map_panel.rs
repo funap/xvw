@@ -2,11 +2,11 @@ use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::ui::icon::IconName;
 use crate::ui::scrollbar::{SCROLLBAR_WIDTH, calculate_scrollbar_geometry, paint_scrollbar_with_row_height};
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{Panel, PanelEvent};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, Size, StyledExt, h_flex, v_flex};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 use std::cell::RefCell;
 use std::cmp;
 use std::ops::Range;
@@ -734,7 +734,7 @@ impl VisualMapPanel {
                 let color_chip = |norm: f32| {
                     let idx = crate::core::entropy::normalized_to_lut_index(norm);
                     let [r, g, b, _] = crate::core::entropy::entropy_lut()[idx];
-                    div().w_2().h_2().rounded_sm().bg(gpui::rgb(u32::from_be_bytes([0, r, g, b])))
+                    div().w_2().h_2().rounded_sm().bg(rgb(u32::from_be_bytes([0, r, g, b])))
                 };
                 Some(
                     h_flex()
@@ -811,7 +811,7 @@ impl VisualMapPanel {
                 let norm = (h / 8.0) as f32;
                 let idx = crate::core::entropy::normalized_to_lut_index(norm);
                 let [r, g, b, _] = crate::core::entropy::entropy_lut()[idx];
-                let color: Hsla = gpui::rgb(u32::from_be_bytes([0, r, g, b])).into();
+                let color: Hsla = rgb(u32::from_be_bytes([0, r, g, b])).into();
                 Some((h, norm, color))
             });
 
@@ -919,7 +919,7 @@ impl VisualMapPanel {
 }
 
 impl Focusable for VisualMapPanel {
-    fn focus_handle(&self, _cx: &App) -> gpui::FocusHandle {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
@@ -1044,7 +1044,7 @@ impl Render for VisualMapPanel {
                     .id("visual-map-panel")
                     .track_focus(&self.focus_handle)
                     .on_mouse_down(
-                        gpui::MouseButton::Left,
+                        MouseButton::Left,
                         cx.listener(|this, _, window, cx| {
                             this.focus_handle.focus(window, cx);
                         }),
@@ -1102,7 +1102,7 @@ impl Render for VisualMapPanel {
             .id("visual-map-panel")
             .track_focus(&self.focus_handle)
             .on_mouse_down(
-                gpui::MouseButton::Left,
+                MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
                     this.focus_handle.focus(window, cx);
                 }),
@@ -1164,7 +1164,7 @@ impl Element for VisualMapElement {
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
+        _inspector_id: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
@@ -1177,7 +1177,7 @@ impl Element for VisualMapElement {
     fn prepaint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
+        _inspector_id: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         _window: &mut Window,
@@ -1188,7 +1188,7 @@ impl Element for VisualMapElement {
     fn paint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
+        _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
         _prepaint: &mut Self::PrepaintState,
@@ -1305,7 +1305,7 @@ impl Element for VisualMapElement {
                     let sel_y = bounds.origin.y + px((r - start_row) as f32 * pixel_size);
                     let sel_w = px(c_count as f32 * pixel_size);
                     let sel_h = px(pixel_size);
-                    window.paint_quad(gpui::fill(Bounds::new(point(sel_x, sel_y), size(sel_w, sel_h)), theme.accent.opacity(0.35)));
+                    window.paint_quad(fill(Bounds::new(point(sel_x, sel_y), size(sel_w, sel_h)), theme.accent.opacity(0.35)));
                 }
             }
         }
@@ -1323,7 +1323,7 @@ impl Element for VisualMapElement {
 
                 let outline_color = theme.foreground.opacity(0.75);
                 let border_w = if pixel_size >= 4.0 { px(1.0) } else { px(0.5) };
-                window.paint_quad(gpui::outline(cell_bounds, outline_color, gpui::BorderStyle::Solid).border_widths(border_w));
+                window.paint_quad(outline(cell_bounds, outline_color, BorderStyle::Solid).border_widths(border_w));
             }
         }
 
@@ -1343,15 +1343,12 @@ impl Element for VisualMapElement {
                         point(center_x - indicator_size * 0.5, center_y - indicator_size * 0.5),
                         size(indicator_size, indicator_size),
                     );
-                    window.paint_quad(gpui::outline(cur_bounds, theme.accent, gpui::BorderStyle::Solid).border_widths(px(1.5)));
-                    window.paint_quad(gpui::fill(
-                        Bounds::new(point(cell_x, cell_y), size(px(pixel_size), px(pixel_size))),
-                        theme.foreground,
-                    ));
+                    window.paint_quad(outline(cur_bounds, theme.accent, BorderStyle::Solid).border_widths(px(1.5)));
+                    window.paint_quad(fill(Bounds::new(point(cell_x, cell_y), size(px(pixel_size), px(pixel_size))), theme.foreground));
                 } else {
                     let cur_bounds = Bounds::new(point(cell_x, cell_y), size(px(pixel_size), px(pixel_size)));
-                    window.paint_quad(gpui::outline(cur_bounds, theme.accent, gpui::BorderStyle::Solid).border_widths(px(1.5)));
-                    window.paint_quad(gpui::fill(cur_bounds, theme.accent.opacity(0.3)));
+                    window.paint_quad(outline(cur_bounds, theme.accent, BorderStyle::Solid).border_widths(px(1.5)));
+                    window.paint_quad(fill(cur_bounds, theme.accent.opacity(0.3)));
                 }
             }
         }

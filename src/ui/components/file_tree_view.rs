@@ -6,10 +6,6 @@ use std::path::{Path, PathBuf};
 
 use crate::ui::icon::IconName;
 use autocorrect::ignorer::Ignorer;
-use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render, ScrollStrategy,
-    SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window, actions, div, prelude::FluentBuilder as _, px, relative,
-};
 use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _, StyledExt as _,
     button::ButtonVariants as _,
@@ -18,6 +14,11 @@ use gpui_kit::component::{
     menu::ContextMenuExt,
     tree::{TreeItem, TreeState, tree},
     v_flex,
+};
+use gpui_kit::{
+    App, AppContext, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding, MouseButton,
+    ParentElement, PathPromptOptions, Render, ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window, actions, div,
+    prelude::FluentBuilder as _, px, relative,
 };
 
 actions!(file_tree, [MoveUp, MoveDown, MoveTop, MoveBottom, PageUp, PageDown]);
@@ -32,23 +33,23 @@ fn path_file_name(path: &Path) -> String {
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        gpui::KeyBinding::new("up", MoveUp, Some("FileTreeView && !Input")),
-        gpui::KeyBinding::new("down", MoveDown, Some("FileTreeView && !Input")),
-        gpui::KeyBinding::new("k", MoveUp, Some("FileTreeView && !Input")),
-        gpui::KeyBinding::new("j", MoveDown, Some("FileTreeView && !Input")),
-        gpui::KeyBinding::new("home", MoveTop, Some("FileTreeView && !Input")),
+        KeyBinding::new("up", MoveUp, Some("FileTreeView && !Input")),
+        KeyBinding::new("down", MoveDown, Some("FileTreeView && !Input")),
+        KeyBinding::new("k", MoveUp, Some("FileTreeView && !Input")),
+        KeyBinding::new("j", MoveDown, Some("FileTreeView && !Input")),
+        KeyBinding::new("home", MoveTop, Some("FileTreeView && !Input")),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-home", MoveTop, Some("FileTreeView && !Input")),
+        KeyBinding::new("cmd-home", MoveTop, Some("FileTreeView && !Input")),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-home", MoveTop, Some("FileTreeView && !Input")),
-        gpui::KeyBinding::new("end", MoveBottom, Some("FileTreeView && !Input")),
+        KeyBinding::new("ctrl-home", MoveTop, Some("FileTreeView && !Input")),
+        KeyBinding::new("end", MoveBottom, Some("FileTreeView && !Input")),
         #[cfg(target_os = "macos")]
-        gpui::KeyBinding::new("cmd-end", MoveBottom, Some("FileTreeView && !Input")),
+        KeyBinding::new("cmd-end", MoveBottom, Some("FileTreeView && !Input")),
         #[cfg(not(target_os = "macos"))]
-        gpui::KeyBinding::new("ctrl-end", MoveBottom, Some("FileTreeView && !Input")),
-        gpui::KeyBinding::new("pageup", PageUp, Some("FileTreeView && !Input")),
-        gpui::KeyBinding::new("pagedown", PageDown, Some("FileTreeView && !Input")),
-        gpui::KeyBinding::new("enter", SelectItem, Some("FileTreeView && !Input")),
+        KeyBinding::new("ctrl-end", MoveBottom, Some("FileTreeView && !Input")),
+        KeyBinding::new("pageup", PageUp, Some("FileTreeView && !Input")),
+        KeyBinding::new("pagedown", PageDown, Some("FileTreeView && !Input")),
+        KeyBinding::new("enter", SelectItem, Some("FileTreeView && !Input")),
     ]);
 }
 
@@ -287,7 +288,7 @@ impl FileTreeView {
         }
     }
 
-    fn on_action_select_item(&mut self, _: &SelectItem, _: &mut Window, cx: &mut gpui::Context<Self>) {
+    fn on_action_select_item(&mut self, _: &SelectItem, _: &mut Window, cx: &mut Context<Self>) {
         let item = self
             .selected_item
             .clone()
@@ -308,7 +309,7 @@ impl FileTreeView {
         }
     }
 
-    fn on_action_rename(&mut self, _: &Rename, _: &mut Window, cx: &mut gpui::Context<Self>) {
+    fn on_action_rename(&mut self, _: &Rename, _: &mut Window, cx: &mut Context<Self>) {
         let item = self
             .selected_item
             .clone()
@@ -319,8 +320,8 @@ impl FileTreeView {
         }
     }
 
-    pub fn prompt_open_folder(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        let path = cx.prompt_for_paths(gpui::PathPromptOptions {
+    pub fn prompt_open_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let path = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
             multiple: false,
@@ -342,7 +343,7 @@ impl FileTreeView {
         .detach();
     }
 
-    pub fn close_folder(&mut self, cx: &mut gpui::Context<Self>) {
+    pub fn close_folder(&mut self, cx: &mut Context<Self>) {
         self.sync_recent_file_history(cx);
         self.root_path = None;
         self.loaded_paths.clear();
@@ -522,7 +523,7 @@ impl FileTreeView {
 }
 
 impl Render for FileTreeView {
-    fn render(&mut self, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_empty = self.root_path.is_none();
         let is_focused = self.focus_handle.is_focused(window);
         let theme = cx.theme();
@@ -562,7 +563,7 @@ impl Render for FileTreeView {
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
             .on_mouse_down(
-                gpui::MouseButton::Left,
+                MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
                     this.focus_handle.focus(window, cx);
                 }),
@@ -804,7 +805,7 @@ impl Render for FileTreeView {
                             .on_click(window.listener_for(&view, {
                                 let item = item.clone();
                                 let focus_handle = focus_handle.clone();
-                                move |this, event: &gpui::ClickEvent, window, cx| {
+                                move |this, event: &ClickEvent, window, cx| {
                                     focus_handle.focus(window, cx);
                                     if event.modifiers().control || event.modifiers().platform {
                                         this.toggle_selection(item.clone(), cx);
@@ -833,7 +834,7 @@ impl Render for FileTreeView {
 impl EventEmitter<FileTreeViewEvent> for FileTreeView {}
 
 impl Focusable for FileTreeView {
-    fn focus_handle(&self, _cx: &App) -> gpui::FocusHandle {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }

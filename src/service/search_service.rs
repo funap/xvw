@@ -1,7 +1,7 @@
 use crate::core::buffer::Buffer;
 use crate::core::editor::Editor;
 use crate::core::search::{self, SearchMode, SearchOptions};
-use gpui::{App, Entity, Task};
+use gpui_kit::{App, AsyncApp, Entity, Task};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -58,7 +58,7 @@ impl SearchService {
         let search_task = self.search_with_segments(buffer_data, query, options, segments, cx);
         let editor_weak = editor.downgrade();
 
-        cx.spawn(move |cx: &mut gpui::AsyncApp| {
+        cx.spawn(move |cx: &mut AsyncApp| {
             let mut cx = cx.clone();
             async move {
                 let results = search_task.await;

@@ -1,7 +1,7 @@
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::resizable::{h_resizable, resizable_panel, v_resizable};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 
 use super::editor_group::{EditorGroup, EditorGroupEvent};
 use super::types::{DropPlacement, SplitDirection, TabContent, TabDrag, TabItem};

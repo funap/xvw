@@ -7,8 +7,8 @@ use crate::core::encoding::Encoding;
 use crate::core::radix::{ByteGroupSize, DisplayRadix, digit_count, is_group_zero};
 use crate::core::structure::{IndexedField, ParseResult};
 use crate::ui::style::BookmarkColorExt;
-use gpui::*;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::*;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ops::Range;
@@ -18,7 +18,7 @@ const TEXT_INPUT_CURSOR_HEIGHT_RATIO: f32 = 0.85;
 
 #[inline]
 pub fn paint_border_box(window: &mut Window, bounds: Bounds<Pixels>, border_width: Pixels, color: Hsla) {
-    let outline = gpui::outline(bounds, color, gpui::BorderStyle::Solid).border_widths(border_width);
+    let outline = outline(bounds, color, BorderStyle::Solid).border_widths(border_width);
     window.paint_quad(outline);
 }
 
@@ -43,7 +43,7 @@ fn paint_insert_cursor_at(window: &mut Window, bounds: Bounds<Pixels>, cursor_x:
     // caret centered in the line and sized to 85% of its line height.
     let cursor_height = px(ROW_HEIGHT * TEXT_INPUT_CURSOR_HEIGHT_RATIO);
     let cursor_y = bounds.top() + (bounds.size.height - cursor_height) / 2.0;
-    window.paint_quad(gpui::fill(
+    window.paint_quad(fill(
         Bounds::new(point(cursor_x, cursor_y), size(TEXT_INPUT_CURSOR_WIDTH, cursor_height)),
         color,
     ));
@@ -59,10 +59,7 @@ fn paint_underscore_cursor_at(window: &mut Window, bounds: Bounds<Pixels>, curso
     // Align the underscore's lower edge with the bottom edge of the
     // overwrite-mode cursor box.
     let underscore_y = bounds.bottom() - px(UNDERSCORE_HEIGHT);
-    window.paint_quad(gpui::fill(
-        Bounds::new(point(cursor_x, underscore_y), size(width, px(UNDERSCORE_HEIGHT))),
-        color,
-    ));
+    window.paint_quad(fill(Bounds::new(point(cursor_x, underscore_y), size(width, px(UNDERSCORE_HEIGHT))), color));
 }
 
 #[derive(Clone, Copy)]
@@ -170,7 +167,7 @@ pub fn darken_cursor_color(color: Hsla) -> Hsla {
 /// shaped for the row. This keeps shaping batched and avoids a per-row glyph
 /// position allocation.
 pub fn paint_centered_hex_glyphs(
-    shaped: &gpui::ShapedLine,
+    shaped: &ShapedLine,
     groups: &[HexGroupInfo],
     group_colors: &[Hsla],
     cell_width: Pixels,
@@ -219,7 +216,7 @@ pub fn paint_centered_hex_glyphs(
 /// Paint every glyph centered in its fixed ASCII cell while reusing the line
 /// shaped for the row. This keeps shaping batched and avoids per-character
 /// string allocations and shaping passes.
-pub fn paint_centered_ascii_glyphs(shaped: &gpui::ShapedLine, entries: &[AsciiCellEntry], origin: Point<Pixels>, line_height: Pixels, window: &mut Window) {
+pub fn paint_centered_ascii_glyphs(shaped: &ShapedLine, entries: &[AsciiCellEntry], origin: Point<Pixels>, line_height: Pixels, window: &mut Window) {
     let natural_width = shaped.width;
     let baseline_offset = point(px(0.0), (line_height - shaped.ascent - shaped.descent) / 2.0 + shaped.ascent);
     let mut entry_idx = 0;
@@ -342,7 +339,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         )
     };
     let line_height = px(ROW_HEIGHT);
-    let font = gpui::font(params.font_family);
+    let font = font(params.font_family);
     let insert_cursor_active = params.insert_mode && params.is_focused && window.is_window_active();
     let insert_selection_active = params.min_sel <= params.max_sel;
 
@@ -364,7 +361,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
         if is_struct_mode || params.show_offset {
             let addr_str = format_offset_08(fold_start_addr);
-            let run = gpui::TextRun {
+            let run = TextRun {
                 len: addr_str.len(),
                 font: font.clone(),
                 color: muted_color.opacity(0.8),
@@ -374,11 +371,11 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             };
             let shaped = window.text_system().shape_line(addr_str, params.font_size, &[run], None);
             let addr_pos = point(params.bounds.left() + px(8.0), params.bounds.top() + px(2.0));
-            let _ = shaped.paint(addr_pos, line_height, gpui::TextAlign::Left, None, window, cx);
+            let _ = shaped.paint(addr_pos, line_height, TextAlign::Left, None, window, cx);
 
             let base_x = params.bounds.left() + px(8.0);
             let div1_x = base_x + px(offset_w + (gap / 2.0));
-            window.paint_quad(gpui::fill(
+            window.paint_quad(fill(
                 Bounds::new(point(div1_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
                 border_color.opacity(0.4),
             ));
@@ -414,7 +411,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             (muted_color.opacity(0.12), border_color.opacity(0.4), muted_color)
         };
 
-        let run = gpui::TextRun {
+        let run = TextRun {
             len: fold_label.len(),
             font: font.clone(),
             color: text_tint,
@@ -427,13 +424,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             .shape_line(SharedString::from(fold_label), params.font_size * 0.9, &[run], None);
 
         let bar_bounds = Bounds::new(point(bar_start_x, params.bounds.top() + px(2.0)), size(bar_width, px(ROW_HEIGHT - 4.0)));
-        window.paint_quad(gpui::fill(bar_bounds, fill_bg));
-        let outline = gpui::outline(bar_bounds, border_tint, gpui::BorderStyle::Solid).border_widths(px(1.0));
+        window.paint_quad(fill(bar_bounds, fill_bg));
+        let outline = outline(bar_bounds, border_tint, BorderStyle::Solid).border_widths(px(1.0));
         window.paint_quad(outline);
 
         let text_x = bar_start_x + px(12.0);
         let text_pos = point(text_x, params.bounds.top() + px(2.0));
-        let _ = shaped_label.paint(text_pos, line_height, gpui::TextAlign::Left, None, window, cx);
+        let _ = shaped_label.paint(text_pos, line_height, TextAlign::Left, None, window, cx);
         return;
     }
 
@@ -453,7 +450,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
         if is_struct_mode || params.show_offset {
             let addr_str = SharedString::from("--------");
-            let run = gpui::TextRun {
+            let run = TextRun {
                 len: addr_str.len(),
                 font: font.clone(),
                 color: muted_color.opacity(0.6),
@@ -463,11 +460,11 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             };
             let shaped = window.text_system().shape_line(addr_str, params.font_size, &[run], None);
             let addr_pos = point(params.bounds.left() + px(8.0), params.bounds.top() + px(2.0));
-            let _ = shaped.paint(addr_pos, line_height, gpui::TextAlign::Left, None, window, cx);
+            let _ = shaped.paint(addr_pos, line_height, TextAlign::Left, None, window, cx);
 
             let base_x = params.bounds.left() + px(8.0);
             let div1_x = base_x + px(offset_w + (gap / 2.0));
-            window.paint_quad(gpui::fill(
+            window.paint_quad(fill(
                 Bounds::new(point(div1_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
                 border_color.opacity(0.4),
             ));
@@ -483,7 +480,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             "── Address Gap: 0x{:08X} - 0x{:08X} (0x{:X} / {} bytes unmapped) ──",
             gap_start, gap_end, gap_size, gap_size
         );
-        let run = gpui::TextRun {
+        let run = TextRun {
             len: gap_label.len(),
             font: font.clone(),
             color: accent_fg_color,
@@ -497,13 +494,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
         let bar_bounds = Bounds::new(point(bar_start_x, params.bounds.top() + px(2.0)), size(bar_width, px(ROW_HEIGHT - 4.0)));
         let theme = cx.theme();
-        window.paint_quad(gpui::fill(bar_bounds, theme.accent.opacity(0.12)));
-        let outline = gpui::outline(bar_bounds, border_color.opacity(0.4), gpui::BorderStyle::Solid).border_widths(px(1.0));
+        window.paint_quad(fill(bar_bounds, theme.accent.opacity(0.12)));
+        let outline = outline(bar_bounds, border_color.opacity(0.4), BorderStyle::Solid).border_widths(px(1.0));
         window.paint_quad(outline);
 
         let text_x = bar_start_x + px(12.0);
         let text_pos = point(text_x, params.bounds.top() + px(2.0));
-        let _ = shaped_label.paint(text_pos, line_height, gpui::TextAlign::Left, None, window, cx);
+        let _ = shaped_label.paint(text_pos, line_height, TextAlign::Left, None, window, cx);
         return;
     }
 
@@ -512,7 +509,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     // 1. Draw Left Columns (Address OR Offset)
     let (offset_w, gap) = if is_struct_mode {
         let addr_str = format_offset_08(physical_address);
-        let run = gpui::TextRun {
+        let run = TextRun {
             len: addr_str.len(),
             font: font.clone(),
             color: muted_color,
@@ -522,12 +519,12 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         };
         let shaped = window.text_system().shape_line(addr_str, params.font_size, &[run], None);
         let addr_pos = point(params.bounds.left() + px(8.0), params.bounds.top() + px(2.0));
-        let _ = shaped.paint(addr_pos, line_height, gpui::TextAlign::Left, None, window, cx);
+        let _ = shaped.paint(addr_pos, line_height, TextAlign::Left, None, window, cx);
         (params.address_col_width, SECTION_GAP)
     } else {
         if params.show_offset {
             let offset_str = format_offset_08(physical_address);
-            let run = gpui::TextRun {
+            let run = TextRun {
                 len: offset_str.len(),
                 font: font.clone(),
                 color: muted_color,
@@ -537,7 +534,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             };
             let shaped = window.text_system().shape_line(offset_str, params.font_size, &[run], None);
             let offset_pos = point(params.bounds.left() + px(8.0), params.bounds.top() + px(2.0));
-            let _ = shaped.paint(offset_pos, line_height, gpui::TextAlign::Left, None, window, cx);
+            let _ = shaped.paint(offset_pos, line_height, TextAlign::Left, None, window, cx);
         }
         (if params.show_offset { OFFSET_WIDTH } else { 0.0 }, SECTION_GAP)
     };
@@ -563,7 +560,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let border_line_color = border_color.opacity(0.4);
     if is_struct_mode || params.show_offset {
         let div1_x = base_x + px(offset_w + (gap / 2.0));
-        window.paint_quad(gpui::fill(
+        window.paint_quad(fill(
             Bounds::new(point(div1_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
             border_line_color,
         ));
@@ -574,12 +571,12 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         Bounds::new(point(left, params.bounds.top()), size((right - left).max(px(0.0)), px(ROW_HEIGHT)))
     };
     window.with_content_mask(
-        Some(gpui::ContentMask {
+        Some(ContentMask {
             bounds: scrollable_mask_bounds,
         }),
         |window| {
             let div2_x = hex_start_x + px(params.hex_col_width + (gap / 2.0));
-            window.paint_quad(gpui::fill(
+            window.paint_quad(fill(
                 Bounds::new(point(div2_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
                 border_line_color,
             ));
@@ -587,24 +584,24 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 let desc_start_x = hex_end_x + px(gap);
                 let div3_x = desc_start_x + px(params.desc_col_width + (gap / 2.0));
                 let div4_x = comment_start_x + px(params.comment_col_width + (gap / 2.0));
-                window.paint_quad(gpui::fill(
+                window.paint_quad(fill(
                     Bounds::new(point(div3_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
                     border_line_color,
                 ));
-                window.paint_quad(gpui::fill(
+                window.paint_quad(fill(
                     Bounds::new(point(div4_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
                     border_line_color,
                 ));
             } else {
                 if params.show_ascii {
                     let div3_x = hex_end_x + px(gap + ascii_width + (gap / 2.0));
-                    window.paint_quad(gpui::fill(
+                    window.paint_quad(fill(
                         Bounds::new(point(div3_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
                         border_line_color,
                     ));
                 }
                 let div4_x = comment_start_x + px(params.comment_col_width + (gap / 2.0));
-                window.paint_quad(gpui::fill(
+                window.paint_quad(fill(
                     Bounds::new(point(div4_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
                     border_line_color,
                 ));
@@ -616,7 +613,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     // Group geometry uses the fixed cell grid; glyphs are centered in that
     // grid during the text pass.
     let hex_source = build_hex_text_source(chunk, offset, params.radix, params.group_size, params.is_big_endian);
-    let mut hex_runs: Vec<gpui::TextRun> = Vec::with_capacity(hex_source.groups.len() * 2);
+    let mut hex_runs: Vec<TextRun> = Vec::with_capacity(hex_source.groups.len() * 2);
     let mut group_visuals: Vec<(Option<Hsla>, bool, bool)> = Vec::with_capacity(hex_source.groups.len());
     let mut group_text_colors: Vec<Hsla> = Vec::with_capacity(hex_source.groups.len());
 
@@ -646,7 +643,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         group_text_colors.push(text_color);
 
         if group_idx > 0 {
-            hex_runs.push(gpui::TextRun {
+            hex_runs.push(TextRun {
                 len: 1,
                 font: font.clone(),
                 color: hsla(0.0, 0.0, 0.0, 0.0),
@@ -655,7 +652,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 strikethrough: None,
             });
         }
-        hex_runs.push(gpui::TextRun {
+        hex_runs.push(TextRun {
             len: group.text_end - group.text_start,
             font: font.clone(),
             color: text_color,
@@ -673,11 +670,11 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let hex_mask_bounds = Bounds::new(point(hex_start_x, params.bounds.top()), size(px(params.hex_col_width), px(ROW_HEIGHT)));
 
     window.with_content_mask(
-        Some(gpui::ContentMask {
+        Some(ContentMask {
             bounds: scrollable_mask_bounds,
         }),
         |window| {
-            window.with_content_mask(Some(gpui::ContentMask { bounds: hex_mask_bounds }), |window| {
+            window.with_content_mask(Some(ContentMask { bounds: hex_mask_bounds }), |window| {
                 for (item_idx, group) in hex_source.groups.iter().enumerate() {
                     let (hl_color, is_selected, is_cursor) = group_visuals[item_idx];
                     let (group_start_x, group_end_x) = hex_group_x(*group, text_origin_x, params.hex_cell_width);
@@ -713,7 +710,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             point(hl_start_x, params.bounds.top() + px(1.0)),
                             size(hl_end_x - hl_start_x, px(ROW_HEIGHT - 2.0)),
                         );
-                        window.paint_quad(gpui::fill(hl_fill_bounds, color));
+                        window.paint_quad(fill(hl_fill_bounds, color));
                     }
 
                     // 2. Translucent selection quad (overlaid on top of highlight)
@@ -734,7 +731,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             point(sel_start_x, params.bounds.top() + px(1.0)),
                             size(sel_end_x - sel_start_x, px(ROW_HEIGHT - 2.0)),
                         );
-                        window.paint_quad(gpui::fill(sel_fill_bounds, selection_bg));
+                        window.paint_quad(fill(sel_fill_bounds, selection_bg));
                     }
 
                     // 3. Cursor border / underscore
@@ -855,7 +852,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     for step in 0..5 {
                         let x = hex_start_x + px(step as f32 * 3.2);
                         let alpha = 1.0 - (step as f32 / 5.0);
-                        window.paint_quad(gpui::fill(
+                        window.paint_quad(fill(
                             Bounds::new(point(x, params.bounds.top()), size(px(3.4), px(ROW_HEIGHT))),
                             bg.opacity(alpha * 0.95),
                         ));
@@ -870,7 +867,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     for step in 0..6 {
                         let x = fade_start + px(step as f32 * 3.6);
                         let alpha = (step + 1) as f32 / 7.0;
-                        window.paint_quad(gpui::fill(
+                        window.paint_quad(fill(
                             Bounds::new(point(x, params.bounds.top()), size(px(3.8), px(ROW_HEIGHT))),
                             bg.opacity(alpha * 0.95),
                         ));
@@ -883,14 +880,14 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     // 3. ASCII Column (when not in structure definition mode and ASCII view is enabled)
     if !is_struct_mode && params.show_ascii {
         window.with_content_mask(
-            Some(gpui::ContentMask {
+            Some(ContentMask {
                 bounds: scrollable_mask_bounds,
             }),
             |window| {
                 let ascii_start_x = hex_end_x + px(gap);
                 let ascii_content_start_x = ascii_start_x - px(params.ascii_scroll_x);
                 let ascii_mask_bounds = Bounds::new(point(ascii_start_x, params.bounds.top()), size(px(ascii_width), px(ROW_HEIGHT)));
-                window.with_content_mask(Some(gpui::ContentMask { bounds: ascii_mask_bounds }), |window| {
+                window.with_content_mask(Some(ContentMask { bounds: ascii_mask_bounds }), |window| {
                     let char_map = build_ascii_char_map(params.encoding, params.doc.buffer.data(), offset, chunk.len());
                     let group_bytes = params.group_size.byte_count();
 
@@ -916,12 +913,12 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         if let Some(hl_color) = current_hl_color
                             && hl_color.a > 0.0
                         {
-                            window.paint_quad(gpui::fill(ascii_item_bounds, hl_color));
+                            window.paint_quad(fill(ascii_item_bounds, hl_color));
                         }
 
                         // Translucent selection quad (overlaid on top of highlight)
                         if in_selected_group && selection_bg.a > 0.0 {
-                            window.paint_quad(gpui::fill(ascii_item_bounds, selection_bg));
+                            window.paint_quad(fill(ascii_item_bounds, selection_bg));
                         }
                     }
 
@@ -966,7 +963,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
                     // Paint each glyph centered in its fixed byte cell using batched line shaping.
                     let mut ascii_text = String::with_capacity(chunk.len());
-                    let mut ascii_runs: Vec<gpui::TextRun> = Vec::with_capacity(chunk.len());
+                    let mut ascii_runs: Vec<TextRun> = Vec::with_capacity(chunk.len());
                     let mut ascii_entries: Vec<AsciiCellEntry> = Vec::with_capacity(chunk.len());
 
                     for (j, opt) in char_map.into_iter().enumerate() {
@@ -996,7 +993,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         ascii_text.push(c);
                         let text_byte_end = ascii_text.len();
 
-                        ascii_runs.push(gpui::TextRun {
+                        ascii_runs.push(TextRun {
                             len: text_byte_end - text_byte_start,
                             font: font.clone(),
                             color: text_color,
@@ -1062,7 +1059,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         for step in 0..5 {
                             let x = ascii_start_x + px(step as f32 * 3.2);
                             let alpha = 1.0 - (step as f32 / 5.0);
-                            window.paint_quad(gpui::fill(
+                            window.paint_quad(fill(
                                 Bounds::new(point(x, params.bounds.top()), size(px(3.4), px(ROW_HEIGHT))),
                                 bg.opacity(alpha * 0.95),
                             ));
@@ -1076,7 +1073,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         for step in 0..6 {
                             let x = fade_start + px(step as f32 * 3.6);
                             let alpha = (step + 1) as f32 / 7.0;
-                            window.paint_quad(gpui::fill(
+                            window.paint_quad(fill(
                                 Bounds::new(point(x, params.bounds.top()), size(px(3.8), px(ROW_HEIGHT))),
                                 bg.opacity(alpha * 0.95),
                             ));
@@ -1188,7 +1185,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         if !desc_parts.is_empty() {
             let expr_shared = SharedString::from(desc_parts.join("  "));
             let text_color = if !container_structs.is_empty() { accent_fg_color } else { fg_color };
-            let run = gpui::TextRun {
+            let run = TextRun {
                 len: expr_shared.len(),
                 font: font.clone(),
                 color: text_color,
@@ -1201,15 +1198,15 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             let desc_text_width = f32::from(shaped_expr.width) + indent_px + 8.0;
 
             window.with_content_mask(
-                Some(gpui::ContentMask {
+                Some(ContentMask {
                     bounds: scrollable_mask_bounds,
                 }),
                 |window| {
-                    window.with_content_mask(Some(gpui::ContentMask { bounds: desc_mask_bounds }), |window| {
+                    window.with_content_mask(Some(ContentMask { bounds: desc_mask_bounds }), |window| {
                         let _ = shaped_expr.paint(
                             point(desc_start_x - px(params.desc_scroll_x) + px(indent_px), params.bounds.top() + px(2.0)),
                             line_height,
-                            gpui::TextAlign::Left,
+                            TextAlign::Left,
                             None,
                             window,
                             cx,
@@ -1221,7 +1218,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             for step in 0..5 {
                                 let x = desc_start_x + px(step as f32 * 3.2);
                                 let alpha = 1.0 - (step as f32 / 5.0);
-                                window.paint_quad(gpui::fill(
+                                window.paint_quad(fill(
                                     Bounds::new(point(x, params.bounds.top()), size(px(3.4), px(ROW_HEIGHT))),
                                     bg.opacity(alpha * 0.95),
                                 ));
@@ -1236,7 +1233,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             for step in 0..5 {
                                 let x = fade_start + px(step as f32 * 4.0);
                                 let alpha = (step + 1) as f32 / 6.0;
-                                window.paint_quad(gpui::fill(
+                                window.paint_quad(fill(
                                     Bounds::new(point(x, params.bounds.top()), size(px(4.2), px(ROW_HEIGHT))),
                                     bg.opacity(alpha * 0.95),
                                 ));
@@ -1249,7 +1246,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     }
 
     // 5. Bookmark Comments Column
-    let row_bookmark_comments: Vec<(gpui::Hsla, SharedString)> = params
+    let row_bookmark_comments: Vec<(Hsla, SharedString)> = params
         .bookmark_items
         .iter()
         .filter(|h| {
@@ -1279,7 +1276,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         let mut total_content_width = 4.0;
 
         for (badge_color, comment_shared) in &row_bookmark_comments {
-            let run = gpui::TextRun {
+            let run = TextRun {
                 len: comment_shared.len(),
                 font: font.clone(),
                 color: muted_color,
@@ -1295,19 +1292,19 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         let comment_text_width = total_content_width;
 
         window.with_content_mask(
-            Some(gpui::ContentMask {
+            Some(ContentMask {
                 bounds: scrollable_mask_bounds,
             }),
             |window| {
-                window.with_content_mask(Some(gpui::ContentMask { bounds: comment_mask_bounds }), |window| {
+                window.with_content_mask(Some(ContentMask { bounds: comment_mask_bounds }), |window| {
                     let mut cur_x = comment_start_x - px(params.comment_scroll_x) + px(4.0);
                     let dot_y = params.bounds.top() + px((ROW_HEIGHT - dot_size) / 2.0);
 
                     for (badge_color, shaped_comment, text_w) in shaped_items {
                         // Highlight colored circle dot
                         let dot_bounds = Bounds::new(point(cur_x, dot_y), size(px(dot_size), px(dot_size)));
-                        let mut dot_quad = gpui::fill(dot_bounds, badge_color);
-                        dot_quad.corner_radii = gpui::Corners {
+                        let mut dot_quad = fill(dot_bounds, badge_color);
+                        dot_quad.corner_radii = Corners {
                             top_left: px(dot_radius),
                             top_right: px(dot_radius),
                             bottom_left: px(dot_radius),
@@ -1317,14 +1314,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
                         // Comment text
                         let text_x = cur_x + px(dot_size + dot_margin_right);
-                        let _ = shaped_comment.paint(
-                            point(text_x, params.bounds.top() + px(2.0)),
-                            line_height,
-                            gpui::TextAlign::Left,
-                            None,
-                            window,
-                            cx,
-                        );
+                        let _ = shaped_comment.paint(point(text_x, params.bounds.top() + px(2.0)), line_height, TextAlign::Left, None, window, cx);
 
                         cur_x = text_x + px(text_w + item_spacing);
                     }
@@ -1335,7 +1325,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         for step in 0..5 {
                             let x = comment_start_x + px(step as f32 * 3.2);
                             let alpha = 1.0 - (step as f32 / 5.0);
-                            window.paint_quad(gpui::fill(
+                            window.paint_quad(fill(
                                 Bounds::new(point(x, params.bounds.top()), size(px(3.4), px(ROW_HEIGHT))),
                                 bg.opacity(alpha * 0.95),
                             ));
@@ -1350,7 +1340,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         for step in 0..5 {
                             let x = fade_start + px(step as f32 * 4.0);
                             let alpha = (step + 1) as f32 / 6.0;
-                            window.paint_quad(gpui::fill(
+                            window.paint_quad(fill(
                                 Bounds::new(point(x, params.bounds.top()), size(px(4.2), px(ROW_HEIGHT))),
                                 bg.opacity(alpha * 0.95),
                             ));
@@ -1367,7 +1357,7 @@ pub use crate::ui::scrollbar::paint_scrollbar;
 #[cfg(test)]
 mod tests {
     use super::{ByteGroupSize, DisplayRadix, HexGroupInfo, HexInsertCursorParams, hex_insert_cursor_geometry};
-    use gpui::px;
+    use gpui_kit::px;
 
     #[test]
     fn insert_cursor_advances_through_four_byte_group() {

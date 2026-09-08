@@ -1,4 +1,4 @@
-use gpui::*;
+use gpui_kit::*;
 
 pub const CONTEXT: &str = "HexView";
 

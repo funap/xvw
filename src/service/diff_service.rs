@@ -1,6 +1,6 @@
 use crate::core::diff::{DiffResult, compute_simple_diff};
 use crate::core::document::Document;
-use gpui::{App, Task};
+use gpui_kit::{App, Task};
 use std::sync::{Arc, RwLock};
 
 /// A service for asynchronously computing diffs between documents.

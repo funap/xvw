@@ -1,10 +1,6 @@
 use crate::core::appearance::Appearance;
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
-use gpui::prelude::*;
-use gpui::{
-    Action, Anchor, App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString, Subscription, Window, div,
-};
 use gpui_kit::component::{
     ActiveTheme, Sizable as _, Size, StyledExt,
     button::Button,
@@ -12,6 +8,10 @@ use gpui_kit::component::{
     input::{self, Input, InputState, NumberInput},
     menu::{DropdownMenu as _, PopupMenuItem},
     theme::Theme,
+};
+use gpui_kit::prelude::*;
+use gpui_kit::{
+    Action, Anchor, App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString, Subscription, Window, div,
 };
 
 #[derive(Clone, PartialEq, Action)]
@@ -250,7 +250,7 @@ impl Render for SettingsPanel {
 
 impl EventEmitter<PanelEvent> for SettingsPanel {}
 impl Focusable for SettingsPanel {
-    fn focus_handle(&self, _cx: &App) -> gpui::FocusHandle {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }

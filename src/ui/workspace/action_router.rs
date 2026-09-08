@@ -1,5 +1,5 @@
-use gpui::prelude::*;
-use gpui::*;
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 
 use super::Workspace;
 use crate::actions::*;
@@ -157,7 +157,7 @@ impl Workspace {
         if let Some(editor) = self.active_editor(cx) {
             let path = editor.read(cx).document.read().ok().map(|d| d.path().to_path_buf());
             if let Some(path) = path {
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(path.to_string_lossy().to_string()));
+                cx.write_to_clipboard(ClipboardItem::new_string(path.to_string_lossy().to_string()));
             }
         }
     }
@@ -168,7 +168,7 @@ impl Workspace {
             if let Some(path) = path
                 && let Some(name) = path.file_name()
             {
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(name.to_string_lossy().to_string()));
+                cx.write_to_clipboard(ClipboardItem::new_string(name.to_string_lossy().to_string()));
             }
         }
     }

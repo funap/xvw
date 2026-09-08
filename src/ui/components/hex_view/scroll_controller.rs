@@ -1,5 +1,5 @@
 use crate::ui::components::hex_view::types::{HexViewLayout, HorizontalScrollTarget, ROW_HEIGHT, ScrollAxisLock, ScrollColumn};
-use gpui::{ScrollHandle, point, px};
+use gpui_kit::{ScrollHandle, point, px};
 use std::time::Instant;
 
 /// Manages vertical and horizontal scroll state, axis locking, and scrollbar drag tracking.

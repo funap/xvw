@@ -13,6 +13,7 @@ pub use scroll_controller::ScrollController;
 #[cfg(test)]
 mod layout_tests;
 
+pub use actions::init;
 pub use actions::*;
 pub use layout::{
     ascii_byte_index_from_world_x, bounded_auto_fit_range, build_hex_text_source, calculate_scroll_top_for_range, can_chain_to_outer, hex_grid_width,
@@ -39,11 +40,11 @@ use crate::core::format::CopyFormat;
 use crate::core::radix::{ByteGroupSize, DisplayRadix};
 
 use crate::core::structure::{IndexedField, ParseResult};
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::menu::ContextMenuExt;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_kit::component::{ActiveTheme, StyledExt, h_flex};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 use std::borrow::Cow;
 use std::ops::Range;
 use std::sync::Arc;
@@ -942,11 +943,7 @@ impl HexView {
 
     pub fn set_highlight_ranges(&mut self, ranges: Vec<Range<usize>>, cx: &mut Context<Self>) {
         let is_dark = cx.theme().mode.is_dark();
-        let highlight_color = if is_dark {
-            gpui::hsla(0.0, 0.75, 0.55, 0.35)
-        } else {
-            gpui::hsla(0.0, 0.75, 0.50, 0.35)
-        };
+        let highlight_color = if is_dark { hsla(0.0, 0.75, 0.55, 0.35) } else { hsla(0.0, 0.75, 0.50, 0.35) };
         let highlights: Vec<_> = ranges.into_iter().map(|range| (range, highlight_color)).collect();
         self.set_highlights(highlights, cx);
     }
@@ -1912,7 +1909,7 @@ impl HexView {
         }
 
         let prompt = window.prompt(
-            gpui::PromptLevel::Warning,
+            PromptLevel::Warning,
             "Clear all bookmarks?",
             Some(&format!(
                 "Are you sure you want to clear all {} bookmark{} and comments? This action cannot be undone.",
@@ -2333,7 +2330,7 @@ impl Render for HexView {
         let hex_cell_width = if self.hex_cell_width > 0.0 {
             px(self.hex_cell_width)
         } else {
-            let measured = measure_hex_cell_width(window, gpui::font(font_family.clone()), font_size);
+            let measured = measure_hex_cell_width(window, font(font_family.clone()), font_size);
             self.hex_cell_width = f32::from(measured);
             measured
         };
@@ -2508,7 +2505,7 @@ impl Render for HexView {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .cursor(gpui::CursorStyle::ResizeLeftRight)
+                            .cursor(CursorStyle::ResizeLeftRight)
                             .hover(|s| s.bg(theme.accent.opacity(0.2)))
                             .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                             .on_mouse_down(
@@ -2564,7 +2561,7 @@ impl Render for HexView {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .cursor(gpui::CursorStyle::ResizeLeftRight)
+                                .cursor(CursorStyle::ResizeLeftRight)
                                 .hover(|s| s.bg(theme.accent.opacity(0.2)))
                                 .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                                 .on_mouse_down(
@@ -2667,7 +2664,7 @@ impl Render for HexView {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .cursor(gpui::CursorStyle::ResizeLeftRight)
+                                .cursor(CursorStyle::ResizeLeftRight)
                                 .hover(|s| s.bg(theme.accent.opacity(0.2)))
                                 .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                                 .on_mouse_down(
@@ -2742,7 +2739,7 @@ impl Render for HexView {
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
-                                                .cursor(gpui::CursorStyle::ResizeLeftRight)
+                                                .cursor(CursorStyle::ResizeLeftRight)
                                                 .hover(|s| s.bg(theme.accent.opacity(0.2)))
                                                 .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                                                 .on_mouse_down(
@@ -2827,7 +2824,7 @@ impl Render for HexView {
                                                 .flex()
                                                 .items_center()
                                                 .justify_center()
-                                                .cursor(gpui::CursorStyle::ResizeLeftRight)
+                                                .cursor(CursorStyle::ResizeLeftRight)
                                                 .hover(|s| s.bg(theme.accent.opacity(0.2)))
                                                 .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                                                 .on_mouse_down(

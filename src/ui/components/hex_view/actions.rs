@@ -3,7 +3,7 @@ use crate::actions::{
     AddCustomBreak, ClearAllCustomBreaks, Copy, CopyAsHexDump, Cut, GoToBeginning, GoToEnd, JoinLine, Paste, Redo, SearchNext, SearchPrev, ToggleGoToAddress,
     ToggleSearch, Undo, UnfoldBookmarkAtCursor,
 };
-use gpui::*;
+use gpui_kit::*;
 
 actions!(
     hex_view,

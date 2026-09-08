@@ -1,9 +1,9 @@
 use crate::ui::icon::IconName;
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::{ActiveTheme, Icon, Sizable};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 use std::collections::HashMap;
 
 use super::types::{DropPlacement, SplitDirection, TabContent, TabDrag, TabItem};
@@ -244,7 +244,7 @@ impl EditorGroup {
         };
         let title = tab.title(cx);
         let prompt = window.prompt(
-            gpui::PromptLevel::Warning,
+            PromptLevel::Warning,
             "Unsaved Changes",
             Some(&format!("Save changes to {title} before closing?")),
             &["Save", "Don't Save", "Cancel"],
@@ -614,7 +614,7 @@ impl Render for EditorGroup {
                                             .min_w_0()
                                             .truncate()
                                             .text_sm()
-                                            .when(is_active, |s| s.font_weight(gpui::FontWeight::MEDIUM))
+                                            .when(is_active, |s| s.font_weight(FontWeight::MEDIUM))
                                             .child(title),
                                     )
                                     .child(

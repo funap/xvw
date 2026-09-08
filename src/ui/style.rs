@@ -1,6 +1,6 @@
 use crate::ui::icon::IconName;
-use gpui::{AnyElement, Div, Hsla, InteractiveElement as _, ParentElement, SharedString, Styled, div, px};
 use gpui_kit::component::{Icon, StyledExt as _, h_flex, theme::Theme, v_flex};
+use gpui_kit::{AnyElement, Div, Hsla, InteractiveElement as _, ParentElement, Rgba, SharedString, Styled, div, px};
 
 /// Returns the header text color based on the focus state.
 /// When focused, it returns `theme.foreground`. When not focused, it returns `theme.muted_foreground`.
@@ -339,18 +339,18 @@ pub fn decode_uint_value(slice: &[u8], is_big_endian: bool) -> (u64, String) {
     }
 }
 
-impl From<crate::core::color::RgbaColor> for gpui::Hsla {
+impl From<crate::core::color::RgbaColor> for Hsla {
     fn from(c: crate::core::color::RgbaColor) -> Self {
         let rf = c.r as f32 / 255.0;
         let gf = c.g as f32 / 255.0;
         let bf = c.b as f32 / 255.0;
         let af = c.a as f32 / 255.0;
-        gpui::Rgba { r: rf, g: gf, b: bf, a: af }.into()
+        Rgba { r: rf, g: gf, b: bf, a: af }.into()
     }
 }
 
-impl From<gpui::Hsla> for crate::core::color::RgbaColor {
-    fn from(hsla: gpui::Hsla) -> Self {
+impl From<Hsla> for crate::core::color::RgbaColor {
+    fn from(hsla: Hsla) -> Self {
         let rgba = hsla.to_rgb();
         Self {
             r: (rgba.r.clamp(0.0, 1.0) * 255.0).round() as u8,

@@ -1,5 +1,5 @@
-use gpui::prelude::*;
-use gpui::*;
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -12,7 +12,7 @@ use gpui_kit::component::WindowExt;
 
 impl Workspace {
     pub(crate) fn on_action_open_file_dialog(&mut self, _: &OpenFileDialog, window: &mut Window, cx: &mut Context<Self>) {
-        let path = cx.prompt_for_paths(gpui::PathPromptOptions {
+        let path = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
@@ -246,7 +246,7 @@ impl Workspace {
             );
         } else if open_paths.len() == 1 {
             let left_path = open_paths[0].clone();
-            let prompt_path = cx.prompt_for_paths(gpui::PathPromptOptions {
+            let prompt_path = cx.prompt_for_paths(PathPromptOptions {
                 files: true,
                 directories: false,
                 multiple: false,
@@ -343,7 +343,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_import_bookmarks(&mut self, _: &ImportBookmarks, window: &mut Window, cx: &mut Context<Self>) {
-        let prompt_path = cx.prompt_for_paths(gpui::PathPromptOptions {
+        let prompt_path = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
@@ -482,7 +482,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_import_hex_or_mot(&mut self, _: &crate::actions::ImportHexOrMot, window: &mut Window, cx: &mut Context<Self>) {
-        let prompt_path = cx.prompt_for_paths(gpui::PathPromptOptions {
+        let prompt_path = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
@@ -505,7 +505,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_import_base64(&mut self, _: &crate::actions::ImportBase64, window: &mut Window, cx: &mut Context<Self>) {
-        let prompt_path = cx.prompt_for_paths(gpui::PathPromptOptions {
+        let prompt_path = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
@@ -648,7 +648,7 @@ impl Workspace {
             return;
         }
 
-        let path = cx.prompt_for_paths(gpui::PathPromptOptions {
+        let path = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
@@ -765,7 +765,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_open_folder(&mut self, _: &OpenFolder, window: &mut Window, cx: &mut Context<Self>) {
-        let path = cx.prompt_for_paths(gpui::PathPromptOptions {
+        let path = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
             multiple: false,
@@ -883,7 +883,7 @@ impl Workspace {
         }
 
         let prompt = window.prompt(
-            gpui::PromptLevel::Warning,
+            PromptLevel::Warning,
             "Unsaved Changes",
             Some("Save changes before switching this file to read-only?"),
             &["Save and Make Read-only", "Cancel"],

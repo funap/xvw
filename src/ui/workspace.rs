@@ -1,5 +1,5 @@
-use gpui::prelude::*;
-use gpui::*;
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 
 use crate::actions::*;
 
@@ -487,14 +487,14 @@ impl Workspace {
                 window_bounds: Some(WindowBounds::Windowed(window_bounds)),
                 #[cfg(not(target_os = "linux"))]
                 titlebar: Some(gpui_kit::component::TitleBar::title_bar_options()),
-                window_min_size: Some(gpui::Size {
+                window_min_size: Some(Size {
                     width: px(640.),
                     height: px(480.),
                 }),
                 #[cfg(target_os = "linux")]
-                window_background: gpui::WindowBackgroundAppearance::Transparent,
+                window_background: WindowBackgroundAppearance::Transparent,
                 #[cfg(target_os = "linux")]
-                window_decorations: Some(gpui::WindowDecorations::Client),
+                window_decorations: Some(WindowDecorations::Client),
                 kind: WindowKind::Normal,
                 ..Default::default()
             };
@@ -931,7 +931,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_action_reveal_in_explorer))
             .on_action(cx.listener(Self::on_action_split_right))
             .on_action(cx.listener(Self::on_action_split_down))
-            .on_drop(cx.listener(move |this, external_paths: &gpui::ExternalPaths, window, cx| {
+            .on_drop(cx.listener(move |this, external_paths: &ExternalPaths, window, cx| {
                 for path in external_paths.paths() {
                     if path.is_file() {
                         this.left_panel.update(cx, |panel, cx| {
@@ -990,7 +990,7 @@ impl Render for Workspace {
                     div()
                         .absolute()
                         .inset_0()
-                        .bg(gpui::rgba(0x00000080))
+                        .bg(rgba(0x00000080))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -1005,7 +1005,7 @@ impl Render for Workspace {
                     div()
                         .absolute()
                         .inset_0()
-                        .bg(gpui::rgba(0x00000080))
+                        .bg(rgba(0x00000080))
                         .flex()
                         .items_center()
                         .justify_center()

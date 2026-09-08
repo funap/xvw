@@ -1,7 +1,7 @@
 use crate::core::buffer::Buffer;
 use crate::core::document::Document;
 use crate::core::editor::Editor;
-use gpui::{App, Entity, EntityId, Task, WeakEntity};
+use gpui_kit::{App, Entity, EntityId, Task, WeakEntity};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -187,7 +187,7 @@ impl DocumentService {
 
     /// Searches for a query in the given buffer based on the search options.
     /// Returns a Task that executes the search in the background.
-    pub fn search(&self, buffer: Arc<Buffer>, query: String, options: crate::core::search::SearchOptions, cx: &gpui::App) -> gpui::Task<Vec<usize>> {
+    pub fn search(&self, buffer: Arc<Buffer>, query: String, options: crate::core::search::SearchOptions, cx: &App) -> Task<Vec<usize>> {
         crate::service::search_service::SearchService.search(buffer, query, options, cx)
     }
 
@@ -198,21 +198,21 @@ impl DocumentService {
         query: String,
         options: crate::core::search::SearchOptions,
         segments: Vec<std::ops::Range<usize>>,
-        cx: &gpui::App,
-    ) -> gpui::Task<Vec<usize>> {
+        cx: &App,
+    ) -> Task<Vec<usize>> {
         crate::service::search_service::SearchService.search_with_segments(buffer, query, options, segments, cx)
     }
 
     /// Performs a search and updates the provided Editor entity with the results.
     pub fn perform_search(
         &self,
-        editor: gpui::Entity<crate::core::editor::Editor>,
+        editor: Entity<crate::core::editor::Editor>,
         query: String,
         options: crate::core::search::SearchOptions,
         generation: usize,
         is_full: bool,
-        cx: &gpui::App,
-    ) -> gpui::Task<()> {
+        cx: &App,
+    ) -> Task<()> {
         crate::service::search_service::SearchService.perform_search(editor, query, options, generation, is_full, cx)
     }
 
@@ -228,7 +228,7 @@ impl DocumentService {
         crate::service::search_service::SearchService.incremental_search(editor, query, mode, viewport_range, cx)
     }
 
-    pub fn compute_diff(&self, left: Arc<RwLock<Document>>, right: Arc<RwLock<Document>>, cx: &gpui::App) -> gpui::Task<crate::core::diff::DiffResult> {
+    pub fn compute_diff(&self, left: Arc<RwLock<Document>>, right: Arc<RwLock<Document>>, cx: &App) -> Task<crate::core::diff::DiffResult> {
         crate::service::diff_service::DiffService.compute_diff(left, right, cx)
     }
 }

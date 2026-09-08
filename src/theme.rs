@@ -1,7 +1,7 @@
 use crate::assets::Assets;
 use crate::settings::{DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, Settings};
-use gpui::{App, AssetSource, SharedString, Window};
 use gpui_kit::component::theme::{Theme, ThemeConfig, ThemeMode, ThemeSet};
+use gpui_kit::{App, AssetSource, SharedString, Window};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -11,7 +11,7 @@ pub struct EmbeddedThemes {
     themes: HashMap<SharedString, Rc<ThemeConfig>>,
 }
 
-impl gpui::Global for EmbeddedThemes {}
+impl gpui_kit::Global for EmbeddedThemes {}
 
 impl EmbeddedThemes {
     /// Loads all theme definition files found under `themes/` in the given asset source.

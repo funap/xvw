@@ -1,11 +1,11 @@
-use gpui::{
+use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarMode};
+use gpui_kit::component::theme::Theme;
+use gpui_kit::component::{StyledExt, h_flex};
+use gpui_kit::{
     AnyElement, App, Context, Div, ElementId, FocusHandle, Hsla, InteractiveElement, IntoElement, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, ParentElement, Pixels, ScrollHandle, ScrollStrategy, ScrollWheelEvent, SharedString, Stateful, Styled, UniformListScrollHandle, actions,
     canvas, div, point, px, size,
 };
-use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarMode};
-use gpui_kit::component::theme::Theme;
-use gpui_kit::component::{StyledExt, h_flex};
 
 pub const CONTEXT: &str = "VirtualTable";
 pub const TABLE_SCROLLBAR_WIDTH: Pixels = crate::ui::scrollbar::SCROLLBAR_WIDTH;
@@ -696,7 +696,7 @@ impl VirtualTable {
 #[cfg(test)]
 mod tests {
     use super::{ColumnResizeState, TableColumn, TableSortDirection, VirtualTableState};
-    use gpui::px;
+    use gpui_kit::px;
 
     #[test]
     fn test_table_column_builder() {

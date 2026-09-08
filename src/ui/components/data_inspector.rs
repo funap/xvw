@@ -3,11 +3,11 @@ use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::selection::Selection;
 use crate::ui::icon::IconName;
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::input::{self, Input, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, button::Button, button::ButtonVariants, h_flex, v_flex};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 
 pub const CONTEXT: &str = "DataInspector";
 pub const EDIT_CONTEXT: &str = "InspectorEdit";
@@ -16,8 +16,8 @@ actions!(data_inspector, [CommitInspectorEdit, CancelInspectorEdit]);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        gpui::KeyBinding::new("enter", CommitInspectorEdit, Some(EDIT_CONTEXT)),
-        gpui::KeyBinding::new("escape", CancelInspectorEdit, Some(EDIT_CONTEXT)),
+        KeyBinding::new("enter", CommitInspectorEdit, Some(EDIT_CONTEXT)),
+        KeyBinding::new("escape", CancelInspectorEdit, Some(EDIT_CONTEXT)),
     ]);
 }
 
@@ -293,7 +293,7 @@ impl DataInspector {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .when(has_error, |el| el.border_1().border_color(gpui::red()).rounded_sm())
+                        .when(has_error, |el| el.border_1().border_color(red()).rounded_sm())
                         .child(Input::new(&self.edit_input).with_size(gpui_kit::component::Size::XSmall)),
                 )
                 .child(
@@ -347,7 +347,7 @@ impl DataInspector {
                         .with_size(gpui_kit::component::Size::XSmall)
                         .tooltip("Copy Value")
                         .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_val.clone()));
+                            cx.write_to_clipboard(ClipboardItem::new_string(copy_val.clone()));
                         }),
                 );
             }
@@ -433,7 +433,7 @@ impl DataInspector {
             v_flex()
                 .w_full()
                 .child(row_content)
-                .child(div().px_3().pb_1().text_xs().text_color(gpui::red()).child(err.clone()))
+                .child(div().px_3().pb_1().text_xs().text_color(red()).child(err.clone()))
                 .into_any_element()
         } else {
             row_content.into_any_element()
@@ -710,7 +710,7 @@ impl Render for DataInspector {
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
             .on_mouse_down(
-                gpui::MouseButton::Left,
+                MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
                     if this.editing_field.is_none() {
                         this.focus_handle.focus(window, cx);

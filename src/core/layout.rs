@@ -33,7 +33,7 @@ impl From<usize> for BytesPerRow {
     }
 }
 
-impl gpui::Global for BytesPerRow {}
+impl gpui_kit::Global for BytesPerRow {}
 
 #[derive(Clone, Debug)]
 pub enum LineMap {

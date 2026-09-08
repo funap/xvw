@@ -1,8 +1,8 @@
 use crate::ui::icon::IconName;
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::{ActiveTheme, Icon};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 use std::path::PathBuf;
 
 use crate::actions::{ActivateTab, CloseActivePanel};
@@ -215,7 +215,7 @@ pub fn render_zed_tab_bar(tabs: &[TabItemInfo], _window: &mut Window, cx: &mut A
                         .flex_1()
                         .truncate()
                         .text_sm()
-                        .when(is_active, |s| s.font_weight(gpui::FontWeight::MEDIUM))
+                        .when(is_active, |s| s.font_weight(FontWeight::MEDIUM))
                         .child(title),
                 )
                 .child(

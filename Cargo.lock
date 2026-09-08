@@ -8862,7 +8862,6 @@ dependencies = [
  "flate2",
  "getrandom 0.4.3",
  "gpui-kit",
- "gpui-pre",
  "image",
  "memmap2",
  "rust-embed",

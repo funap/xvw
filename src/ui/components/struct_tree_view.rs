@@ -5,12 +5,12 @@ use crate::core::structure::{ParseResult, ParsedField, format_parse_result_as_te
 use crate::ui::components::data_table::{TableColumn, VirtualTable, VirtualTableState};
 use crate::ui::icon::IconName;
 use crate::ui::style::{format_size_friendly, format_with_commas};
-use gpui::prelude::*;
-use gpui::*;
 use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, button::ButtonVariants as _, h_flex, v_flex,
 };
+use gpui_kit::prelude::*;
+use gpui_kit::*;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -21,19 +21,19 @@ actions!(
     [MoveUp, MoveDown, MoveTop, MoveBottom, PageUp, PageDown, ToggleExpand, Expand, Collapse]
 );
 
-#[derive(Clone, PartialEq, Deserialize, JsonSchema, gpui::Action)]
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
 #[action(namespace = struct_tree)]
 pub struct CopyFieldValue {
     pub value: String,
 }
 
-#[derive(Clone, PartialEq, Deserialize, JsonSchema, gpui::Action)]
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
 #[action(namespace = struct_tree)]
 pub struct CopyFieldName {
     pub name: String,
 }
 
-#[derive(Clone, PartialEq, Deserialize, JsonSchema, gpui::Action)]
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
 #[action(namespace = struct_tree)]
 pub struct CopyFieldOffset {
     pub offset: String,
@@ -447,7 +447,7 @@ impl StructTreeView {
                     if this.export_request_id != request_id {
                         return false;
                     }
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
                     this.export_status = StructureExportStatus::Success(format!("Copied {field_count} root fields to clipboard"));
                     cx.notify();
                     true
@@ -464,15 +464,15 @@ impl StructTreeView {
     }
 
     fn copy_field_value(&mut self, action: &CopyFieldValue, _window: &mut Window, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(action.value.clone()));
+        cx.write_to_clipboard(ClipboardItem::new_string(action.value.clone()));
     }
 
     fn copy_field_name(&mut self, action: &CopyFieldName, _window: &mut Window, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(action.name.clone()));
+        cx.write_to_clipboard(ClipboardItem::new_string(action.name.clone()));
     }
 
     fn copy_field_offset(&mut self, action: &CopyFieldOffset, _window: &mut Window, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(action.offset.clone()));
+        cx.write_to_clipboard(ClipboardItem::new_string(action.offset.clone()));
     }
 
     fn export_structure_yaml(&mut self, _: &crate::actions::ExportStructureYaml, window: &mut Window, cx: &mut Context<Self>) {
@@ -1056,15 +1056,15 @@ impl StructTreeView {
             .bg(bg_color)
             .hover(|style| style.bg(hover_color))
             .on_mouse_down(
-                gpui::MouseButton::Left,
-                window.listener_for(&view, move |this, _event: &gpui::MouseDownEvent, window, cx| {
+                MouseButton::Left,
+                window.listener_for(&view, move |this, _event: &MouseDownEvent, window, cx| {
                     focus_handle_left.focus(window, cx);
                     this.select_item(ix, cx);
                 }),
             )
             .on_mouse_down(
-                gpui::MouseButton::Right,
-                window.listener_for(&view, move |this, _event: &gpui::MouseDownEvent, window, cx| {
+                MouseButton::Right,
+                window.listener_for(&view, move |this, _event: &MouseDownEvent, window, cx| {
                     focus_handle_right.focus(window, cx);
                     this.select_item(ix, cx);
                 }),
@@ -1100,8 +1100,8 @@ impl StructTreeView {
                                                 .cursor_pointer()
                                                 .child(chevron_symbol)
                                                 .on_mouse_down(
-                                                    gpui::MouseButton::Left,
-                                                    window.listener_for(&view, move |this, _event: &gpui::MouseDownEvent, _window, cx| {
+                                                    MouseButton::Left,
+                                                    window.listener_for(&view, move |this, _event: &MouseDownEvent, _window, cx| {
                                                         this.toggle_collapse_at(ix, cx);
                                                     }),
                                                 ),
@@ -1284,7 +1284,7 @@ impl Render for StructTreeView {
                 }
             }))
             .on_mouse_up(
-                gpui::MouseButton::Left,
+                MouseButton::Left,
                 cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
                     if this.table_state.resizing_column.is_some() {
                         this.table_state.end_resize();
@@ -1293,7 +1293,7 @@ impl Render for StructTreeView {
                 }),
             )
             .on_mouse_up_out(
-                gpui::MouseButton::Left,
+                MouseButton::Left,
                 cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
                     if this.table_state.resizing_column.is_some() {
                         this.table_state.end_resize();
@@ -1326,7 +1326,7 @@ impl Render for StructTreeView {
             .on_action(cx.listener(Self::on_action_copy_structure_result))
             .on_action(cx.listener(Self::on_action_export_structure_yaml))
             .on_mouse_down(
-                gpui::MouseButton::Left,
+                MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
                     this.focus_handle.focus(window, cx);
                 }),
@@ -1713,7 +1713,7 @@ impl Render for StructTreeView {
 }
 
 impl Focusable for StructTreeView {
-    fn focus_handle(&self, _cx: &App) -> gpui::FocusHandle {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
