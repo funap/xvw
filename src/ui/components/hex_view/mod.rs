@@ -246,25 +246,9 @@ impl HexView {
         });
 
         let _insert_mode_subscription = cx.observe_global::<InsertModeState>(|this, cx| {
-            let insert_mode = InsertModeState::is_enabled(cx);
             this.pause_cursor_blink(cx);
             this.clear_pending_hex_input();
             this.cursor_reveal_pending = true;
-
-            if !insert_mode {
-                let should_clamp_cursor = {
-                    let editor = this.editor.read(cx);
-                    editor.cursor.offset >= editor.total_size()
-                };
-                if should_clamp_cursor {
-                    this.editor.update(cx, |editor, editor_cx| {
-                        let last_offset = editor.total_size().saturating_sub(1);
-                        editor.set_cursor_offset(last_offset);
-                        editor_cx.notify();
-                    });
-                }
-            }
-
             this.ensure_cursor_visible(cx);
             cx.notify();
         });
@@ -748,7 +732,7 @@ impl HexView {
         }
 
         if self.scroll.scroll_lock_axis == Some(ScrollAxisLock::Vertical) {
-            let total_rows = self.editor.read(cx).line_starts().len().max(1);
+            let total_rows = self.effective_total_rows(cx);
             let list_h = self.list_bounds.get().map(|b| f32::from(b.size.height)).unwrap_or(600.0);
             let visible_rows = (list_h / ROW_HEIGHT).floor() as usize;
             let max_top_row = total_rows.saturating_sub(visible_rows.max(1));
@@ -796,7 +780,7 @@ impl HexView {
                 let _ = self.set_horizontal_offset(HorizontalScrollTarget::View, new_outer, layout, true, cx);
             }
         } else if !is_horizontal && abs_y > 0.01 {
-            let total_rows = self.editor.read(cx).line_starts().len().max(1);
+            let total_rows = self.effective_total_rows(cx);
             let list_h = self.list_bounds.get().map(|b| f32::from(b.size.height)).unwrap_or(600.0);
             let visible_rows = (list_h / ROW_HEIGHT).floor() as usize;
             let max_top_row = total_rows.saturating_sub(visible_rows.max(1));
@@ -810,7 +794,7 @@ impl HexView {
     }
 
     fn update_scrollbar_drag(&mut self, current_y: f32, cx: &mut Context<Self>) {
-        let total_rows = self.editor.read(cx).line_starts().len().max(1);
+        let total_rows = self.effective_total_rows(cx);
         let list_h = self.list_bounds.get().map(|b| f32::from(b.size.height)).unwrap_or(600.0);
         if let Some(new_row) = self.scroll.update_scrollbar_drag(current_y, total_rows, list_h) {
             self.scroll_to_row(new_row, cx);
@@ -1002,8 +986,28 @@ impl HexView {
         (start_byte, end_byte)
     }
 
+    fn effective_total_rows(&self, cx: &App) -> usize {
+        let editor = self.editor.read(cx);
+        let line_starts = editor.line_starts();
+        let total_size = editor.total_size();
+        let cursor_offset = if InsertModeState::is_enabled(cx) {
+            editor.insert_cursor_offset()
+        } else {
+            editor.cursor.offset
+        };
+        let bytes_per_row = line_starts.max_bytes_per_row();
+        let last_line_idx = line_starts.len().saturating_sub(1);
+        let last_line_start = line_starts.get(last_line_idx).unwrap_or(0);
+        let is_eof_on_new_line = total_size > last_line_start && (total_size - last_line_start) >= bytes_per_row;
+        if is_eof_on_new_line && cursor_offset == total_size {
+            line_starts.len() + 1
+        } else {
+            line_starts.len().max(1)
+        }
+    }
+
     pub fn scroll_to_row(&mut self, row: usize, cx: &mut Context<Self>) {
-        let total_rows = self.editor.read(cx).line_starts().len().max(1);
+        let total_rows = self.effective_total_rows(cx);
         let list_h = self.list_bounds.get().map(|b| f32::from(b.size.height)).unwrap_or(600.0);
         let visible_rows = (list_h / ROW_HEIGHT).floor() as usize;
 
@@ -1026,7 +1030,16 @@ impl HexView {
         let editor = self.editor.read(cx);
         let cursor_offset = if insert_mode { editor.insert_cursor_offset() } else { editor.cursor.offset };
         let line_starts = editor.line_starts();
-        let cursor_row = Editor::find_line_index(cursor_offset, &line_starts);
+        let total_size = editor.total_size();
+        let bytes_per_row = line_starts.max_bytes_per_row();
+        let last_line_idx = line_starts.len().saturating_sub(1);
+        let last_line_start = line_starts.get(last_line_idx).unwrap_or(0);
+        let is_eof_on_new_line = total_size > last_line_start && (total_size - last_line_start) >= bytes_per_row;
+        let cursor_row = if is_eof_on_new_line && cursor_offset == total_size {
+            line_starts.len()
+        } else {
+            Editor::find_line_index(cursor_offset, &line_starts)
+        };
 
         let list_h = self.list_bounds.get().map(|b| f32::from(b.size.height)).unwrap_or(600.0);
         let visible_rows = (list_h / ROW_HEIGHT).floor() as usize;
@@ -1059,10 +1072,10 @@ impl HexView {
                 let pos = commit.offset.min(total);
                 let cursor_after = if advance_cursor { pos.saturating_add(1) } else { pos };
                 ed.replace_range_with_cursor(pos..pos, vec![commit.value], cursor_after)
+            } else if commit.offset >= total {
+                let cursor_after = if advance_cursor { total.saturating_add(1) } else { total };
+                ed.replace_range_with_cursor(total..total, vec![commit.value], cursor_after)
             } else {
-                if commit.offset >= total {
-                    return false;
-                }
                 let next_cursor = if advance_cursor {
                     crate::core::radix::next_visual_byte(commit.offset, total, group_size, is_big_endian)
                 } else {
@@ -1166,8 +1179,14 @@ impl HexView {
                 }
             } else {
                 let position = ed.cursor.offset;
-                let range = position..position.saturating_add(replacement.len()).min(ed.total_size());
-                ed.replace_range(range, replacement)
+                let total = ed.total_size();
+                if position >= total {
+                    let cursor_after = total.saturating_add(replacement.len());
+                    ed.replace_range_with_cursor(total..total, replacement, cursor_after)
+                } else {
+                    let range = position..position.saturating_add(replacement.len()).min(total);
+                    ed.replace_range(range, replacement)
+                }
             };
             editor_cx.notify();
             changed
@@ -1482,7 +1501,7 @@ impl HexView {
                         } else {
                             editor.set_cursor_offset_exact(target);
                         }
-                    } else if insert_mode {
+                    } else {
                         editor.set_cursor_offset_exact(buf_len);
                     }
                 } else if insert_mode {
@@ -2134,37 +2153,45 @@ impl HexView {
         let rel_y = f32::from(point.y - list_bounds.top()).max(0.0);
         let row_offset_in_view = (rel_y / ROW_HEIGHT).floor() as usize;
         let row_idx = self.scroll.scroll_offset + row_offset_in_view;
-        if row_idx >= line_starts.len() {
+        let total_size = doc.buffer.len();
+        let bytes_per_row = line_starts.max_bytes_per_row();
+        let last_line_idx = line_starts.len().saturating_sub(1);
+        let last_line_start = line_starts.get(last_line_idx).unwrap_or(0);
+        let is_eof_on_new_line = total_size > last_line_start && (total_size - last_line_start) >= bytes_per_row;
+        let is_eof_row = row_idx == line_starts.len() && is_eof_on_new_line;
+        if row_idx > line_starts.len() || (row_idx == line_starts.len() && !is_eof_row) {
             return None;
         }
-        let line_offset = line_starts.get(row_idx)?;
-        let next_offset = line_starts.get(row_idx + 1).unwrap_or(doc.buffer.len());
+        let line_offset = if is_eof_row { total_size } else { line_starts.get(row_idx)? };
+        let next_offset = if is_eof_row {
+            total_size
+        } else {
+            line_starts.get(row_idx + 1).unwrap_or(doc.buffer.len())
+        };
         let chunk_len = next_offset.saturating_sub(line_offset);
-        if editor.is_folded(line_offset) {
+        if !is_eof_row && editor.is_folded(line_offset) {
             return None;
         }
         if chunk_len == 0 {
-            if insert_mode {
-                let parse_result = editor.parse_result();
-                let is_struct_mode = editor.structure.show_inline_structure_view && parse_result.is_some();
-                let base_x = f32::from(list_bounds.left()) + 8.0;
-                let layout = self.current_layout(cx);
-                let relative_x = f32::from(point.x) - base_x;
-                if relative_x >= layout.fixed_width {
-                    let world_x = relative_x + self.scroll.outer_scroll_x;
-                    if !is_struct_mode
-                        && let Some(ascii_column) = layout.ascii
-                        && world_x >= ascii_column.start
-                        && world_x <= ascii_column.end()
-                    {
-                        return Some(EditTarget::Ascii { offset: line_offset });
-                    }
-                    if world_x >= layout.hex.start && world_x <= layout.hex.end() {
-                        return Some(EditTarget::Hex {
-                            offset: line_offset,
-                            nibble: 0,
-                        });
-                    }
+            let parse_result = editor.parse_result();
+            let is_struct_mode = editor.structure.show_inline_structure_view && parse_result.is_some();
+            let base_x = f32::from(list_bounds.left()) + 8.0;
+            let layout = self.current_layout(cx);
+            let relative_x = f32::from(point.x) - base_x;
+            if relative_x >= layout.fixed_width {
+                let world_x = relative_x + self.scroll.outer_scroll_x;
+                if !is_struct_mode
+                    && let Some(ascii_column) = layout.ascii
+                    && world_x >= ascii_column.start
+                    && world_x <= ascii_column.end()
+                {
+                    return Some(EditTarget::Ascii { offset: line_offset });
+                }
+                if world_x >= layout.hex.start && world_x <= layout.hex.end() {
+                    return Some(EditTarget::Hex {
+                        offset: line_offset,
+                        nibble: 0,
+                    });
                 }
             }
             return None;
@@ -2191,7 +2218,8 @@ impl HexView {
                 let char_range = self.encoding.char_range_at(doc.buffer.data(), abs_offset);
                 return Some(EditTarget::Ascii { offset: char_range.start });
             }
-            if insert_mode && raw_idx >= chunk_len {
+            let is_last_row = row_idx + 1 == line_starts.len();
+            if is_last_row && raw_idx >= chunk_len {
                 return Some(EditTarget::Ascii {
                     offset: line_offset + chunk_len,
                 });
@@ -2231,11 +2259,11 @@ impl HexView {
             }
         }
         if selected_group.is_none()
-            && insert_mode
             && let Some(last_group) = source.groups.last().copied()
         {
+            let is_last_row = row_idx + 1 == line_starts.len();
             let (_, last_group_end) = hex_group_x(last_group, origin_x, cell_width);
-            if point.x >= last_group_end && world_x <= layout.hex.end() {
+            if is_last_row && point.x >= last_group_end && world_x <= layout.hex.end() {
                 return Some(EditTarget::Hex {
                     offset: line_offset + chunk_len,
                     nibble: 0,
@@ -2266,7 +2294,6 @@ impl HexView {
     }
 
     fn offset_from_point(&self, point: Point<Pixels>, _window: &Window, cx: &App) -> Option<usize> {
-        let insert_mode = InsertModeState::is_enabled(cx);
         let root_bounds = self.bounds.get()?;
         let header_h = if self.show_header { HEADER_HEIGHT } else { 0.0 };
 
@@ -2290,15 +2317,23 @@ impl HexView {
         let rel_y = f32::from(point.y - list_bounds.top()).max(0.0);
         let row_offset_in_view = (rel_y / ROW_HEIGHT).floor() as usize;
         let row_idx = self.scroll.scroll_offset + row_offset_in_view;
-        if row_idx >= line_starts.len() {
+        let total_size = buffer_len;
+        let bytes_per_row = line_starts.max_bytes_per_row();
+        let last_line_idx = line_starts.len().saturating_sub(1);
+        let last_line_start = line_starts.get(last_line_idx).unwrap_or(0);
+        let is_eof_on_new_line = total_size > last_line_start && (total_size - last_line_start) >= bytes_per_row;
+        let is_eof_row = row_idx == line_starts.len() && is_eof_on_new_line;
+        if row_idx > line_starts.len() || (row_idx == line_starts.len() && !is_eof_row) {
             return None;
         }
-        let line_offset = line_starts.get(row_idx)?;
-        if editor.is_folded(line_offset) {
+        let line_offset = if is_eof_row { total_size } else { line_starts.get(row_idx)? };
+        if !is_eof_row && editor.is_folded(line_offset) {
             return Some(line_offset);
         }
 
-        let next_offset = if row_idx + 1 < line_starts.len() {
+        let next_offset = if is_eof_row {
+            total_size
+        } else if row_idx + 1 < line_starts.len() {
             line_starts.get(row_idx + 1).unwrap_or(buffer_len)
         } else {
             buffer_len
@@ -2334,7 +2369,8 @@ impl HexView {
             && world_x < ascii_column.end()
         {
             let raw_idx = ascii_byte_index_from_world_x(world_x, ascii_column, self.scroll.ascii_scroll_x);
-            if insert_mode && row_idx + 1 == line_starts.len() && raw_idx >= chunk_len {
+            let is_last_row = row_idx + 1 == line_starts.len();
+            if is_last_row && raw_idx >= chunk_len {
                 return Some(buffer_len);
             }
             let raw_idx = raw_idx.min(chunk_len.saturating_sub(1));
@@ -2369,10 +2405,8 @@ impl HexView {
                 }
             }
 
-            if insert_mode
-                && row_idx + 1 == line_starts.len()
-                && let Some(last_group) = source.groups.last().copied()
-            {
+            let is_last_row = row_idx + 1 == line_starts.len();
+            if is_last_row && let Some(last_group) = source.groups.last().copied() {
                 let (_, last_group_end) = hex_group_x(last_group, origin_x, cell_width);
                 if point.x >= last_group_end && world_x <= layout.hex.end() {
                     return Some(buffer_len);
@@ -2404,11 +2438,11 @@ impl Render for HexView {
         let font_family = self.font_family_prop.clone();
         let font_size = self.font_size_prop;
 
-        let (total_rows, max_bytes_per_row, is_struct_mode) = {
+        let total_rows = self.effective_total_rows(cx);
+        let (max_bytes_per_row, is_struct_mode) = {
             let editor = self.editor.read(cx);
             let line_starts = editor.line_starts();
             (
-                line_starts.len().max(1),
                 line_starts.max_bytes_per_row(),
                 editor.structure.show_inline_structure_view && editor.parse_result().is_some(),
             )
@@ -3114,7 +3148,7 @@ impl Render for HexView {
                             let rel_y = click_y - list_top;
                             let list_h = f32::from(list_b.size.height);
 
-                            let total_rows = this.editor.read(cx).line_starts().len().max(1);
+                            let total_rows = this.effective_total_rows(cx);
                             let visible_rows = (list_h / ROW_HEIGHT).floor() as usize;
                             let max_top_row = total_rows.saturating_sub(visible_rows.max(1));
                             let ratio = (visible_rows as f64 / total_rows as f64).clamp(0.0, 1.0);
@@ -3322,7 +3356,7 @@ impl Render for HexView {
                             this.scroll_to_row(new_row, cx);
                         } else if y > list_bottom {
                             let rows_down = ((y - list_bottom) / ROW_HEIGHT).ceil() as usize;
-                            let total_rows = this.editor.read(cx).line_starts().len().max(1);
+                            let total_rows = this.effective_total_rows(cx);
                             let max_top_row = total_rows.saturating_sub(1);
                             let new_row = (this.scroll.scroll_offset + rows_down.min(5)).min(max_top_row);
                             this.scroll_to_row(new_row, cx);

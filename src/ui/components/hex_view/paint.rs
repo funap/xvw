@@ -320,18 +320,35 @@ pub struct RowPaintParams<'a> {
 }
 
 pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) {
-    let offset = match params.line_starts.get(params.row_idx) {
-        Some(o) => o,
-        None => return,
-    };
-    let next_offset = if params.row_idx + 1 < params.line_starts.len() {
-        params.line_starts.get(params.row_idx + 1).unwrap_or(params.doc.buffer.len())
+    let (offset, next_offset) = if params.row_idx < params.line_starts.len() {
+        let offset = match params.line_starts.get(params.row_idx) {
+            Some(o) => o,
+            None => return,
+        };
+        let next_offset = if params.row_idx + 1 < params.line_starts.len() {
+            params.line_starts.get(params.row_idx + 1).unwrap_or(params.doc.buffer.len())
+        } else {
+            params.doc.buffer.len()
+        };
+        (offset, next_offset)
+    } else if params.row_idx == params.line_starts.len() {
+        let buf_len = params.doc.buffer.len();
+        (buf_len, buf_len)
     } else {
-        params.doc.buffer.len()
+        return;
     };
 
     let chunk_len = next_offset - offset;
     let chunk = params.doc.buffer.get_range(offset, chunk_len);
+
+    let total_size = params.doc.buffer.len();
+    let is_eof = params.cursor_offset == total_size;
+    let last_line_idx = params.line_starts.len().saturating_sub(1);
+    let last_line_start = params.line_starts.get(last_line_idx).unwrap_or(0);
+    let bytes_per_row = params.line_starts.max_bytes_per_row();
+    let is_eof_on_new_line = total_size > last_line_start && (total_size - last_line_start) >= bytes_per_row;
+    let is_eof_on_this_row =
+        is_eof && ((is_eof_on_new_line && params.row_idx == params.line_starts.len()) || (!is_eof_on_new_line && params.row_idx == last_line_idx));
 
     let is_struct_mode = params.parse_result.is_some();
 
@@ -627,32 +644,75 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     // Build and shape the exact text stream before painting any geometry.
     // Group geometry uses the fixed cell grid; glyphs are centered in that
     // grid during the text pass.
-    let hex_source = build_hex_text_source(chunk, offset, params.radix, params.group_size, params.is_big_endian);
+    let mut hex_source = build_hex_text_source(chunk, offset, params.radix, params.group_size, params.is_big_endian);
     let mut hex_text = hex_source.text.to_string();
     let mut pending_byte_char_start: Option<usize> = None;
 
     if let Some((pending_pos, pending_digit)) = params.pending_hex_digit
         && params.active_column == EditColumn::Hex
-        && pending_pos >= offset
-        && pending_pos < next_offset
     {
-        let chunk_pos = pending_pos - offset;
-        if let Some(group) = hex_source.groups.iter().find(|g| g.chunk_start <= chunk_pos && chunk_pos < g.chunk_end) {
-            let byte_index = chunk_pos - group.chunk_start;
-            let group_len = group.chunk_end - group.chunk_start;
-            let visual_byte = if !params.is_big_endian && group_len > 1 {
-                group_len.saturating_sub(byte_index + 1)
+        if pending_pos >= offset && pending_pos < next_offset {
+            let chunk_pos = pending_pos - offset;
+            if let Some(group) = hex_source.groups.iter().find(|g| g.chunk_start <= chunk_pos && chunk_pos < g.chunk_end) {
+                let byte_index = chunk_pos - group.chunk_start;
+                let group_len = group.chunk_end - group.chunk_start;
+                let visual_byte = if !params.is_big_endian && group_len > 1 {
+                    group_len.saturating_sub(byte_index + 1)
+                } else {
+                    byte_index
+                };
+                let char_start = group.text_start + visual_byte * 2;
+                if char_start + 1 < hex_text.len() {
+                    let digit_char = char::from_digit(pending_digit as u32, 16).unwrap_or('?');
+                    let mut bytes = hex_text.into_bytes();
+                    bytes[char_start] = digit_char as u8;
+                    bytes[char_start + 1] = b'_';
+                    hex_text = String::from_utf8(bytes).expect("valid utf8");
+                    pending_byte_char_start = Some(char_start);
+                }
+            }
+        } else if is_eof_on_this_row && pending_pos == total_size {
+            let digit_char = char::from_digit(pending_digit as u32, 16).unwrap_or('?');
+            let group_bytes = params.group_size.byte_count();
+            if hex_source.groups.is_empty() {
+                hex_text = format!("{}_", digit_char);
+                hex_source.groups.push(HexGroupInfo {
+                    chunk_start: 0,
+                    chunk_end: 0,
+                    start_slot: 0,
+                    text_start: 0,
+                    text_end: 2,
+                });
+                pending_byte_char_start = Some(0);
             } else {
-                byte_index
-            };
-            let char_start = group.text_start + visual_byte * 2;
-            if char_start + 1 < hex_text.len() {
-                let digit_char = char::from_digit(pending_digit as u32, 16).unwrap_or('?');
-                let mut bytes = hex_text.into_bytes();
-                bytes[char_start] = digit_char as u8;
-                bytes[char_start + 1] = b'_';
-                hex_text = String::from_utf8(bytes).expect("valid utf8");
-                pending_byte_char_start = Some(char_start);
+                let last_group = *hex_source.groups.last().unwrap();
+                let last_group_len = last_group.chunk_end - last_group.chunk_start;
+                let is_complete = (last_group.start_slot + last_group_len) == group_bytes;
+                if is_complete {
+                    hex_text.push(' ');
+                    let text_start = hex_text.len();
+                    hex_text.push(digit_char);
+                    hex_text.push('_');
+                    let text_end = hex_text.len();
+                    hex_source.groups.push(HexGroupInfo {
+                        chunk_start: chunk_len,
+                        chunk_end: chunk_len,
+                        start_slot: 0,
+                        text_start,
+                        text_end,
+                    });
+                    pending_byte_char_start = Some(text_start);
+                } else {
+                    let visual_slot = last_group.start_slot + last_group_len;
+                    let char_start = last_group.text_start + visual_slot * 2;
+                    if char_start + 1 < hex_text.len() {
+                        let mut bytes = hex_text.into_bytes();
+                        bytes[char_start] = digit_char as u8;
+                        bytes[char_start + 1] = b'_';
+                        hex_text = String::from_utf8(bytes).expect("valid utf8");
+                        pending_byte_char_start = Some(char_start);
+                    }
+                }
             }
         }
     }
@@ -664,8 +724,16 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     for (group_idx, group) in hex_source.groups.iter().enumerate() {
         let item_start_offset = offset + group.chunk_start;
         let item_end_offset = offset + group.chunk_end;
-        let item_slice = &chunk[group.chunk_start..group.chunk_end];
-        let is_cursor = params.cursor_offset >= item_start_offset && params.cursor_offset < item_end_offset;
+        let item_slice = if group.chunk_end <= chunk.len() && group.chunk_start <= group.chunk_end {
+            &chunk[group.chunk_start..group.chunk_end]
+        } else {
+            &[]
+        };
+        let is_cursor = if group.chunk_start == group.chunk_end {
+            is_eof_on_this_row
+        } else {
+            params.cursor_offset >= item_start_offset && params.cursor_offset < item_end_offset
+        };
         let is_zero = is_group_zero(item_slice);
         let is_selected = if params.min_sel <= params.max_sel {
             item_start_offset <= params.max_sel && item_end_offset > params.min_sel
@@ -706,10 +774,12 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         });
     }
 
-    let shaped_hex = window.text_system().shape_line(SharedString::from(hex_text), params.font_size, &hex_runs, None);
+    let shaped_hex = window
+        .text_system()
+        .shape_line(SharedString::from(hex_text.clone()), params.font_size, &hex_runs, None);
     let pending_edit_colors = pending_byte_char_start.map(|char_start| (char_start, caret_color, muted_color.opacity(0.6)));
     let text_origin_x = hex_start_x - px(params.hex_scroll_x);
-    let total_data_width = f32::from(hex_grid_width(hex_source.text.len(), params.hex_cell_width));
+    let total_data_width = f32::from(hex_grid_width(hex_text.len(), params.hex_cell_width));
 
     // 2. Background Quads Pass for Data Items (with clipping mask)
     let hex_mask_bounds = Bounds::new(point(hex_start_x, params.bounds.top()), size(px(params.hex_col_width), px(ROW_HEIGHT)));
@@ -791,7 +861,9 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         if params.radix == DisplayRadix::Hexadecimal {
                             let byte_index = params.cursor_offset.saturating_sub(item_start_offset);
                             let group_len = group.chunk_end.saturating_sub(group.chunk_start);
-                            let visual_byte = if !params.is_big_endian && group_len > 1 {
+                            let visual_byte = if group_len == 0 {
+                                0
+                            } else if !params.is_big_endian && group_len > 1 {
                                 group_len.saturating_sub(byte_index + 1)
                             } else {
                                 byte_index
@@ -834,6 +906,37 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                                 paint_underscore_cursor_at(window, item_box_bounds, cursor_start_x, cursor_width, cursor_border_color);
                             }
                         }
+                    }
+                }
+
+                if is_eof_on_this_row && !params.insert_mode && pending_byte_char_start.is_none() {
+                    let cursor_border_color = if params.is_focused {
+                        caret_color
+                    } else {
+                        darken_cursor_color(muted_color).opacity(0.8)
+                    };
+                    let (eof_start_x, eof_width) = if hex_source.groups.is_empty() {
+                        (text_origin_x, hex_grid_x(2, params.hex_cell_width))
+                    } else {
+                        let last_group = *hex_source.groups.last().unwrap();
+                        let group_bytes = params.group_size.byte_count();
+                        let last_group_len = last_group.chunk_end - last_group.chunk_start;
+                        let is_complete = (last_group.start_slot + last_group_len) == group_bytes;
+                        let eof_char_start = if is_complete {
+                            last_group.text_end + 1
+                        } else {
+                            last_group.text_start + (last_group.start_slot + last_group_len) * 2
+                        };
+                        (
+                            text_origin_x + hex_grid_x(eof_char_start, params.hex_cell_width),
+                            hex_grid_x(2, params.hex_cell_width),
+                        )
+                    };
+                    let byte_box_bounds = Bounds::new(point(eof_start_x, params.bounds.top() + px(1.0)), size(eof_width, px(ROW_HEIGHT - 2.0)));
+                    if params.active_column == EditColumn::Hex {
+                        paint_cursor_border(window, byte_box_bounds, cursor_border_color);
+                    } else {
+                        paint_underscore_cursor_at(window, byte_box_bounds, eof_start_x, eof_width, cursor_border_color);
                     }
                 }
 
@@ -1009,6 +1112,15 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                                 let ascii_char_bounds = Bounds::new(point(char_start_x, params.bounds.top() + px(1.0)), size(char_width, px(ROW_HEIGHT - 2.0)));
                                 paint_cursor_border(window, ascii_char_bounds, cursor_border_color);
                             }
+                        } else if is_eof_on_this_row && !params.insert_mode {
+                            let cursor_border_color = if params.is_focused {
+                                caret_color
+                            } else {
+                                darken_cursor_color(muted_color).opacity(0.8)
+                            };
+                            let ascii_x = ascii_content_start_x + px(chunk_len as f32 * ASCII_CELL_WIDTH);
+                            let ascii_box_bounds = Bounds::new(point(ascii_x, params.bounds.top() + px(1.0)), size(px(ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)));
+                            paint_cursor_border(window, ascii_box_bounds, cursor_border_color);
                         }
                     } else {
                         for group in hex_source.groups.iter() {
@@ -1028,6 +1140,16 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                                     Bounds::new(point(group_start_x, params.bounds.top() + px(1.0)), size(group_width, px(ROW_HEIGHT - 2.0)));
                                 paint_underscore_cursor_at(window, ascii_group_bounds, group_start_x, group_width, cursor_border_color);
                             }
+                        }
+                        if is_eof_on_this_row && !params.insert_mode {
+                            let cursor_border_color = if params.is_focused {
+                                caret_color
+                            } else {
+                                darken_cursor_color(muted_color).opacity(0.8)
+                            };
+                            let ascii_x = ascii_content_start_x + px(chunk_len as f32 * ASCII_CELL_WIDTH);
+                            let ascii_box_bounds = Bounds::new(point(ascii_x, params.bounds.top() + px(1.0)), size(px(ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)));
+                            paint_underscore_cursor_at(window, ascii_box_bounds, ascii_x, px(ASCII_CELL_WIDTH), cursor_border_color);
                         }
                     }
 

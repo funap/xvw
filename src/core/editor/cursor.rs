@@ -140,7 +140,7 @@ impl CursorModel {
             total_size
         } else {
             let aligned = (offset / step) * step;
-            aligned.min(total_size.saturating_sub(1))
+            aligned.min(total_size)
         };
         self.clear_selection(total_size);
     }
@@ -228,6 +228,10 @@ impl CursorModel {
         total_size: usize,
     ) -> usize {
         let step = self.group_size.byte_count();
+        let last_line_idx = line_map.len().saturating_sub(1);
+        let last_line_start = line_map.get(last_line_idx).unwrap_or(0);
+        let bytes_per_row = line_map.max_bytes_per_row();
+        let is_eof_on_new_line = total_size > last_line_start && (total_size - last_line_start) >= bytes_per_row;
         let current_line_idx = LayoutEngine::find_line_index(offset, line_map);
 
         if let Some(next_idx) = LayoutEngine::next_data_line(current_line_idx, line_map, total_size, folded_regions) {
@@ -245,22 +249,48 @@ impl CursorModel {
                 let col = (cmp::min(offset_in_line, next_line_len) / step) * step;
                 (next_line_start + col).min(next_line_end)
             } else if next_line_len > 0 {
-                let target_offset = next_line_start + cmp::min(offset_in_line, next_line_len - 1);
+                let max_in_line = if next_line_end == total_size && !is_eof_on_new_line {
+                    next_line_len
+                } else {
+                    next_line_len.saturating_sub(1)
+                };
+                let target_offset = next_line_start + cmp::min(offset_in_line, max_in_line);
                 let aligned_offset = (target_offset / step) * step;
-                aligned_offset.min(next_line_end.saturating_sub(1))
+                aligned_offset.min(next_line_end)
             } else {
                 next_line_start
             }
-        } else if is_insert_mode {
+        } else if (is_eof_on_new_line && offset < total_size) || is_insert_mode {
             total_size
         } else {
-            let max_offset = total_size.saturating_sub(1);
+            let max_offset = total_size;
             (max_offset / step) * step
         }
     }
 
-    pub fn calculate_up_offset(&self, offset: usize, is_insert_mode: bool, line_map: &LineMap, folded_regions: &BTreeMap<usize, usize>) -> usize {
+    pub fn calculate_up_offset(
+        &self,
+        offset: usize,
+        is_insert_mode: bool,
+        line_map: &LineMap,
+        folded_regions: &BTreeMap<usize, usize>,
+        total_size: usize,
+    ) -> usize {
         let step = self.group_size.byte_count();
+        let last_line_idx = line_map.len().saturating_sub(1);
+        let last_line_start = line_map.get(last_line_idx).unwrap_or(0);
+        let bytes_per_row = line_map.max_bytes_per_row();
+        let is_eof_on_new_line = total_size > last_line_start && (total_size - last_line_start) >= bytes_per_row;
+
+        if is_eof_on_new_line && offset == total_size {
+            let prev_line_start = last_line_start;
+            let prev_line_end = total_size;
+            let prev_line_len = prev_line_end - prev_line_start;
+            let max_in_prev = if is_insert_mode { prev_line_len } else { prev_line_len.saturating_sub(1) };
+            let aligned = (prev_line_start / step) * step;
+            return aligned.min(prev_line_start + max_in_prev);
+        }
+
         let current_line_idx = LayoutEngine::find_line_index(offset, line_map);
 
         if let Some(prev_idx) = LayoutEngine::prev_data_line(current_line_idx, line_map, folded_regions) {
@@ -328,7 +358,7 @@ impl CursorModel {
     pub fn move_right(&mut self, total_size: usize) {
         self.clear_selection(total_size);
         let step = self.group_size.byte_count();
-        let max_offset = total_size.saturating_sub(1);
+        let max_offset = total_size;
         let next = Self::next_group_boundary(self.offset, total_size, step);
         if next <= max_offset {
             self.offset = next;
@@ -338,7 +368,7 @@ impl CursorModel {
     /// Moves cursor up by one line, clearing any selection.
     pub fn move_up(&mut self, line_map: &LineMap, folded_regions: &BTreeMap<usize, usize>, total_size: usize) {
         self.clear_selection(total_size);
-        self.offset = self.calculate_up_offset(self.offset, false, line_map, folded_regions);
+        self.offset = self.calculate_up_offset(self.offset, false, line_map, folded_regions, total_size);
     }
 
     /// Moves cursor down by one line, clearing any selection.
@@ -426,7 +456,7 @@ impl CursorModel {
         };
         let anchor = if self.has_selection(total_size) { self.selection.anchor() } else { caret };
 
-        let active = self.calculate_up_offset(caret, true, line_map, folded_regions);
+        let active = self.calculate_up_offset(caret, true, line_map, folded_regions, total_size);
         self.offset = active;
         self.selection = Selection::new(anchor, active);
     }
@@ -437,7 +467,7 @@ impl CursorModel {
         } else {
             self.offset
         };
-        self.offset = self.calculate_up_offset(self.offset, false, line_map, folded_regions);
+        self.offset = self.calculate_up_offset(self.offset, false, line_map, folded_regions, total_size);
         self.selection = Selection::new(anchor, self.offset);
     }
 
@@ -476,13 +506,13 @@ impl CursorModel {
 
     pub fn go_to_end(&mut self, total_size: usize) {
         let step = self.group_size.byte_count();
-        let max_offset = total_size.saturating_sub(1);
+        let max_offset = total_size;
         self.offset = (max_offset / step) * step;
         self.clear_selection(total_size);
     }
 
     pub fn go_to_offset(&mut self, offset: usize, extend_selection: bool, total_size: usize) {
-        let target = if total_size == 0 { 0 } else { offset.min(total_size.saturating_sub(1)) };
+        let target = offset.min(total_size);
         if extend_selection {
             let anchor = if self.has_selection(total_size) {
                 self.selection.anchor()
@@ -536,7 +566,7 @@ impl CursorModel {
         let target_line_len = target_line_end - target_line_start;
 
         if target_line_idx == line_map.len() - 1 && target_line_len == 0 {
-            let max_offset = total_size.saturating_sub(1);
+            let max_offset = total_size;
             self.offset = (max_offset / step) * step;
         } else {
             let target_offset = target_line_start + cmp::min(offset_in_line, target_line_len.saturating_sub(1));
@@ -553,7 +583,7 @@ impl CursorModel {
 
     pub fn end(&mut self, total_size: usize) {
         let step = self.group_size.byte_count();
-        let max_offset = total_size.saturating_sub(1);
+        let max_offset = total_size;
         self.offset = (max_offset / step) * step;
         self.clear_selection(total_size);
     }
@@ -703,9 +733,9 @@ mod tests {
         assert_eq!(model.offset, 0);
 
         model.end(total);
-        assert_eq!(model.offset, 99);
+        assert_eq!(model.offset, 100);
         model.move_right(total);
-        assert_eq!(model.offset, 99);
+        assert_eq!(model.offset, 100);
 
         model.home(total);
         assert_eq!(model.offset, 0);

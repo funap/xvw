@@ -33,14 +33,14 @@ fn test_cursor_movement() {
     assert_eq!(editor.cursor.offset, 0);
 
     editor.end();
-    assert_eq!(editor.cursor.offset, 2);
+    assert_eq!(editor.cursor.offset, 3);
     editor.move_right();
-    assert_eq!(editor.cursor.offset, 2);
+    assert_eq!(editor.cursor.offset, 3);
 
     editor.go_to_beginning();
     assert_eq!(editor.cursor.offset, 0);
     editor.go_to_end();
-    assert_eq!(editor.cursor.offset, 2);
+    assert_eq!(editor.cursor.offset, 3);
 }
 
 #[test]
@@ -838,7 +838,7 @@ fn test_replace_byte_identical_at_end_of_buffer() {
     assert_eq!(editor.cursor.offset, 2);
 
     assert!(!editor.replace_byte(2, b'c'));
-    assert_eq!(editor.cursor.offset, 2);
+    assert_eq!(editor.cursor.offset, 3);
     assert_eq!(editor.document.read().unwrap().buffer.data(), b"abc");
 }
 
@@ -993,8 +993,8 @@ fn test_move_up_down_with_custom_breaks() {
 
     editor.set_cursor_offset(20); // Line 1, pos 10
     editor.move_down();
-    // Line 2 is 6 bytes long. pos 10 is too far. Clamp to 5. 26 + 5 = 31.
-    assert_eq!(editor.cursor.offset, 31);
+    // Line 2 is 6 bytes long. pos 10 is too far. Clamp to EOF position 6. 26 + 6 = 32.
+    assert_eq!(editor.cursor.offset, 32);
 }
 
 #[test]
@@ -1526,9 +1526,9 @@ fn test_go_to_offset() {
     assert_eq!(editor.cursor.offset, 30);
     assert!(!editor.has_selection());
 
-    // Jump beyond total size clamps to total_size - 1
+    // Jump beyond total size clamps to total_size
     editor.go_to_offset(100, false);
-    assert_eq!(editor.cursor.offset, 63);
+    assert_eq!(editor.cursor.offset, 64);
     assert!(!editor.has_selection());
 }
 
@@ -2111,4 +2111,62 @@ fn test_single_hex_digit_commit_cursor_advance() {
     let next = crate::core::radix::next_visual_byte(editor.cursor.offset, total, editor.options.group_size, editor.options.is_big_endian);
     editor.set_cursor_offset_exact(next);
     assert_eq!(editor.cursor.offset, 1);
+}
+
+#[test]
+fn test_eof_cursor_movement_and_append_and_backspace() {
+    let mut editor = create_editor_with_content(b"abc");
+    assert_eq!(editor.cursor.offset, 0);
+
+    // Navigate to EOF (offset 3)
+    editor.move_right(); // 1
+    editor.move_right(); // 2
+    editor.move_right(); // 3 (EOF)
+    assert_eq!(editor.cursor.offset, 3);
+
+    // Moving right at EOF stays at EOF
+    editor.move_right();
+    assert_eq!(editor.cursor.offset, 3);
+
+    // Append 1 byte at EOF: replacing range 3..3 with [0x64] ('d') and cursor_after = 4
+    assert!(editor.replace_range_with_cursor(3..3, vec![b'd'], 4));
+    assert_eq!(editor.document.read().unwrap().buffer.data(), b"abcd");
+    assert_eq!(editor.cursor.offset, 4);
+
+    // Backspace at EOF: deletes the preceding byte (offset 3) and moves cursor to 3
+    assert!(editor.delete_backward());
+    assert_eq!(editor.document.read().unwrap().buffer.data(), b"abc");
+    assert_eq!(editor.cursor.offset, 3);
+
+    // Move left returns to offset 2 (last valid byte)
+    editor.move_left();
+    assert_eq!(editor.cursor.offset, 2);
+}
+
+#[test]
+fn test_eof_cursor_line_navigation_on_full_row() {
+    // 16-byte buffer with bytes_per_row = 16
+    let mut editor = create_editor_with_content(&[0u8; 16]);
+    assert_eq!(editor.total_size(), 16);
+    assert_eq!(editor.line_starts(), vec![0]);
+
+    // Move cursor down from line 0 pos 0 to virtual EOF line pos 0 (offset 16)
+    editor.move_down();
+    assert_eq!(editor.cursor.offset, 16);
+
+    // Moving down from EOF stays at EOF
+    editor.move_down();
+    assert_eq!(editor.cursor.offset, 16);
+
+    // Moving up from EOF returns to line 0 pos 0
+    editor.move_up();
+    assert_eq!(editor.cursor.offset, 0);
+
+    // Go to end lands at 16 (EOF)
+    editor.go_to_end();
+    assert_eq!(editor.cursor.offset, 16);
+
+    // Move left from EOF lands at offset 15
+    editor.move_left();
+    assert_eq!(editor.cursor.offset, 15);
 }

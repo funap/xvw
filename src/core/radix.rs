@@ -265,12 +265,12 @@ pub fn is_group_zero(bytes: &[u8]) -> bool {
 
 /// Returns the next byte offset in visual reading order (left to right) on screen.
 pub fn next_visual_byte(pos: usize, total_len: usize, group_size: ByteGroupSize, is_big_endian: bool) -> usize {
-    if total_len == 0 {
-        return 0;
+    if total_len == 0 || pos >= total_len {
+        return total_len;
     }
     let g = group_size.byte_count();
     if is_big_endian || g <= 1 {
-        return (pos + 1).min(total_len.saturating_sub(1));
+        return (pos + 1).min(total_len);
     }
 
     let group_start = (pos / g) * g;
@@ -281,7 +281,7 @@ pub fn next_visual_byte(pos: usize, total_len: usize, group_size: ByteGroupSize,
     } else {
         let next_group_start = group_start + g;
         if next_group_start >= total_len {
-            pos
+            total_len
         } else {
             let next_group_len = (total_len - next_group_start).min(g);
             next_group_start + next_group_len - 1
@@ -291,10 +291,21 @@ pub fn next_visual_byte(pos: usize, total_len: usize, group_size: ByteGroupSize,
 
 /// Returns the previous byte offset in visual reading order (right to left) on screen.
 pub fn prev_visual_byte(pos: usize, total_len: usize, group_size: ByteGroupSize, is_big_endian: bool) -> usize {
-    if total_len == 0 || pos >= total_len {
+    if total_len == 0 {
         return 0;
     }
+    if pos > total_len {
+        return total_len.saturating_sub(1);
+    }
     let g = group_size.byte_count();
+    if pos == total_len {
+        if is_big_endian || g <= 1 {
+            return total_len.saturating_sub(1);
+        }
+        let last_group_start = ((total_len.saturating_sub(1)) / g) * g;
+        return last_group_start;
+    }
+
     if is_big_endian || g <= 1 {
         return pos.saturating_sub(1);
     }
@@ -582,8 +593,10 @@ mod tests {
         assert_eq!(next_visual_byte(0, total, ByteGroupSize::One, false), 1);
         assert_eq!(next_visual_byte(1, total, ByteGroupSize::One, false), 2);
         assert_eq!(next_visual_byte(2, total, ByteGroupSize::One, false), 3);
-        assert_eq!(next_visual_byte(3, total, ByteGroupSize::One, false), 3);
+        assert_eq!(next_visual_byte(3, total, ByteGroupSize::One, false), 4);
+        assert_eq!(next_visual_byte(4, total, ByteGroupSize::One, false), 4);
 
+        assert_eq!(prev_visual_byte(4, total, ByteGroupSize::One, false), 3);
         assert_eq!(prev_visual_byte(3, total, ByteGroupSize::One, false), 2);
         assert_eq!(prev_visual_byte(2, total, ByteGroupSize::One, false), 1);
         assert_eq!(prev_visual_byte(1, total, ByteGroupSize::One, false), 0);
@@ -596,8 +609,10 @@ mod tests {
         assert_eq!(next_visual_byte(1, total, ByteGroupSize::Two, false), 0);
         assert_eq!(next_visual_byte(0, total, ByteGroupSize::Two, false), 3);
         assert_eq!(next_visual_byte(3, total, ByteGroupSize::Two, false), 2);
-        assert_eq!(next_visual_byte(2, total, ByteGroupSize::Two, false), 2);
+        assert_eq!(next_visual_byte(2, total, ByteGroupSize::Two, false), 4);
+        assert_eq!(next_visual_byte(4, total, ByteGroupSize::Two, false), 4);
 
+        assert_eq!(prev_visual_byte(4, total, ByteGroupSize::Two, false), 2);
         assert_eq!(prev_visual_byte(2, total, ByteGroupSize::Two, false), 3);
         assert_eq!(prev_visual_byte(3, total, ByteGroupSize::Two, false), 0);
         assert_eq!(prev_visual_byte(0, total, ByteGroupSize::Two, false), 1);
@@ -609,8 +624,10 @@ mod tests {
         let total = 3;
         assert_eq!(next_visual_byte(1, total, ByteGroupSize::Two, false), 0);
         assert_eq!(next_visual_byte(0, total, ByteGroupSize::Two, false), 2);
-        assert_eq!(next_visual_byte(2, total, ByteGroupSize::Two, false), 2);
+        assert_eq!(next_visual_byte(2, total, ByteGroupSize::Two, false), 3);
+        assert_eq!(next_visual_byte(3, total, ByteGroupSize::Two, false), 3);
 
+        assert_eq!(prev_visual_byte(3, total, ByteGroupSize::Two, false), 2);
         assert_eq!(prev_visual_byte(2, total, ByteGroupSize::Two, false), 0);
         assert_eq!(prev_visual_byte(0, total, ByteGroupSize::Two, false), 1);
         assert_eq!(prev_visual_byte(1, total, ByteGroupSize::Two, false), 1);
@@ -622,8 +639,10 @@ mod tests {
         assert_eq!(next_visual_byte(0, total, ByteGroupSize::Two, true), 1);
         assert_eq!(next_visual_byte(1, total, ByteGroupSize::Two, true), 2);
         assert_eq!(next_visual_byte(2, total, ByteGroupSize::Two, true), 3);
-        assert_eq!(next_visual_byte(3, total, ByteGroupSize::Two, true), 3);
+        assert_eq!(next_visual_byte(3, total, ByteGroupSize::Two, true), 4);
+        assert_eq!(next_visual_byte(4, total, ByteGroupSize::Two, true), 4);
 
+        assert_eq!(prev_visual_byte(4, total, ByteGroupSize::Two, true), 3);
         assert_eq!(prev_visual_byte(3, total, ByteGroupSize::Two, true), 2);
         assert_eq!(prev_visual_byte(2, total, ByteGroupSize::Two, true), 1);
         assert_eq!(prev_visual_byte(1, total, ByteGroupSize::Two, true), 0);
@@ -640,8 +659,10 @@ mod tests {
         assert_eq!(next_visual_byte(7, total, ByteGroupSize::Four, false), 6);
         assert_eq!(next_visual_byte(6, total, ByteGroupSize::Four, false), 5);
         assert_eq!(next_visual_byte(5, total, ByteGroupSize::Four, false), 4);
-        assert_eq!(next_visual_byte(4, total, ByteGroupSize::Four, false), 4);
+        assert_eq!(next_visual_byte(4, total, ByteGroupSize::Four, false), 8);
+        assert_eq!(next_visual_byte(8, total, ByteGroupSize::Four, false), 8);
 
+        assert_eq!(prev_visual_byte(8, total, ByteGroupSize::Four, false), 4);
         assert_eq!(prev_visual_byte(4, total, ByteGroupSize::Four, false), 5);
         assert_eq!(prev_visual_byte(5, total, ByteGroupSize::Four, false), 6);
         assert_eq!(prev_visual_byte(6, total, ByteGroupSize::Four, false), 7);

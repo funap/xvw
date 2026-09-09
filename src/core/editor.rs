@@ -674,11 +674,7 @@ impl Editor {
     }
 
     pub fn go_to_offset(&mut self, offset: usize, extend_selection: bool) {
-        let target = if self.total_size() == 0 {
-            0
-        } else {
-            offset.min(self.total_size().saturating_sub(1))
-        };
+        let target = offset.min(self.total_size());
         self.auto_unfold_if_needed(target);
         self.cursor.go_to_offset(offset, extend_selection, self.total_size());
     }
@@ -768,10 +764,10 @@ impl Editor {
         let old_len = end - start;
         let new_total = total - old_len + replacement.len();
         let cursor_after = if replacement.is_empty() {
-            start.saturating_sub(1)
+            start.min(new_total)
         } else {
             let next = start.saturating_add(replacement.len());
-            if next < new_total { next } else { new_total.saturating_sub(1) }
+            next.min(new_total)
         };
         self.replace_range_with_cursor(start..end, replacement, cursor_after)
     }
@@ -810,7 +806,7 @@ impl Editor {
         if position >= total {
             return false;
         }
-        let cursor_after = if position + 1 < total { position + 1 } else { position };
+        let cursor_after = (position + 1).min(total);
         self.replace_range_with_cursor(position..position + 1, vec![byte], cursor_after)
     }
 
