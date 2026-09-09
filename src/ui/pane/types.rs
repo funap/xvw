@@ -291,6 +291,7 @@ impl TabContent {
     }
 }
 
+#[derive(Clone)]
 pub struct TabItem {
     pub id: usize,
     pub content: TabContent,

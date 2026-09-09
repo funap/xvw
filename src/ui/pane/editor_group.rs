@@ -216,7 +216,7 @@ impl EditorGroup {
         }
     }
 
-    fn close_tab_now(&mut self, tab_id: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn close_tab_now(&mut self, tab_id: usize, window: &mut Window, cx: &mut Context<Self>) {
         cx.emit(EditorGroupEvent::CloseTab(tab_id));
         self.remove_tab_by_id(tab_id, window, cx);
         if self.tabs.is_empty() {

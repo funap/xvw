@@ -22,6 +22,8 @@ use std::sync::{Arc, RwLock};
 
 mod action_router;
 mod dialog_flow;
+#[cfg(test)]
+mod tests;
 
 pub struct Workspace {
     pub pane_tree: Entity<PaneTree>,
@@ -35,6 +37,7 @@ pub struct Workspace {
     pub new_file_modal: Option<Entity<crate::ui::components::new_file_modal::NewFileModal>>,
     pub fill_selection_modal: Option<Entity<crate::ui::components::fill_selection_modal::FillSelectionModal>>,
     pub untitled_count: usize,
+    pub(crate) force_close: bool,
     focus_handle: FocusHandle,
     last_active_editor_id: Cell<Option<EntityId>>,
 }
@@ -376,6 +379,7 @@ impl Workspace {
             new_file_modal: None,
             fill_selection_modal: None,
             untitled_count: 0,
+            force_close: false,
             focus_handle: cx.focus_handle(),
             last_active_editor_id: Cell::new(None),
         };
@@ -510,13 +514,37 @@ impl Workspace {
             })?;
 
             window
-                .update(cx, |_, window, cx| {
+                .update(cx, |root, window, cx| {
                     window.activate_window();
                     window.set_window_title("XVW");
                     cx.on_release(|_, cx| {
                         cx.quit();
                     })
                     .detach();
+
+                    if let Ok(workspace) = root.view().clone().downcast::<Workspace>() {
+                        window.on_window_should_close(cx, move |window, cx| {
+                            let (force_close, all_tabs) = {
+                                let ws = workspace.read(cx);
+                                let all_tabs: Vec<crate::ui::pane::TabItem> =
+                                    ws.pane_tree.read(cx).all_groups().iter().flat_map(|g| g.read(cx).tabs.clone()).collect();
+                                (ws.force_close, all_tabs)
+                            };
+
+                            let dirty_docs = crate::ui::workspace::dialog_flow::collect_dirty_documents(&all_tabs, cx);
+                            if force_close || dirty_docs.is_empty() {
+                                true
+                            } else {
+                                workspace.update(cx, |workspace, cx| {
+                                    workspace.confirm_close_tabs(&all_tabs, window, cx, |workspace, _window, cx| {
+                                        workspace.force_close = true;
+                                        cx.quit();
+                                    });
+                                });
+                                false
+                            }
+                        });
+                    }
                 })
                 .expect("failed to update window");
 
@@ -658,8 +686,18 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(crate) fn on_action_quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
-        cx.quit();
+    pub(crate) fn on_action_quit(&mut self, _: &Quit, window: &mut Window, cx: &mut Context<Self>) {
+        if self.force_close {
+            cx.quit();
+            return;
+        }
+
+        let all_tabs: Vec<crate::ui::pane::TabItem> = self.pane_tree.read(cx).all_groups().iter().flat_map(|g| g.read(cx).tabs.clone()).collect();
+
+        self.confirm_close_tabs(&all_tabs, window, cx, |workspace, _window, cx| {
+            workspace.force_close = true;
+            cx.quit();
+        });
     }
 
     /// Opens a new workspace window with the specified files and folder.

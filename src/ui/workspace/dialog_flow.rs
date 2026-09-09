@@ -1,7 +1,7 @@
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use super::Workspace;
 use crate::actions::*;
@@ -1019,4 +1019,188 @@ impl Workspace {
     pub(crate) fn open_about_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         crate::ui::components::about_dialog::open_about_dialog(window, cx);
     }
+
+    pub(crate) fn confirm_close_tabs<F>(&mut self, tabs: &[crate::ui::pane::TabItem], window: &mut Window, cx: &mut Context<Self>, on_proceed: F)
+    where
+        F: FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
+    {
+        let dirty_docs = collect_dirty_documents(tabs, cx);
+        if dirty_docs.is_empty() {
+            on_proceed(self, window, cx);
+            return;
+        }
+
+        let first_title = dirty_docs.first().map(|(_, title)| title.as_str());
+        let (detail, buttons) = format_unsaved_changes_prompt(dirty_docs.len(), first_title);
+
+        let prompt = window.prompt(PromptLevel::Warning, "Unsaved Changes", Some(&detail), buttons, cx);
+
+        let workspace = cx.entity().clone();
+        let service = AppState::global(cx).document_service.clone();
+        let on_proceed = Box::new(on_proceed);
+
+        cx.spawn_in(window, async move |_, window| {
+            let Ok(choice) = prompt.await else {
+                return;
+            };
+
+            match choice {
+                0 => {
+                    for (doc, title) in dirty_docs {
+                        if save_single_dirty_document(&mut *window, &service, doc, &title).await.is_err() {
+                            return;
+                        }
+                    }
+
+                    let _ = window.update(|window, cx| {
+                        workspace.update(cx, |workspace, cx| {
+                            on_proceed(workspace, window, cx);
+                        });
+                    });
+                }
+                1 => {
+                    let _ = window.update(|window, cx| {
+                        workspace.update(cx, |workspace, cx| {
+                            on_proceed(workspace, window, cx);
+                        });
+                    });
+                }
+                _ => {}
+            }
+        })
+        .detach();
+    }
+}
+
+async fn save_single_dirty_document(
+    window: &mut AsyncWindowContext,
+    service: &crate::service::document_service::DocumentService,
+    doc: Arc<RwLock<crate::core::document::Document>>,
+    title: &str,
+) -> Result<(), ()> {
+    let (path, state_id) = {
+        let doc_read = match doc.read() {
+            Ok(guard) => guard,
+            Err(p) => p.into_inner(),
+        };
+        (doc_read.path().to_path_buf(), doc_read.history.state_id())
+    };
+
+    if !path.exists() {
+        let parent_dir = path
+            .parent()
+            .filter(|p| p.exists())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
+        let default_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Untitled.bin".to_string());
+
+        let prompt_opt = window.update(|_, cx| cx.prompt_for_new_path(&parent_dir, Some(&default_name))).ok();
+        let Some(receiver) = prompt_opt else {
+            return Err(());
+        };
+        let Some(mut new_path) = receiver.await.ok().and_then(|r| r.ok()).flatten() else {
+            return Err(());
+        };
+        if let (None, Some(ext)) = (new_path.extension(), path.extension()) {
+            new_path.set_extension(ext);
+        }
+
+        let Some(save_task) = window.update(|_, cx| service.save_document_to_path(doc.clone(), new_path.clone(), cx)).ok() else {
+            return Err(());
+        };
+        if let Err(error) = save_task.await {
+            eprintln!("Failed to save document before closing: {error}");
+            let _ = window.update(|window, cx| {
+                window.push_notification(
+                    gpui_kit::component::notification::Notification::error(format!("Failed to save {title}: {error}")),
+                    cx,
+                );
+            });
+            return Err(());
+        }
+
+        let _ = window.update(|_, cx| {
+            let mut doc_write = match doc.write() {
+                Ok(guard) => guard,
+                Err(p) => p.into_inner(),
+            };
+            doc_write.set_path(new_path.clone());
+            if doc_write.history.state_id() == state_id {
+                doc_write.mark_as_saved();
+            }
+            drop(doc_write);
+            service.notify_document_changed(&new_path, cx);
+        });
+    } else {
+        let Some(save_task) = window.update(|_, cx| service.save_document(doc.clone(), cx)).ok() else {
+            return Err(());
+        };
+        if let Err(error) = save_task.await {
+            eprintln!("Failed to save document before closing: {error}");
+            let _ = window.update(|window, cx| {
+                window.push_notification(
+                    gpui_kit::component::notification::Notification::error(format!("Failed to save {title}: {error}")),
+                    cx,
+                );
+            });
+            return Err(());
+        }
+
+        let _ = window.update(|_, _| {
+            let unchanged_since_save = doc.read().map(|d| d.history.state_id() == state_id).unwrap_or(false);
+            if unchanged_since_save {
+                let mut doc_write = match doc.write() {
+                    Ok(guard) => guard,
+                    Err(p) => p.into_inner(),
+                };
+                doc_write.mark_as_saved();
+            }
+        });
+    }
+
+    Ok(())
+}
+
+pub(crate) fn format_unsaved_changes_prompt(dirty_count: usize, first_title: Option<&str>) -> (String, &'static [&'static str]) {
+    if dirty_count <= 1 {
+        let title = first_title.unwrap_or("document");
+        (format!("Save changes to {title} before closing?"), &["Save", "Don't Save", "Cancel"])
+    } else {
+        (
+            format!("You have {dirty_count} files with unsaved changes. Save changes before closing?"),
+            &["Save All", "Don't Save", "Cancel"],
+        )
+    }
+}
+
+pub(crate) fn deduplicate_dirty_documents(
+    docs: Vec<(Arc<RwLock<crate::core::document::Document>>, String)>,
+) -> Vec<(Arc<RwLock<crate::core::document::Document>>, String)> {
+    let mut result: Vec<(Arc<RwLock<crate::core::document::Document>>, String)> = Vec::new();
+    for (doc, title) in docs {
+        let is_already_present = result.iter().any(|(existing_doc, _)| {
+            Arc::ptr_eq(existing_doc, &doc)
+                || existing_doc
+                    .read()
+                    .ok()
+                    .and_then(|d1| doc.read().ok().map(|d2| d1.path() == d2.path()))
+                    .unwrap_or(false)
+        });
+        if !is_already_present {
+            result.push((doc, title));
+        }
+    }
+    result
+}
+
+pub(crate) fn collect_dirty_documents(tabs: &[crate::ui::pane::TabItem], cx: &App) -> Vec<(Arc<RwLock<crate::core::document::Document>>, String)> {
+    let raw: Vec<_> = tabs
+        .iter()
+        .filter(|tab| tab.is_dirty(cx))
+        .filter_map(|tab| tab.content.document(cx).map(|doc| (doc, tab.title(cx))))
+        .collect();
+    deduplicate_dirty_documents(raw)
 }

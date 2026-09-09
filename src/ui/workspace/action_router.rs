@@ -588,33 +588,58 @@ impl Workspace {
 
     pub(crate) fn on_action_close_other_tabs(&mut self, _: &CloseOtherTabs, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(group) = self.pane_tree.read(cx).active_group(cx) {
-            let active_id = group.read(cx).active_tab().map(|t| t.id);
+            let (active_id, other_tabs): (Option<usize>, Vec<crate::ui::pane::TabItem>) = {
+                let g = group.read(cx);
+                let active_id = g.active_tab().map(|t| t.id);
+                let other_tabs = if let Some(active_id) = active_id {
+                    g.tabs.iter().filter(|t| t.id != active_id).cloned().collect()
+                } else {
+                    Vec::new()
+                };
+                (active_id, other_tabs)
+            };
             if let Some(active_id) = active_id {
-                let tab_ids: Vec<_> = group.read(cx).tabs.iter().map(|t| t.id).collect();
-                for id in tab_ids {
-                    if id != active_id {
+                self.confirm_close_tabs(&other_tabs, window, cx, move |workspace, window, cx| {
+                    if let Some(group) = workspace.pane_tree.read(cx).active_group(cx) {
                         group.update(cx, |g, cx| {
-                            g.close_tab(id, window, cx);
+                            g.close_other_tabs(active_id, window, cx);
                         });
                     }
-                }
+                    workspace.sync_active_editor(window, cx);
+                    cx.notify();
+                });
             }
         }
-        self.sync_active_editor(window, cx);
-        cx.notify();
     }
 
     pub(crate) fn on_action_close_tabs_to_right(&mut self, _: &CloseTabsToRight, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(group) = self.pane_tree.read(cx).active_group(cx) {
-            let active_id = group.read(cx).active_tab().map(|t| t.id);
+            let (active_id, right_tabs): (Option<usize>, Vec<crate::ui::pane::TabItem>) = {
+                let g = group.read(cx);
+                let active_id = g.active_tab().map(|t| t.id);
+                let right_tabs = if let Some(active_id) = active_id {
+                    if let Some(pos) = g.tabs.iter().position(|t| t.id == active_id) {
+                        g.tabs[pos + 1..].to_vec()
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                };
+                (active_id, right_tabs)
+            };
             if let Some(active_id) = active_id {
-                group.update(cx, |g, cx| {
-                    g.close_tabs_to_right(active_id, window, cx);
+                self.confirm_close_tabs(&right_tabs, window, cx, move |workspace, window, cx| {
+                    if let Some(group) = workspace.pane_tree.read(cx).active_group(cx) {
+                        group.update(cx, |g, cx| {
+                            g.close_tabs_to_right(active_id, window, cx);
+                        });
+                    }
+                    workspace.sync_active_editor(window, cx);
+                    cx.notify();
                 });
             }
         }
-        self.sync_active_editor(window, cx);
-        cx.notify();
     }
 
     pub(crate) fn on_action_close_saved_tabs(&mut self, _: &CloseSavedTabs, window: &mut Window, cx: &mut Context<Self>) {
@@ -628,9 +653,12 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_close_all_tabs(&mut self, _: &CloseAllTabs, window: &mut Window, cx: &mut Context<Self>) {
-        self.pane_tree = cx.new(|_| crate::ui::pane::PaneTree::new());
-        self.sync_active_editor(window, cx);
-        cx.notify();
+        let all_tabs: Vec<crate::ui::pane::TabItem> = self.pane_tree.read(cx).all_groups().iter().flat_map(|g| g.read(cx).tabs.clone()).collect();
+        self.confirm_close_tabs(&all_tabs, window, cx, |workspace, window, cx| {
+            workspace.pane_tree = cx.new(|_| crate::ui::pane::PaneTree::new());
+            workspace.sync_active_editor(window, cx);
+            cx.notify();
+        });
     }
 
     pub(crate) fn on_action_reveal_in_explorer(&mut self, _: &RevealInExplorer, _: &mut Window, cx: &mut Context<Self>) {
