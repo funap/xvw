@@ -679,6 +679,16 @@ impl Editor {
         self.cursor.go_to_offset(offset, extend_selection, self.total_size());
     }
 
+    /// Jumps to and selects the specified byte offset range, unfolding folded regions if needed.
+    pub fn go_to_range(&mut self, range: Range<usize>) {
+        let start = range.start.min(self.total_size());
+        self.auto_unfold_if_needed(start);
+        if range.end > range.start {
+            self.auto_unfold_if_needed(range.end.saturating_sub(1));
+        }
+        self.set_selection_range(range);
+    }
+
     pub fn page_up(&mut self, visible_rows: usize) {
         let line_map = self.line_starts();
         self.cursor.page_up(visible_rows, &line_map, self.total_size());

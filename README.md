@@ -47,6 +47,8 @@ Engineered to be snappy, intuitive, and versatile for reverse engineering, firmw
   Decode and search strings across UTF-8, UTF-16, Shift-JIS, EUC-JP, GB18030, Big5, ISO-8859 variants, Windows code pages, and legacy character sets.
 - 📋 **Rich "Copy As" Exports**  
   Quickly export selections as C/C++ arrays, Rust arrays, JSON arrays, Base64 strings, Hex streams, printable text, or formatted Hex dumps.
+- 🎯 **Go to Address & Range Selection**  
+  Jump to any offset (hex, decimal, relative, or percentage) or select address ranges (e.g. `0x20..0x1ff`).
 - ⌨️ **Vim-Inspired Keybindings**  
   Navigate effortlessly with `h`/`j`/`k`/`l`, expand selections with `Shift` modifiers, and search with `/` across hex patterns, text, and regex.
 
@@ -166,7 +168,7 @@ xvw binary.bin --panel map
 | **Expand Selection** | `Shift + h/j/k/l` | `Shift + h/j/k/l` |
 | **Jump to Start of File** | `Cmd + Home` / `Home` | `Ctrl + Home` / `Home` |
 | **Jump to End of File** | `Cmd + End` / `End` | `Ctrl + End` / `End` |
-| **Go to Offset / Address** | `Cmd + L` / `Ctrl + G` | `Ctrl + L` / `Ctrl + G` |
+| **Go to Address / Range** | `Cmd + L` / `Ctrl + G` | `Ctrl + L` / `Ctrl + G` |
 | **Insert Custom Break** | `Enter` | `Enter` |
 | **Join Lines** | `Cmd + J` | `Ctrl + J` |
 | **Reset Custom Breaks** | `Cmd + Shift + Backspace` | `Ctrl + Shift + Backspace` |

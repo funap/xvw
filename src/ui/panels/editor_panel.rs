@@ -112,6 +112,20 @@ impl EditorPanel {
                 cx.dispatch_action(&FocusHexView);
                 cx.notify();
             }
+            GotoBarEvent::SelectRange { range } => {
+                let r = range.clone();
+                this.editor.update(cx, |editor, cx| {
+                    editor.go_to_range(r);
+                    cx.notify();
+                });
+                let cursor_offset = this.editor.read(cx).cursor.offset;
+                this.hex_view.update(cx, |view, cx| {
+                    view.scroll_to_byte_if_needed(cursor_offset, cx);
+                });
+                this.is_goto_visible = false;
+                cx.dispatch_action(&FocusHexView);
+                cx.notify();
+            }
             GotoBarEvent::Dismiss => {
                 this.is_goto_visible = false;
                 cx.dispatch_action(&FocusHexView);

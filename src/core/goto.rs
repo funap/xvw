@@ -1,10 +1,11 @@
 use std::fmt;
+use std::ops::Range;
 
 /// The radix mode used for interpreting undecorated numeric offset inputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum GotoRadix {
-    #[default]
     Hex,
+    #[default]
     Dec,
 }
 
@@ -27,6 +28,7 @@ pub enum GotoOrigin {
     FromEnd,
     Percentage,
     Line,
+    Range,
 }
 
 /// The result of parsing a goto offset expression.
@@ -40,6 +42,15 @@ pub struct ParsedGotoOffset {
     pub origin: GotoOrigin,
     /// True if the raw target offset exceeded the document size.
     pub is_out_of_bounds: bool,
+    /// The half-open selection range `[start, end)` if the expression specified a range.
+    pub selection_range: Option<Range<usize>>,
+}
+
+#[allow(dead_code)]
+impl ParsedGotoOffset {
+    pub fn is_range(&self) -> bool {
+        self.selection_range.is_some()
+    }
 }
 
 /// Errors that can occur when parsing a goto offset expression.
@@ -134,6 +145,28 @@ fn parse_number_with_base(s: &str, default_radix: GotoRadix) -> Result<usize, Go
     }
 }
 
+/// Helper to detect and split range notation if present.
+/// Supports `..=`, `...`, `..`, ` - `, and ` to ` (case-insensitive).
+fn detect_range_split(input: &str) -> Option<(&str, &str)> {
+    if let Some(pos) = input.find("..=") {
+        return Some((&input[..pos], &input[pos + 3..]));
+    }
+    if let Some(pos) = input.find("...") {
+        return Some((&input[..pos], &input[pos + 3..]));
+    }
+    if let Some(pos) = input.find("..") {
+        return Some((&input[..pos], &input[pos + 2..]));
+    }
+    if let Some(pos) = input.find(" - ") {
+        return Some((&input[..pos], &input[pos + 3..]));
+    }
+    let lower = input.to_ascii_lowercase();
+    if let Some(pos) = lower.find(" to ") {
+        return Some((&input[..pos], &input[pos + 4..]));
+    }
+    None
+}
+
 /// Parses a goto offset expression from user input.
 ///
 /// Supports:
@@ -146,6 +179,7 @@ fn parse_number_with_base(s: &str, default_radix: GotoRadix) -> Result<usize, Go
 /// - Named positions (`begin`, `start`, `first`, `end`, `eof`, `last`)
 /// - Percentage (`50%`, `75.5%`, `100%`)
 /// - Line / Row syntax (`L10`, `line 10`, `:10`)
+/// - Range selection (`0xC6..0x119`, `0xC6..=0x119`, `0x100..0x200`, `..0x50`, `0x100..`, `0xC6 - 0x119`)
 ///
 /// Parses a goto offset expression from user input using an AddressMap to resolve physical memory addresses.
 pub fn parse_goto_offset_with_map(
@@ -160,6 +194,88 @@ pub fn parse_goto_offset_with_map(
         return Err(GotoParseError::Empty);
     }
 
+    // Range syntax: "0xC6..0x119", "0xC6..=0x119", "0x100..0x200", "0xC6 - 0x119", "0x10..end", "..0x50", "0x100.."
+    if let Some((left_str, right_str)) = detect_range_split(trimmed) {
+        let left_trimmed = left_str.trim();
+        let right_trimmed = right_str.trim();
+
+        if detect_range_split(left_trimmed).is_some() || detect_range_split(right_trimmed).is_some() {
+            return Err(GotoParseError::InvalidFormat("Multiple range operators in address".into()));
+        }
+
+        let left_parsed = if left_trimmed.is_empty() {
+            ParsedGotoOffset {
+                target_offset: 0,
+                raw_target: 0,
+                origin: GotoOrigin::Absolute,
+                is_out_of_bounds: false,
+                selection_range: None,
+            }
+        } else {
+            parse_goto_offset_with_map(left_trimmed, current_cursor, total_size, default_radix, address_map)?
+        };
+
+        // Relative forward length: "+2", "+10", "+0x20" specifies length from start offset
+        if let Some(num_str) = right_trimmed.strip_prefix('+') {
+            let len = parse_number_with_base(num_str.trim(), default_radix)?;
+            let start = left_parsed.target_offset.min(total_size);
+            let end = start.saturating_add(len).min(total_size);
+            let is_out_of_bounds = left_parsed.is_out_of_bounds || (left_parsed.target_offset.saturating_add(len) > total_size);
+            return Ok(ParsedGotoOffset {
+                target_offset: start,
+                raw_target: left_parsed.raw_target,
+                origin: GotoOrigin::Range,
+                is_out_of_bounds,
+                selection_range: Some(start..end),
+            });
+        }
+
+        // Relative backward length: "-2", "-10", "-0x20" specifies length backwards from start offset
+        if let Some(num_str) = right_trimmed.strip_prefix('-') {
+            let len = parse_number_with_base(num_str.trim(), default_radix)?;
+            let end = left_parsed.target_offset.min(total_size);
+            let start = end.saturating_sub(len);
+            let is_out_of_bounds = left_parsed.is_out_of_bounds || (len > left_parsed.target_offset);
+            return Ok(ParsedGotoOffset {
+                target_offset: start,
+                raw_target: left_parsed.raw_target,
+                origin: GotoOrigin::Range,
+                is_out_of_bounds,
+                selection_range: Some(start..end),
+            });
+        }
+
+        let right_parsed = if right_trimmed.is_empty() {
+            let target = total_size.saturating_sub(1);
+            ParsedGotoOffset {
+                target_offset: target,
+                raw_target: target,
+                origin: GotoOrigin::FromEnd,
+                is_out_of_bounds: false,
+                selection_range: None,
+            }
+        } else {
+            parse_goto_offset_with_map(right_trimmed, current_cursor, total_size, default_radix, address_map)?
+        };
+
+        let min_offset = left_parsed.target_offset.min(right_parsed.target_offset);
+        let max_offset = left_parsed.target_offset.max(right_parsed.target_offset);
+
+        let start = min_offset.min(total_size);
+        let end = if total_size == 0 { 0 } else { (max_offset.saturating_add(1)).min(total_size) };
+        let range = start..end.max(start);
+
+        let is_out_of_bounds = left_parsed.is_out_of_bounds || right_parsed.is_out_of_bounds;
+
+        return Ok(ParsedGotoOffset {
+            target_offset: start,
+            raw_target: left_parsed.raw_target.min(right_parsed.raw_target),
+            origin: GotoOrigin::Range,
+            is_out_of_bounds,
+            selection_range: Some(range),
+        });
+    }
+
     let lower = trimmed.to_ascii_lowercase();
 
     // Named positions
@@ -169,6 +285,7 @@ pub fn parse_goto_offset_with_map(
             raw_target: 0,
             origin: GotoOrigin::Absolute,
             is_out_of_bounds: false,
+            selection_range: None,
         });
     }
     if matches!(lower.as_str(), "end" | "eof" | "last") {
@@ -178,6 +295,7 @@ pub fn parse_goto_offset_with_map(
             raw_target: target,
             origin: GotoOrigin::FromEnd,
             is_out_of_bounds: false,
+            selection_range: None,
         });
     }
 
@@ -198,6 +316,7 @@ pub fn parse_goto_offset_with_map(
             raw_target: raw,
             origin: GotoOrigin::Percentage,
             is_out_of_bounds,
+            selection_range: None,
         });
     }
 
@@ -224,6 +343,7 @@ pub fn parse_goto_offset_with_map(
             raw_target: raw,
             origin: GotoOrigin::Line,
             is_out_of_bounds,
+            selection_range: None,
         });
     }
 
@@ -243,6 +363,7 @@ pub fn parse_goto_offset_with_map(
             raw_target: raw,
             origin: GotoOrigin::FromEnd,
             is_out_of_bounds: false,
+            selection_range: None,
         });
     }
 
@@ -257,6 +378,7 @@ pub fn parse_goto_offset_with_map(
             raw_target: raw,
             origin: GotoOrigin::RelativeForward,
             is_out_of_bounds,
+            selection_range: None,
         });
     }
 
@@ -270,6 +392,7 @@ pub fn parse_goto_offset_with_map(
             raw_target: raw,
             origin: GotoOrigin::RelativeBackward,
             is_out_of_bounds: false,
+            selection_range: None,
         });
     }
 
@@ -287,6 +410,7 @@ pub fn parse_goto_offset_with_map(
                 raw_target: raw,
                 origin: GotoOrigin::Absolute,
                 is_out_of_bounds,
+                selection_range: None,
             });
         }
     }
@@ -309,6 +433,7 @@ pub fn parse_goto_offset_with_map(
             raw_target: val,
             origin: GotoOrigin::Absolute,
             is_out_of_bounds,
+            selection_range: None,
         });
     }
 
@@ -319,6 +444,7 @@ pub fn parse_goto_offset_with_map(
         raw_target: val,
         origin: GotoOrigin::Absolute,
         is_out_of_bounds,
+        selection_range: None,
     })
 }
 
@@ -507,6 +633,154 @@ mod tests {
         ));
         assert!(matches!(
             parse_goto_offset("xyz", cursor, total, GotoRadix::Dec),
+            Err(GotoParseError::InvalidFormat(_))
+        ));
+    }
+
+    #[test]
+    fn test_parse_range_formats() {
+        let total = 0x1000;
+        let cursor = 0;
+
+        // Status bar copy format: "0xC6..0x119" (inclusive of 0x119, so buffer range is 0xC6..0x11A)
+        let res = parse_goto_offset("0xC6..0x119", cursor, total, GotoRadix::Hex).unwrap();
+        assert_eq!(res.target_offset, 0xC6);
+        assert_eq!(res.origin, GotoOrigin::Range);
+        assert_eq!(res.selection_range, Some(0xC6..0x11A));
+        assert!(!res.is_out_of_bounds);
+        assert!(res.is_range());
+
+        // Inclusive range syntax: "0xC6..=0x119"
+        let res = parse_goto_offset("0xC6..=0x119", cursor, total, GotoRadix::Hex).unwrap();
+        assert_eq!(res.selection_range, Some(0xC6..0x11A));
+
+        // Three dots: "0xC6...0x119"
+        let res = parse_goto_offset("0xC6...0x119", cursor, total, GotoRadix::Hex).unwrap();
+        assert_eq!(res.selection_range, Some(0xC6..0x11A));
+
+        // Spaced hyphen: "0xC6 - 0x119"
+        let res = parse_goto_offset("0xC6 - 0x119", cursor, total, GotoRadix::Hex).unwrap();
+        assert_eq!(res.selection_range, Some(0xC6..0x11A));
+
+        // "to" keyword: "0xC6 to 0x119"
+        let res = parse_goto_offset("0xC6 to 0x119", cursor, total, GotoRadix::Hex).unwrap();
+        assert_eq!(res.selection_range, Some(0xC6..0x11A));
+
+        // Whitespace handling
+        let res = parse_goto_offset("  0xC6  ..  0x119  ", cursor, total, GotoRadix::Hex).unwrap();
+        assert_eq!(res.selection_range, Some(0xC6..0x11A));
+    }
+
+    #[test]
+    fn test_parse_range_relative_lengths() {
+        let total = 0x1000;
+        let cursor = 0x500; // different from 0x10 to ensure relative length is based on start offset
+
+        // 0x10..+2 selects exactly 2 bytes (0x10..0x12)
+        let res = parse_goto_offset("0x10..+2", cursor, total, GotoRadix::Dec).unwrap();
+        assert_eq!(res.target_offset, 0x10);
+        assert_eq!(res.selection_range, Some(0x10..0x12));
+        assert_eq!(res.selection_range.unwrap().len(), 2);
+
+        // 0x10..+10 in default Dec mode selects 10 bytes (0x10..0x1A)
+        let res = parse_goto_offset("0x10..+10", cursor, total, GotoRadix::Dec).unwrap();
+        assert_eq!(res.target_offset, 0x10);
+        assert_eq!(res.selection_range, Some(0x10..0x1A));
+        assert_eq!(res.selection_range.unwrap().len(), 10);
+
+        // 0x10..+0x10 explicitly in Hex selects 16 bytes (0x10..0x20)
+        let res = parse_goto_offset("0x10..+0x10", cursor, total, GotoRadix::Dec).unwrap();
+        assert_eq!(res.target_offset, 0x10);
+        assert_eq!(res.selection_range, Some(0x10..0x20));
+        assert_eq!(res.selection_range.unwrap().len(), 16);
+
+        // 0x20..-4 selects 4 bytes backwards (0x1C..0x20)
+        let res = parse_goto_offset("0x20..-4", cursor, total, GotoRadix::Dec).unwrap();
+        assert_eq!(res.target_offset, 0x1C);
+        assert_eq!(res.selection_range, Some(0x1C..0x20));
+        assert_eq!(res.selection_range.unwrap().len(), 4);
+    }
+
+    #[test]
+    fn test_parse_range_reversed_and_single_byte() {
+        let total = 0x1000;
+        let cursor = 0;
+
+        // Reversed range is normalized
+        let res = parse_goto_offset("0x119..0xC6", cursor, total, GotoRadix::Hex).unwrap();
+        assert_eq!(res.target_offset, 0xC6);
+        assert_eq!(res.selection_range, Some(0xC6..0x11A));
+
+        // Single byte range: 0x5..0x5 selects exactly 1 byte (5..6)
+        let res = parse_goto_offset("0x5..0x5", cursor, total, GotoRadix::Hex).unwrap();
+        assert_eq!(res.target_offset, 0x5);
+        assert_eq!(res.selection_range, Some(0x5..0x6));
+        assert_eq!(res.selection_range.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_parse_range_open_ended_and_named() {
+        let total = 0x200;
+        let cursor = 0;
+
+        // Open-ended left: "..0x50" -> 0..0x51
+        let res = parse_goto_offset("..0x50", cursor, total, GotoRadix::Hex).unwrap();
+        assert_eq!(res.target_offset, 0);
+        assert_eq!(res.selection_range, Some(0..0x51));
+
+        // Open-ended right: "0x100.." -> 0x100..0x200
+        let res = parse_goto_offset("0x100..", cursor, total, GotoRadix::Hex).unwrap();
+        assert_eq!(res.target_offset, 0x100);
+        assert_eq!(res.selection_range, Some(0x100..0x200));
+
+        // Entire document: ".."
+        let res = parse_goto_offset("..", cursor, total, GotoRadix::Hex).unwrap();
+        assert_eq!(res.target_offset, 0);
+        assert_eq!(res.selection_range, Some(0..0x200));
+
+        // Named positions: "begin..0x50", "0x100..end"
+        let res = parse_goto_offset("begin..0x50", cursor, total, GotoRadix::Hex).unwrap();
+        assert_eq!(res.selection_range, Some(0..0x51));
+
+        let res = parse_goto_offset("0x100..end", cursor, total, GotoRadix::Hex).unwrap();
+        assert_eq!(res.selection_range, Some(0x100..0x200));
+    }
+
+    #[test]
+    fn test_parse_range_out_of_bounds() {
+        let total = 0x100;
+        let cursor = 0;
+
+        let res = parse_goto_offset("0x50..0x200", cursor, total, GotoRadix::Hex).unwrap();
+        assert_eq!(res.target_offset, 0x50);
+        assert_eq!(res.selection_range, Some(0x50..0x100));
+        assert!(res.is_out_of_bounds);
+    }
+
+    #[test]
+    fn test_parse_range_with_address_map() {
+        let map = crate::core::address_map::AddressMap::single_segment(0x8000_0000, 0x1000);
+        let res = parse_goto_offset_with_map("0x8000_00C6..0x8000_0119", 0, 0x1000, GotoRadix::Hex, &map).unwrap();
+        assert_eq!(res.target_offset, 0xC6);
+        assert_eq!(res.selection_range, Some(0xC6..0x11A));
+        assert!(!res.is_out_of_bounds);
+    }
+
+    #[test]
+    fn test_parse_range_invalid() {
+        let total = 1000;
+        let cursor = 0;
+
+        assert!(matches!(
+            parse_goto_offset("0x10..0x20..0x30", cursor, total, GotoRadix::Hex),
+            Err(GotoParseError::InvalidFormat(_))
+        ));
+        assert!(matches!(
+            parse_goto_offset("0xZZ..0x100", cursor, total, GotoRadix::Hex),
+            Err(GotoParseError::InvalidFormat(_))
+        ));
+        assert!(matches!(
+            parse_goto_offset("0x100..0xZZ", cursor, total, GotoRadix::Hex),
             Err(GotoParseError::InvalidFormat(_))
         ));
     }

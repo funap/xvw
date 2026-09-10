@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::core::address_map::AddressMap;
 use crate::core::goto::{GotoParseError, GotoRadix, ParsedGotoOffset, parse_goto_offset_with_map};
 use crate::ui::icon::IconName;
@@ -20,12 +22,12 @@ pub struct GotoDismiss;
 
 pub enum GotoBarEvent {
     Jump { offset: usize, extend_selection: bool },
+    SelectRange { range: Range<usize> },
     Dismiss,
 }
 
 pub struct GotoOffsetBar {
     input: Entity<InputState>,
-    radix: GotoRadix,
     current_cursor: usize,
     total_size: usize,
     address_map: AddressMap,
@@ -36,7 +38,7 @@ impl EventEmitter<GotoBarEvent> for GotoOffsetBar {}
 
 impl GotoOffsetBar {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Address (e.g. 0x100, 256, +0x20, 50%)..."));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Address or Range (e.g. 0x100, 0x100..0x1ff, +10, 50%)..."));
 
         // Subscribe to input changes
         cx.subscribe(&input, |this, input, event: &input::InputEvent, cx| {
@@ -49,7 +51,6 @@ impl GotoOffsetBar {
 
         Self {
             input,
-            radix: GotoRadix::Hex,
             current_cursor: 0,
             total_size: 0,
             address_map: AddressMap::default(),
@@ -74,7 +75,7 @@ impl GotoOffsetBar {
                 trimmed,
                 self.current_cursor,
                 self.total_size,
-                self.radix,
+                GotoRadix::Dec,
                 &self.address_map,
             ));
         }
@@ -87,19 +88,17 @@ impl GotoOffsetBar {
         });
     }
 
-    pub fn set_radix(&mut self, radix: GotoRadix, cx: &mut Context<Self>) {
-        self.radix = radix;
-        let query = self.input.read(cx).value().to_string();
-        self.update_parsed_result(&query, cx);
-    }
-
     pub fn execute_jump(&mut self, extend_selection: bool, cx: &mut Context<Self>) {
         let query = self.input.read(cx).value().to_string();
-        if let Ok(parsed) = parse_goto_offset_with_map(&query, self.current_cursor, self.total_size, self.radix, &self.address_map) {
-            cx.emit(GotoBarEvent::Jump {
-                offset: parsed.target_offset,
-                extend_selection,
-            });
+        if let Ok(parsed) = parse_goto_offset_with_map(&query, self.current_cursor, self.total_size, GotoRadix::Dec, &self.address_map) {
+            if let Some(range) = parsed.selection_range {
+                cx.emit(GotoBarEvent::SelectRange { range });
+            } else {
+                cx.emit(GotoBarEvent::Jump {
+                    offset: parsed.target_offset,
+                    extend_selection,
+                });
+            }
         }
     }
 }
@@ -115,8 +114,20 @@ impl Render for GotoOffsetBar {
                 div().text_sm().text_color(theme.muted_foreground).child(text)
             }
             Some(Ok(parsed)) => {
-                let target_addr = self.address_map.offset_to_address(parsed.target_offset);
-                let text = format!("Target: 0x{:X} ({} dec)", target_addr, target_addr);
+                let text = if let Some(range) = &parsed.selection_range {
+                    let len = range.len();
+                    let byte_word = if len == 1 { "byte" } else { "bytes" };
+                    if len == 0 {
+                        format!("Range: 0x{:X}..0x{:X} (0 bytes)", parsed.target_offset, parsed.target_offset)
+                    } else {
+                        let start_addr = self.address_map.offset_to_address(range.start);
+                        let end_addr = self.address_map.offset_to_address(range.end.saturating_sub(1));
+                        format!("Range: 0x{:X}..0x{:X} (0x{:X} | {} {})", start_addr, end_addr, len, len, byte_word)
+                    }
+                } else {
+                    let target_addr = self.address_map.offset_to_address(parsed.target_offset);
+                    format!("Target: 0x{:X} ({} dec)", target_addr, target_addr)
+                };
                 let max_offset = self.total_size.saturating_sub(1);
                 let max_addr = self.address_map.offset_to_address(max_offset);
                 let warning = if parsed.is_out_of_bounds {
@@ -154,30 +165,6 @@ impl Render for GotoOffsetBar {
             .on_action(cx.listener(|_, _: &GotoDismiss, _, cx| {
                 cx.emit(GotoBarEvent::Dismiss);
             }))
-            .child(
-                div()
-                    .flex()
-                    .child(
-                        if self.radix == GotoRadix::Hex {
-                            Button::new("hex_radix").label("Hex").primary()
-                        } else {
-                            Button::new("hex_radix").label("Hex").ghost()
-                        }
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.set_radix(GotoRadix::Hex, cx);
-                        })),
-                    )
-                    .child(
-                        if self.radix == GotoRadix::Dec {
-                            Button::new("dec_radix").label("Dec").primary()
-                        } else {
-                            Button::new("dec_radix").label("Dec").ghost()
-                        }
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.set_radix(GotoRadix::Dec, cx);
-                        })),
-                    ),
-            )
             .child(
                 div()
                     .flex_1()

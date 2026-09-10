@@ -1549,6 +1549,23 @@ fn test_go_to_offset_extend_selection() {
 }
 
 #[test]
+fn test_go_to_range() {
+    let mut editor = create_editor_with_content(&[0u8; 64]);
+    assert_eq!(editor.cursor.offset, 0);
+
+    // Jump to range 10..40
+    editor.go_to_range(10..40);
+    assert_eq!(editor.cursor.offset, 10);
+    assert!(editor.has_selection());
+    assert_eq!(editor.selection_range(), Some(10..40));
+
+    // Jump to range clamped to total size
+    editor.go_to_range(50..100);
+    assert_eq!(editor.cursor.offset, 50);
+    assert_eq!(editor.selection_range(), Some(50..64));
+}
+
+#[test]
 fn test_editor_insert_bytes_updates_address_map() {
     use crate::core::address_map::{AddressMap, MemorySegment};
     use crate::core::buffer::Buffer;
