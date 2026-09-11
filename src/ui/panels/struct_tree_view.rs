@@ -1,10 +1,10 @@
 use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
+use crate::core::format::{format_size_friendly, format_with_commas};
 use crate::core::radix::DisplayRadix;
 use crate::core::structure::{ParseResult, ParsedField, format_parse_result_as_text, format_parse_result_as_yaml};
 use crate::ui::components::data_table::{TableColumn, VirtualTable, VirtualTableState};
 use crate::ui::icon::IconName;
-use crate::ui::style::{format_size_friendly, format_with_commas};
 use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, button::ButtonVariants as _, h_flex, v_flex,
@@ -1182,7 +1182,7 @@ impl Render for StructTreeView {
         let has_structure = self.parse_result.as_ref().is_some_and(|result| !result.fields.is_empty()) || !self.flattened_fields.is_empty();
         let export_is_busy = self.export_is_busy();
         let definition_badge = self.parse_result.as_ref().map(|result| {
-            crate::ui::style::panel_badge(result.definition_id.clone(), theme)
+            crate::ui::panels::panel_badge(result.definition_id.clone(), theme)
                 .max_w(px(110.0))
                 .truncate()
                 .into_any_element()
@@ -1221,7 +1221,7 @@ impl Render for StructTreeView {
             None
         };
 
-        let header = crate::ui::style::panel_header("STRUCTURE", is_focused, theme, definition_badge, header_actions);
+        let header = crate::ui::panels::panel_header("STRUCTURE", is_focused, theme, definition_badge, header_actions);
 
         let structure_toolbar = if has_structure {
             Some(
@@ -1273,7 +1273,7 @@ impl Render for StructTreeView {
             StructureExportStatus::Error(message) => Some((IconName::TriangleAlert, message.clone(), theme.red)),
         };
 
-        crate::ui::style::panel_container(is_focused, theme)
+        crate::ui::panels::panel_container(is_focused, theme)
             .id("struct-tree-view")
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
@@ -1376,7 +1376,7 @@ impl Render for StructTreeView {
                 )
             })
             .child(div().flex_1().min_h_0().w_full().overflow_hidden().child(if show_parsing_placeholder {
-                crate::ui::style::panel_empty_state(
+                crate::ui::panels::panel_empty_state(
                     IconName::LoaderCircle,
                     "Parsing Structure...",
                     Some("Analyzing binary data with Kaitai Struct..."),
@@ -1464,7 +1464,7 @@ impl Render for StructTreeView {
                 };
 
                 if !has_active_editor {
-                    crate::ui::style::panel_empty_state(
+                    crate::ui::panels::panel_empty_state(
                         IconName::File,
                         "No File Open",
                         Some("Open a binary file before loading a structure definition"),
@@ -1487,7 +1487,7 @@ impl Render for StructTreeView {
                         load_actions = load_actions.child(recent_section);
                     }
 
-                    crate::ui::style::panel_empty_state(
+                    crate::ui::panels::panel_empty_state(
                         IconName::Braces,
                         "No Structure Loaded",
                         Some("Open a Kaitai Struct (.ksy) YAML file to inspect binary fields"),

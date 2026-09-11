@@ -13,7 +13,7 @@ use crate::app_state::AppState;
 use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
-use crate::ui::components::hex_view::{HexView, HexViewEvent, HorizontalScrollTarget, ScrollColumn};
+use crate::ui::views::hex_view::{HexView, HexViewEvent, HorizontalScrollTarget, ScrollColumn};
 
 const CONTEXT: &str = "DiffPanel";
 

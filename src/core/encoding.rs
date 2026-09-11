@@ -910,7 +910,7 @@ impl Encoding {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::components::data_inspector::format_hex_values;
+    use crate::ui::panels::data_inspector::format_hex_values;
 
     #[test]
     fn test_format_hex_values() {

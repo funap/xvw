@@ -290,7 +290,7 @@ impl Render for ChecksumPanel {
         };
 
         // Header
-        let header = crate::ui::style::panel_header("CHECKSUM & SUM", is_focused, theme, None, header_actions);
+        let header = crate::ui::panels::panel_header("CHECKSUM & SUM", is_focused, theme, None, header_actions);
 
         // Context info
         let mut info_text = "No Active File".to_string();
@@ -439,13 +439,13 @@ impl Render for ChecksumPanel {
                 ("Ready to Compute", "Click Calculate to compute checksums")
             };
 
-            crate::ui::style::panel_empty_state(IconName::Hash, title, Some(msg), None, theme).into_any_element()
+            crate::ui::panels::panel_empty_state(IconName::Hash, title, Some(msg), None, theme).into_any_element()
         };
 
         let view = cx.entity().clone();
         let context_view = view.clone();
         let context_focus_handle = self.focus_handle.clone();
-        let container = crate::ui::style::panel_container(is_focused, theme);
+        let container = crate::ui::panels::panel_container(is_focused, theme);
 
         container
             .id("checksum-panel")

@@ -1,8 +1,8 @@
 use crate::core::appearance::Appearance;
 use crate::core::bookmark::{BookmarkColor, BookmarkItem};
 use crate::core::editor::Editor;
+use crate::ui::color::BookmarkColorExt;
 use crate::ui::icon::IconName;
-use crate::ui::style::BookmarkColorExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{self, Input, InputState};
 use gpui_kit::component::{ActiveTheme as _, Disableable, Sizable, Size, StyledExt, h_flex, v_flex};
@@ -491,7 +491,7 @@ impl Render for BookmarkPanel {
         let count = bookmarks.len();
 
         // Header toolbar
-        let badge = Some(crate::ui::style::panel_badge(count.to_string(), &theme).into_any_element());
+        let badge = Some(crate::ui::panels::panel_badge(count.to_string(), &theme).into_any_element());
 
         let actions = h_flex()
             .items_center()
@@ -541,7 +541,7 @@ impl Render for BookmarkPanel {
                     })),
             );
 
-        let header = crate::ui::style::panel_header("BOOKMARKS", is_focused, &theme, badge, Some(actions.into_any_element()));
+        let header = crate::ui::panels::panel_header("BOOKMARKS", is_focused, &theme, badge, Some(actions.into_any_element()));
 
         let filter_toolbar = if !has_editor || bookmarks.is_empty() {
             None
@@ -669,7 +669,7 @@ impl Render for BookmarkPanel {
 
         // Content body
         let body = if !has_editor {
-            crate::ui::style::panel_empty_state(
+            crate::ui::panels::panel_empty_state(
                 IconName::Bookmark,
                 "No Active File",
                 Some("Open a binary file to view and manage bookmarks"),
@@ -678,7 +678,7 @@ impl Render for BookmarkPanel {
             )
             .into_any_element()
         } else if bookmarks.is_empty() {
-            crate::ui::style::panel_empty_state(
+            crate::ui::panels::panel_empty_state(
                 IconName::Bookmark,
                 "No Bookmarks",
                 Some("Select bytes in hex view and choose a color, or click the add icon above"),
@@ -700,7 +700,7 @@ impl Render for BookmarkPanel {
                 .into_any_element()
         };
 
-        let mut container = crate::ui::style::panel_container(is_focused, &theme)
+        let mut container = crate::ui::panels::panel_container(is_focused, &theme)
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::move_up))

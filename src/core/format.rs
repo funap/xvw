@@ -1,11 +1,13 @@
 pub mod base64;
 pub mod copy;
+pub mod display;
 pub mod intel_hex;
 pub mod raw_binary;
 pub mod srec;
 
 pub use base64::*;
 pub use copy::*;
+pub use display::*;
 pub use intel_hex::*;
 pub use raw_binary::*;
 pub use srec::*;

@@ -3,17 +3,14 @@ use gpui_kit::*;
 
 use crate::actions::*;
 
-use crate::ui::components::activity_bar::{Activity, ActivityBar, ActivityBarEvent};
-use crate::ui::components::file_tree_view::{FileTreeView, FileTreeViewEvent};
-use crate::ui::components::title_bar::AppTitleBar;
 use crate::ui::pane::{PaneTree, PaneTreeEvent, TabContent};
 use crate::ui::panels::editor_panel::EditorPanel;
+use crate::ui::panels::file_tree_view::{FileTreeView, FileTreeViewEvent};
 use crate::ui::panels::left_panel::{LeftPanel, LeftPanelTab};
 
 use crate::app_state::{AppState, InsertModeState};
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
-use crate::ui::components::status_bar::StatusBar;
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
 use gpui_kit::component::{Root, WindowExt, v_flex};
 use std::cell::Cell;
@@ -21,9 +18,16 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 mod action_router;
+pub mod activity_bar;
 mod dialog_flow;
+pub mod status_bar;
 #[cfg(test)]
 mod tests;
+pub mod title_bar;
+
+pub use activity_bar::{Activity, ActivityBar, ActivityBarEvent};
+pub use status_bar::{StatusBar, StatusBarEvent};
+pub use title_bar::{AppTitleBar, AppTitleBarEvent};
 
 pub struct Workspace {
     pub pane_tree: Entity<PaneTree>,
@@ -34,8 +38,8 @@ pub struct Workspace {
     pub recent_definition_history: crate::core::structure::DefinitionHistory,
     pub recent_file_history: crate::core::structure::FileHistory,
     pub is_left_panel_visible: bool,
-    pub new_file_modal: Option<Entity<crate::ui::components::new_file_modal::NewFileModal>>,
-    pub fill_selection_modal: Option<Entity<crate::ui::components::fill_selection_modal::FillSelectionModal>>,
+    pub new_file_modal: Option<Entity<crate::ui::dialogs::new_file_modal::NewFileModal>>,
+    pub fill_selection_modal: Option<Entity<crate::ui::dialogs::fill_selection_modal::FillSelectionModal>>,
     pub untitled_count: usize,
     pub(crate) force_close: bool,
     focus_handle: FocusHandle,
@@ -211,10 +215,10 @@ impl Workspace {
         let title_bar = cx.new(|cx| AppTitleBar::new(workspace_weak, window, cx));
 
         cx.subscribe_in(&title_bar, window, |this, _, event, window, cx| match event {
-            crate::ui::components::title_bar::AppTitleBarEvent::OpenSettings => {
+            AppTitleBarEvent::OpenSettings => {
                 this.open_settings_panel(window, cx);
             }
-            crate::ui::components::title_bar::AppTitleBarEvent::OpenAbout => {
+            AppTitleBarEvent::OpenAbout => {
                 this.open_about_dialog(window, cx);
             }
         })
@@ -241,7 +245,7 @@ impl Workspace {
 
         let status_bar = cx.new(StatusBar::new);
         cx.subscribe_in(&status_bar, window, |this, _, event, window, cx| match event {
-            crate::ui::components::status_bar::StatusBarEvent::ToggleLeftPanel => {
+            StatusBarEvent::ToggleLeftPanel => {
                 this.set_left_panel_visible(!this.is_left_panel_visible, window, cx);
             }
         })
@@ -276,14 +280,14 @@ impl Workspace {
         cx.subscribe_in(
             &bookmark_panel,
             window,
-            |this, _, event: &crate::ui::components::bookmark_panel::BookmarkPanelEvent, _window, cx| match event {
-                crate::ui::components::bookmark_panel::BookmarkPanelEvent::Export => {
+            |this, _, event: &crate::ui::panels::bookmark_panel::BookmarkPanelEvent, _window, cx| match event {
+                crate::ui::panels::bookmark_panel::BookmarkPanelEvent::Export => {
                     this.on_action_export_bookmarks(&crate::actions::ExportBookmarks, _window, cx);
                 }
-                crate::ui::components::bookmark_panel::BookmarkPanelEvent::Import => {
+                crate::ui::panels::bookmark_panel::BookmarkPanelEvent::Import => {
                     this.on_action_import_bookmarks(&crate::actions::ImportBookmarks, _window, cx);
                 }
-                crate::ui::components::bookmark_panel::BookmarkPanelEvent::NavigateTo { offset, size } => {
+                crate::ui::panels::bookmark_panel::BookmarkPanelEvent::NavigateTo { offset, size } => {
                     if let Some(editor_panel) = this.active_editor_panel(cx) {
                         editor_panel.update(cx, |panel, cx| {
                             let len = (*size).max(1);
@@ -298,8 +302,8 @@ impl Workspace {
         cx.subscribe_in(
             &struct_tree,
             window,
-            |this, _, event: &crate::ui::components::struct_tree_view::StructTreeViewEvent, _window, cx| match event {
-                crate::ui::components::struct_tree_view::StructTreeViewEvent::NavigateTo { offset, size } => {
+            |this, _, event: &crate::ui::panels::struct_tree_view::StructTreeViewEvent, _window, cx| match event {
+                crate::ui::panels::struct_tree_view::StructTreeViewEvent::NavigateTo { offset, size } => {
                     if let Some(editor_panel) = this.active_editor_panel(cx) {
                         editor_panel.update(cx, |panel, cx| {
                             let len = (*size).max(1);
@@ -314,8 +318,8 @@ impl Workspace {
         cx.subscribe_in(
             &left_panel,
             window,
-            |this, _, event: &crate::ui::components::search_panel::SearchPanelEvent, window, cx| match event {
-                crate::ui::components::search_panel::SearchPanelEvent::NavigateTo { offset, len } => {
+            |this, _, event: &crate::ui::panels::search_panel::SearchPanelEvent, window, cx| match event {
+                crate::ui::panels::search_panel::SearchPanelEvent::NavigateTo { offset, len } => {
                     if let Some(editor_panel) = this.active_editor_panel(cx) {
                         editor_panel.update(cx, |panel, cx| {
                             let match_len = (*len).max(1);
@@ -323,7 +327,7 @@ impl Workspace {
                         });
                     }
                 }
-                crate::ui::components::search_panel::SearchPanelEvent::FocusEditor => {
+                crate::ui::panels::search_panel::SearchPanelEvent::FocusEditor => {
                     if let Some(editor_panel) = this.active_editor_panel(cx) {
                         editor_panel.update(cx, |panel, cx| {
                             panel.hex_view().read(cx).focus_handle(cx).focus(window, cx);
@@ -337,8 +341,8 @@ impl Workspace {
         cx.subscribe_in(
             &left_panel,
             window,
-            |this, _, event: &crate::ui::components::strings_panel::StringsPanelEvent, window, cx| match event {
-                crate::ui::components::strings_panel::StringsPanelEvent::NavigateTo { offset, len } => {
+            |this, _, event: &crate::ui::panels::strings_panel::StringsPanelEvent, window, cx| match event {
+                crate::ui::panels::strings_panel::StringsPanelEvent::NavigateTo { offset, len } => {
                     if let Some(editor_panel) = this.active_editor_panel(cx) {
                         editor_panel.update(cx, |panel, cx| {
                             let match_len = (*len).max(1);
@@ -346,7 +350,7 @@ impl Workspace {
                         });
                     }
                 }
-                crate::ui::components::strings_panel::StringsPanelEvent::FocusEditor => {
+                crate::ui::panels::strings_panel::StringsPanelEvent::FocusEditor => {
                     if let Some(editor_panel) = this.active_editor_panel(cx) {
                         editor_panel.update(cx, |panel, cx| {
                             panel.hex_view().read(cx).focus_handle(cx).focus(window, cx);
@@ -574,7 +578,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_new_file(&mut self, _: &NewFile, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::new_file_modal::{NewFileModal, NewFileModalEvent};
+        use crate::ui::dialogs::new_file_modal::{NewFileModal, NewFileModalEvent};
 
         let modal = cx.new(|cx| NewFileModal::new(window, cx));
         cx.subscribe_in(&modal, window, |this, _, event: &NewFileModalEvent, window, cx| match event {
@@ -615,7 +619,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_fill_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::components::fill_selection_modal::{FillSelectionModal, FillSelectionModalEvent};
+        use crate::ui::dialogs::fill_selection_modal::{FillSelectionModal, FillSelectionModalEvent};
 
         let Some(active_editor) = self.active_editor(cx) else {
             return;

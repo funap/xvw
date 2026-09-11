@@ -3588,7 +3588,7 @@ impl Render for HexView {
                             Scrollbar::horizontal(&self.scroll.outer_scroll_handle)
                                 .mode(ScrollbarMode::Always)
                                 .scroll_size(size(px(layout.content_width), px(0.0)))
-                                .styles(|_| crate::ui::scrollbar::common_scrollbar_styles(theme)),
+                                .styles(|_| crate::ui::components::scrollbar::common_scrollbar_styles(theme)),
                         ),
                     )
                     .into_any_element()

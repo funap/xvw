@@ -441,7 +441,7 @@ impl DataInspector {
     }
 
     fn render_section_header(&self, label: &'static str, theme: &gpui_kit::component::Theme) -> impl IntoElement {
-        crate::ui::style::panel_section_header(label, theme)
+        crate::ui::panels::panel_section_header(label, theme)
     }
 
     fn format_unix_time(&self, timestamp: i64) -> String {
@@ -702,8 +702,8 @@ impl Render for DataInspector {
 
         let font_family = cx.global::<Appearance>().font_family.clone();
         let header_title = if is_read_only { "DATA INSPECTOR (READ ONLY)" } else { "DATA INSPECTOR" };
-        let header = crate::ui::style::panel_header(header_title, is_focused, theme, None, Some(endian_controls.into_any_element()));
-        let container = crate::ui::style::panel_container(is_focused, theme);
+        let header = crate::ui::panels::panel_header(header_title, is_focused, theme, None, Some(endian_controls.into_any_element()));
+        let container = crate::ui::panels::panel_container(is_focused, theme);
 
         container
             .id("data-inspector")

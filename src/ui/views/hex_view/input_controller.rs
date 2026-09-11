@@ -1,6 +1,6 @@
+use super::types::EditColumn;
 use crate::core::encoding::Encoding;
 use crate::core::radix::DisplayRadix;
-use crate::ui::components::hex_view::types::EditColumn;
 use std::ops::Range;
 
 /// Represents buffered single-nibble hexadecimal input waiting for a second digit.

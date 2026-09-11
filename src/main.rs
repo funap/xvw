@@ -127,18 +127,16 @@ fn init_app_state(cx: &mut App) {
     theme::apply_settings(&settings, None, cx);
     settings::register_quit_handler(cx);
     ui::workspace::init(cx);
-    ui::components::new_file_modal::init(cx);
-    ui::components::fill_selection_modal::init(cx);
+    ui::workspace::title_bar::init(cx);
+    ui::dialogs::new_file_modal::init(cx);
+    ui::dialogs::fill_selection_modal::init(cx);
     ui::components::data_table::init(cx);
-    ui::components::file_tree_view::init(cx);
-    ui::components::goto_offset_bar::init(cx);
-    ui::components::search_bar::init(cx);
-    ui::components::search_panel::init(cx);
-    ui::components::strings_panel::init(cx);
-    ui::components::struct_tree_view::init(cx);
-    ui::components::bookmark_panel::init(cx);
-    ui::components::data_inspector::init(cx);
-    ui::components::title_bar::init(cx);
+    ui::panels::file_tree_view::init(cx);
+    ui::panels::search_panel::init(cx);
+    ui::panels::strings_panel::init(cx);
+    ui::panels::struct_tree_view::init(cx);
+    ui::panels::bookmark_panel::init(cx);
+    ui::panels::data_inspector::init(cx);
     ui::panels::editor_panel::init(cx);
     ui::panels::diff_panel::init(cx);
 }

@@ -631,7 +631,7 @@ impl Render for StringsPanel {
                     cx.notify();
                 })),
         );
-        let header = crate::ui::style::panel_header("STRINGS", is_focused, theme, None, Some(actions.into_any_element()));
+        let header = crate::ui::panels::panel_header("STRINGS", is_focused, theme, None, Some(actions.into_any_element()));
 
         let minimum_length = self.minimum_length(cx).unwrap_or(DEFAULT_MIN_STRING_LENGTH);
         let scan_controls = h_flex()
@@ -945,7 +945,7 @@ impl Render for StringsPanel {
                 .into_any_element()
         };
 
-        crate::ui::style::panel_container(is_focused, theme)
+        crate::ui::panels::panel_container(is_focused, theme)
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::focus_table))

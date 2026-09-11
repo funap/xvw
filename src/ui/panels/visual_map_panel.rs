@@ -1,7 +1,7 @@
 use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
+use crate::ui::components::scrollbar::{CanvasScrollbar, SCROLLBAR_WIDTH, calculate_scrollbar_geometry};
 use crate::ui::icon::IconName;
-use crate::ui::scrollbar::{SCROLLBAR_WIDTH, calculate_scrollbar_geometry, paint_scrollbar_with_row_height};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{Panel, PanelEvent};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, Size, StyledExt, h_flex, v_flex};
@@ -902,9 +902,9 @@ impl VisualMapPanel {
                     h_flex()
                         .gap_2()
                         .items_center()
-                        .child(div().child(crate::ui::style::format_size_friendly(buffer_len)))
+                        .child(div().child(crate::core::format::format_size_friendly(buffer_len)))
                         .child(div().child("|"))
-                        .child(div().child(format!("{} rows", crate::ui::style::format_with_commas(total_rows))))
+                        .child(div().child(format!("{} rows", crate::core::format::format_with_commas(total_rows))))
                         .children(cursor_str.map(|c| {
                             h_flex()
                                 .gap_2()
@@ -1033,12 +1033,12 @@ impl Render for VisualMapPanel {
                 .into_any_element()
         });
 
-        let header = crate::ui::style::panel_header("2D VISUAL MAP", is_focused, &theme, None, header_actions);
+        let header = crate::ui::panels::panel_header("2D VISUAL MAP", is_focused, &theme, None, header_actions);
 
         let editor = match &self.editor {
             Some(ed) => ed,
             None => {
-                let container = crate::ui::style::panel_container(is_focused, &theme);
+                let container = crate::ui::panels::panel_container(is_focused, &theme);
 
                 return container
                     .id("visual-map-panel")
@@ -1050,7 +1050,7 @@ impl Render for VisualMapPanel {
                         }),
                     )
                     .child(header)
-                    .child(div().flex_1().min_h_0().w_full().overflow_hidden().child(crate::ui::style::panel_empty_state(
+                    .child(div().flex_1().min_h_0().w_full().overflow_hidden().child(crate::ui::panels::panel_empty_state(
                         IconName::Map,
                         "No Active File",
                         Some("Open a binary file to visualize byte distribution"),
@@ -1096,7 +1096,7 @@ impl Render for VisualMapPanel {
                 scrollbar_hovered: self.scrollbar_hovered,
             });
 
-        let container = crate::ui::style::panel_container(is_focused, &theme);
+        let container = crate::ui::panels::panel_container(is_focused, &theme);
 
         container
             .id("visual-map-panel")
@@ -1354,16 +1354,10 @@ impl Element for VisualMapElement {
         }
 
         // Vertical scrollbar
-        paint_scrollbar_with_row_height(
-            bounds,
-            self.scroll_offset,
-            total_rows,
-            pixel_size,
-            self.is_dragging_scrollbar,
-            self.scrollbar_hovered,
-            theme,
-            window,
-        );
+        CanvasScrollbar::new(bounds, self.scroll_offset, total_rows, pixel_size)
+            .dragging(self.is_dragging_scrollbar)
+            .hovered(self.scrollbar_hovered)
+            .paint(theme, window);
 
         if self.is_dragging_scrollbar {
             let panel_weak = self.panel.clone();

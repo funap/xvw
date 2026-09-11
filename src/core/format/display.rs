@@ -1,101 +1,4 @@
-use crate::ui::icon::IconName;
-use gpui_kit::component::{Icon, StyledExt as _, h_flex, theme::Theme, v_flex};
-use gpui_kit::{AnyElement, Div, Hsla, InteractiveElement as _, ParentElement, Rgba, SharedString, Styled, div, px};
-
-/// Returns the header text color based on the focus state.
-/// When focused, it returns `theme.foreground`. When not focused, it returns `theme.muted_foreground`.
-pub fn header_text_color(focused: bool, theme: &Theme) -> Hsla {
-    if focused { theme.foreground } else { theme.muted_foreground }
-}
-
-/// Creates a standardized panel container div with sizing and background.
-pub fn panel_container(_is_focused: bool, theme: &Theme) -> Div {
-    v_flex().size_full().min_w_0().min_h_0().overflow_hidden().bg(theme.sidebar)
-}
-
-/// Creates a standardized panel header toolbar with fixed height, border, and uppercase title.
-pub fn panel_header(title: impl Into<SharedString>, is_focused: bool, theme: &Theme, badge: Option<AnyElement>, actions: Option<AnyElement>) -> Div {
-    let mut title_part = h_flex().items_center().gap_2().child(
-        div()
-            .text_xs()
-            .font_semibold()
-            .text_color(header_text_color(is_focused, theme))
-            .child(title.into()),
-    );
-
-    if let Some(b) = badge {
-        title_part = title_part.child(b);
-    }
-
-    let mut header = h_flex()
-        .justify_between()
-        .items_center()
-        .h(px(34.0))
-        .flex_shrink_0()
-        .px_3()
-        .border_b_1()
-        .border_color(theme.border)
-        .bg(theme.sidebar)
-        .child(title_part);
-
-    if let Some(act) = actions {
-        header = header.child(h_flex().items_center().gap_1().child(act));
-    }
-
-    header
-}
-
-/// Creates a standardized count/status badge for panel headers.
-pub fn panel_badge(count_or_text: impl Into<SharedString>, theme: &Theme) -> Div {
-    div()
-        .px_1p5()
-        .py_0p5()
-        .rounded_sm()
-        .bg(theme.muted.opacity(0.6))
-        .text_xs()
-        .text_color(theme.muted_foreground)
-        .child(count_or_text.into())
-}
-
-/// Creates a standardized empty / blank state layout for panels.
-pub fn panel_empty_state(
-    icon: IconName,
-    title: impl Into<SharedString>,
-    description: Option<impl Into<SharedString>>,
-    action: Option<AnyElement>,
-    theme: &Theme,
-) -> Div {
-    let mut container = v_flex()
-        .size_full()
-        .pt_10()
-        .items_center()
-        .px_4()
-        .gap_2p5()
-        .child(Icon::new(icon).size(px(28.0)).text_color(theme.muted_foreground.opacity(0.4)))
-        .child(div().text_xs().font_medium().text_color(theme.foreground).child(title.into()));
-
-    if let Some(desc) = description {
-        container = container.child(div().text_xs().text_center().text_color(theme.muted_foreground).child(desc.into()));
-    }
-
-    if let Some(act) = action {
-        container = container.child(div().mt_2().w_full().child(act));
-    }
-
-    container
-}
-
-/// Creates a standardized section header inside panel bodies.
-pub fn panel_section_header(label: impl Into<SharedString>, theme: &Theme) -> Div {
-    div()
-        .mt_3()
-        .mb_1()
-        .px_3()
-        .text_xs()
-        .font_semibold()
-        .text_color(theme.muted_foreground)
-        .child(label.into())
-}
+use crate::core::encoding::Encoding;
 
 /// Formats a byte size into a friendly human-readable string with exact byte count.
 /// E.g.: "1.25 MB (1,310,720 B)", "45.0 KB (46,080 B)", "512 B"
@@ -128,44 +31,10 @@ pub fn format_with_commas(n: usize) -> String {
     result
 }
 
-/// Returns a styled interactive status bar pill container.
-#[allow(dead_code)]
-pub fn status_pill(theme: &Theme) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap_1()
-        .px_1p5()
-        .py_0p5()
-        .rounded_sm()
-        .text_xs()
-        .cursor_pointer()
-        .hover(|s| s.bg(theme.muted.opacity(0.4)))
-}
-
-/// Reveals a file in the platform's native file explorer (Explorer on Windows, Finder on macOS, xdg-open on Linux).
-pub fn reveal_in_file_explorer(path: &std::path::Path) {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path.to_string_lossy()))
-            .spawn();
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        let parent = path.parent().unwrap_or(path);
-        let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
-    }
-}
-
 /// Formats text representation for bytes based on text encoding.
-pub fn format_text_repr(slice: &[u8], encoding: crate::core::encoding::Encoding) -> String {
+pub fn format_text_repr(slice: &[u8], encoding: Encoding) -> String {
     match encoding {
-        crate::core::encoding::Encoding::Ascii => {
+        Encoding::Ascii => {
             if slice.len() == 1 {
                 let b = slice[0];
                 if (0x20..=0x7E).contains(&b) {
@@ -198,7 +67,7 @@ pub fn format_text_repr(slice: &[u8], encoding: crate::core::encoding::Encoding)
                 }
             }
         }
-        crate::core::encoding::Encoding::Utf8 => match std::str::from_utf8(slice) {
+        Encoding::Utf8 => match std::str::from_utf8(slice) {
             Ok(s) => {
                 if s.chars().all(|c| !c.is_control() || c == '\n' || c == '\r' || c == '\t') {
                     if slice.len() == 1 { format!("'{}'", s) } else { format!("\"{}\"", s) }
@@ -208,7 +77,7 @@ pub fn format_text_repr(slice: &[u8], encoding: crate::core::encoding::Encoding)
             }
             Err(_) => "invalid UTF-8".to_string(),
         },
-        crate::core::encoding::Encoding::Utf16Le => {
+        Encoding::Utf16Le => {
             if !slice.len().is_multiple_of(2) {
                 "invalid UTF-16 LE".to_string()
             } else {
@@ -225,7 +94,7 @@ pub fn format_text_repr(slice: &[u8], encoding: crate::core::encoding::Encoding)
                 }
             }
         }
-        crate::core::encoding::Encoding::Utf16Be => {
+        Encoding::Utf16Be => {
             if !slice.len().is_multiple_of(2) {
                 "invalid UTF-16 BE".to_string()
             } else {
@@ -339,47 +208,9 @@ pub fn decode_uint_value(slice: &[u8], is_big_endian: bool) -> (u64, String) {
     }
 }
 
-impl From<crate::core::color::RgbaColor> for Hsla {
-    fn from(c: crate::core::color::RgbaColor) -> Self {
-        let rf = c.r as f32 / 255.0;
-        let gf = c.g as f32 / 255.0;
-        let bf = c.b as f32 / 255.0;
-        let af = c.a as f32 / 255.0;
-        Rgba { r: rf, g: gf, b: bf, a: af }.into()
-    }
-}
-
-impl From<Hsla> for crate::core::color::RgbaColor {
-    fn from(hsla: Hsla) -> Self {
-        let rgba = hsla.to_rgb();
-        Self {
-            r: (rgba.r.clamp(0.0, 1.0) * 255.0).round() as u8,
-            g: (rgba.g.clamp(0.0, 1.0) * 255.0).round() as u8,
-            b: (rgba.b.clamp(0.0, 1.0) * 255.0).round() as u8,
-            a: (rgba.a.clamp(0.0, 1.0) * 255.0).round() as u8,
-        }
-    }
-}
-
-pub trait BookmarkColorExt {
-    fn to_hsla(self) -> Hsla;
-    fn to_badge_hsla(self) -> Hsla;
-}
-
-impl BookmarkColorExt for crate::core::bookmark::BookmarkColor {
-    fn to_hsla(self) -> Hsla {
-        self.to_rgba().into()
-    }
-
-    fn to_badge_hsla(self) -> Hsla {
-        self.to_badge_rgba().into()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::encoding::Encoding;
 
     #[test]
     fn test_format_binary_repr_spacing() {
@@ -424,5 +255,21 @@ mod tests {
         let utf16_le = [0x41, 0x00]; // 'A' in UTF-16 LE
         assert_eq!(format_text_repr(&utf16_le, Encoding::Utf16Le), "\"A\"");
         assert_eq!(format_text_repr(&[0x41], Encoding::Utf16Le), "invalid UTF-16 LE");
+    }
+
+    #[test]
+    fn test_format_size_friendly() {
+        assert_eq!(format_size_friendly(512), "512 B");
+        assert_eq!(format_size_friendly(1024), "1.0 KB (1,024 B)");
+        assert_eq!(format_size_friendly(46080), "45.0 KB (46,080 B)");
+        assert_eq!(format_size_friendly(1310720), "1.25 MB (1,310,720 B)");
+    }
+
+    #[test]
+    fn test_format_with_commas() {
+        assert_eq!(format_with_commas(0), "0");
+        assert_eq!(format_with_commas(999), "999");
+        assert_eq!(format_with_commas(1000), "1,000");
+        assert_eq!(format_with_commas(1234567), "1,234,567");
     }
 }

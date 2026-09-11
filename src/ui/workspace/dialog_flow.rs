@@ -1017,7 +1017,7 @@ impl Workspace {
     }
 
     pub(crate) fn open_about_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        crate::ui::components::about_dialog::open_about_dialog(window, cx);
+        crate::ui::dialogs::about_dialog::open_about_dialog(window, cx);
     }
 
     pub(crate) fn confirm_close_tabs<F>(&mut self, tabs: &[crate::ui::pane::TabItem], window: &mut Window, cx: &mut Context<Self>, on_proceed: F)

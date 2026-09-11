@@ -554,9 +554,9 @@ impl Render for FileTreeView {
             )
         };
 
-        let header = crate::ui::style::panel_header("FILES", is_focused, theme, None, header_actions);
+        let header = crate::ui::panels::panel_header("FILES", is_focused, theme, None, header_actions);
 
-        let container = crate::ui::style::panel_container(is_focused, theme);
+        let container = crate::ui::panels::panel_container(is_focused, theme);
 
         container
             .id("file-tree-view")
@@ -677,7 +677,7 @@ impl Render for FileTreeView {
                     );
                 }
 
-                crate::ui::style::panel_empty_state(
+                crate::ui::panels::panel_empty_state(
                     IconName::FolderOpen,
                     "No Folder Opened",
                     Some("Open a directory to explore files"),

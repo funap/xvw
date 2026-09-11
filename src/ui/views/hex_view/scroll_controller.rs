@@ -1,4 +1,4 @@
-use crate::ui::components::hex_view::types::{HexViewLayout, HorizontalScrollTarget, ROW_HEIGHT, ScrollAxisLock, ScrollColumn};
+use super::types::{HexViewLayout, HorizontalScrollTarget, ROW_HEIGHT, ScrollAxisLock, ScrollColumn};
 use gpui_kit::{ScrollHandle, point, px};
 use std::time::Instant;
 

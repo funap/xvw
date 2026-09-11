@@ -1,13 +1,13 @@
 use gpui_kit::*;
 
 use crate::core::editor::Editor;
-use crate::ui::components::bookmark_panel::BookmarkPanel;
-use crate::ui::components::checksum_panel::ChecksumPanel;
-use crate::ui::components::data_inspector::DataInspector;
-use crate::ui::components::file_tree_view::{FileTreeView, FileTreeViewEvent};
-use crate::ui::components::search_panel::{SearchPanel, SearchPanelEvent};
-use crate::ui::components::strings_panel::{StringsPanel, StringsPanelEvent};
-use crate::ui::components::struct_tree_view::StructTreeView;
+use crate::ui::panels::bookmark_panel::BookmarkPanel;
+use crate::ui::panels::checksum_panel::ChecksumPanel;
+use crate::ui::panels::data_inspector::DataInspector;
+use crate::ui::panels::file_tree_view::{FileTreeView, FileTreeViewEvent};
+use crate::ui::panels::search_panel::{SearchPanel, SearchPanelEvent};
+use crate::ui::panels::strings_panel::{StringsPanel, StringsPanelEvent};
+use crate::ui::panels::struct_tree_view::StructTreeView;
 use crate::ui::panels::visual_map_panel::VisualMapPanel;
 use std::path::PathBuf;
 

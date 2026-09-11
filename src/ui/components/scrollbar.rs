@@ -113,64 +113,69 @@ pub fn calculate_scrollbar_geometry(viewport_height: f32, scroll_offset: usize, 
     })
 }
 
-/// Paints a vertical scrollbar with a custom row height on a GPUI canvas.
-#[allow(clippy::too_many_arguments)]
-pub fn paint_scrollbar_with_row_height(
-    list_bounds: Bounds<Pixels>,
-    scroll_offset: usize,
-    total_rows: usize,
-    row_height: f32,
-    is_dragging: bool,
-    is_hovered: bool,
-    theme: &Theme,
-    window: &mut Window,
-) {
-    let list_h = f32::from(list_bounds.size.height);
-    let Some(geom) = calculate_scrollbar_geometry(list_h, scroll_offset, total_rows, row_height) else {
-        return;
-    };
-
-    let bar_w = SCROLLBAR_WIDTH;
-    let bar_x = list_bounds.right() - bar_w;
-    let bar_bounds = Bounds::new(point(bar_x, list_bounds.top()), size(bar_w, list_bounds.size.height));
-
-    let track_color = scrollbar_track_color(is_hovered, is_dragging, theme);
-    window.paint_quad(fill(bar_bounds, track_color));
-
-    let thumb_inset = SCROLLBAR_THUMB_INSET;
-    let thumb_w = SCROLLBAR_THUMB_WIDTH;
-    let thumb_radius = SCROLLBAR_THUMB_RADIUS;
-
-    let thumb_bounds = Bounds::new(
-        point(bar_x + thumb_inset, list_bounds.top() + px(geom.thumb_top)),
-        size(thumb_w, px(geom.thumb_height)),
-    );
-    let thumb_color = scrollbar_thumb_color(is_hovered, is_dragging, theme);
-    let mut quad = fill(thumb_bounds, thumb_color);
-    quad.corner_radii = Corners::all(thumb_radius);
-    window.paint_quad(quad);
+/// Parameters and builder for painting a vertical scrollbar on a GPUI canvas.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CanvasScrollbar {
+    pub bounds: Bounds<Pixels>,
+    pub scroll_offset: usize,
+    pub total_rows: usize,
+    pub row_height: f32,
+    pub is_dragging: bool,
+    pub is_hovered: bool,
 }
 
-/// Paints a vertical scrollbar using HexView's standard row height on a GPUI canvas.
-pub fn paint_scrollbar(
-    list_bounds: Bounds<Pixels>,
-    scroll_offset: usize,
-    total_rows: usize,
-    is_dragging: bool,
-    is_hovered: bool,
-    theme: &Theme,
-    window: &mut Window,
-) {
-    paint_scrollbar_with_row_height(
-        list_bounds,
-        scroll_offset,
-        total_rows,
-        crate::ui::components::hex_view::ROW_HEIGHT,
-        is_dragging,
-        is_hovered,
-        theme,
-        window,
-    );
+impl CanvasScrollbar {
+    /// Creates a new `CanvasScrollbar` with default dragging and hovered state set to false.
+    pub fn new(bounds: Bounds<Pixels>, scroll_offset: usize, total_rows: usize, row_height: f32) -> Self {
+        Self {
+            bounds,
+            scroll_offset,
+            total_rows,
+            row_height,
+            is_dragging: false,
+            is_hovered: false,
+        }
+    }
+
+    /// Sets whether the scrollbar thumb is currently being dragged.
+    pub fn dragging(mut self, is_dragging: bool) -> Self {
+        self.is_dragging = is_dragging;
+        self
+    }
+
+    /// Sets whether the mouse is currently hovering over the scrollbar.
+    pub fn hovered(mut self, is_hovered: bool) -> Self {
+        self.is_hovered = is_hovered;
+        self
+    }
+
+    /// Paints the vertical scrollbar onto the window canvas.
+    pub fn paint(&self, theme: &Theme, window: &mut Window) {
+        let list_h = f32::from(self.bounds.size.height);
+        let Some(geom) = calculate_scrollbar_geometry(list_h, self.scroll_offset, self.total_rows, self.row_height) else {
+            return;
+        };
+
+        let bar_w = SCROLLBAR_WIDTH;
+        let bar_x = self.bounds.right() - bar_w;
+        let bar_bounds = Bounds::new(point(bar_x, self.bounds.top()), size(bar_w, self.bounds.size.height));
+
+        let track_color = scrollbar_track_color(self.is_hovered, self.is_dragging, theme);
+        window.paint_quad(fill(bar_bounds, track_color));
+
+        let thumb_inset = SCROLLBAR_THUMB_INSET;
+        let thumb_w = SCROLLBAR_THUMB_WIDTH;
+        let thumb_radius = SCROLLBAR_THUMB_RADIUS;
+
+        let thumb_bounds = Bounds::new(
+            point(bar_x + thumb_inset, self.bounds.top() + px(geom.thumb_top)),
+            size(thumb_w, px(geom.thumb_height)),
+        );
+        let thumb_color = scrollbar_thumb_color(self.is_hovered, self.is_dragging, theme);
+        let mut quad = fill(thumb_bounds, thumb_color);
+        quad.corner_radii = Corners::all(thumb_radius);
+        window.paint_quad(quad);
+    }
 }
 
 #[cfg(test)]
@@ -238,5 +243,17 @@ mod tests {
         assert_eq!(SCROLLBAR_THUMB_WIDTH, px(8.0));
         assert_eq!(SCROLLBAR_THUMB_INSET, px(2.0));
         assert_eq!(SCROLLBAR_THUMB_RADIUS, px(4.0));
+    }
+
+    #[test]
+    fn test_canvas_scrollbar_builder() {
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(200.0), px(400.0)));
+        let sb = CanvasScrollbar::new(bounds, 10, 100, 20.0).dragging(true).hovered(true);
+
+        assert_eq!(sb.scroll_offset, 10);
+        assert_eq!(sb.total_rows, 100);
+        assert_eq!(sb.row_height, 20.0);
+        assert!(sb.is_dragging);
+        assert!(sb.is_hovered);
     }
 }

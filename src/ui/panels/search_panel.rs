@@ -520,21 +520,21 @@ impl Render for SearchPanel {
         let count = self.results.len();
 
         let badge = if self.is_searching {
-            Some(crate::ui::style::panel_badge("Scanning...", theme).into_any_element())
+            Some(crate::ui::panels::panel_badge("Scanning...", theme).into_any_element())
         } else if self.is_truncated {
             if let Some(idx) = self.selected_index {
-                Some(crate::ui::style::panel_badge(format!("{}/{}+ matches", idx + 1, MAX_SEARCH_RESULTS), theme).into_any_element())
+                Some(crate::ui::panels::panel_badge(format!("{}/{}+ matches", idx + 1, MAX_SEARCH_RESULTS), theme).into_any_element())
             } else {
-                Some(crate::ui::style::panel_badge(format!("{}+ matches", MAX_SEARCH_RESULTS), theme).into_any_element())
+                Some(crate::ui::panels::panel_badge(format!("{}+ matches", MAX_SEARCH_RESULTS), theme).into_any_element())
             }
         } else if count > 0 {
             if let Some(idx) = self.selected_index {
-                Some(crate::ui::style::panel_badge(format!("{}/{} matches", idx + 1, count), theme).into_any_element())
+                Some(crate::ui::panels::panel_badge(format!("{}/{} matches", idx + 1, count), theme).into_any_element())
             } else {
-                Some(crate::ui::style::panel_badge(format!("{} matches", count), theme).into_any_element())
+                Some(crate::ui::panels::panel_badge(format!("{} matches", count), theme).into_any_element())
             }
         } else if !self.last_query.is_empty() {
-            Some(crate::ui::style::panel_badge("0 matches", theme).into_any_element())
+            Some(crate::ui::panels::panel_badge("0 matches", theme).into_any_element())
         } else {
             None
         };
@@ -562,7 +562,7 @@ impl Render for SearchPanel {
                 })),
         );
 
-        let header = crate::ui::style::panel_header("SEARCH", is_focused, theme, badge, Some(actions.into_any_element()));
+        let header = crate::ui::panels::panel_header("SEARCH", is_focused, theme, badge, Some(actions.into_any_element()));
 
         // Search controls: Mode toggle + Search Input + Scan Button
         let search_controls = v_flex()
@@ -632,7 +632,7 @@ impl Render for SearchPanel {
         };
 
         let body = if !has_editor {
-            crate::ui::style::panel_empty_state(
+            crate::ui::panels::panel_empty_state(
                 IconName::Search,
                 "No Active File",
                 Some("Open a binary file to search its contents"),
@@ -641,7 +641,7 @@ impl Render for SearchPanel {
             )
             .into_any_element()
         } else if self.is_searching {
-            crate::ui::style::panel_empty_state(
+            crate::ui::panels::panel_empty_state(
                 IconName::Loader,
                 "Searching File...",
                 Some("Finding matching occurrences in the background"),
@@ -655,7 +655,7 @@ impl Render for SearchPanel {
             } else {
                 "No occurrences found for query"
             };
-            crate::ui::style::panel_empty_state(IconName::Search, "No Results", Some(message), None, theme).into_any_element()
+            crate::ui::panels::panel_empty_state(IconName::Search, "No Results", Some(message), None, theme).into_any_element()
         } else {
             let header_row = VirtualTable::render_header_row(
                 &self.table_state,
@@ -897,7 +897,7 @@ impl Render for SearchPanel {
                 .into_any_element()
         };
 
-        crate::ui::style::panel_container(is_focused, theme)
+        crate::ui::panels::panel_container(is_focused, theme)
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {

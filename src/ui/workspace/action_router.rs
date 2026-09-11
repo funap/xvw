@@ -4,9 +4,9 @@ use gpui_kit::*;
 use super::Workspace;
 use crate::actions::*;
 use crate::core::encoding::Encoding;
-use crate::ui::components::activity_bar::Activity;
 use crate::ui::pane::{SplitDirection, TabContent};
 use crate::ui::panels::left_panel::LeftPanelTab;
+use crate::ui::workspace::activity_bar::Activity;
 
 impl Workspace {
     pub(crate) fn on_action_select_all(&mut self, action: &SelectAll, window: &mut Window, cx: &mut Context<Self>) {
@@ -665,7 +665,7 @@ impl Workspace {
         if let Some(editor) = self.active_editor(cx) {
             let path = editor.read(cx).document.read().ok().map(|d| d.path().to_path_buf());
             if let Some(path) = path {
-                crate::ui::style::reveal_in_file_explorer(&path);
+                reveal_in_file_explorer(&path);
             }
         }
     }
@@ -786,5 +786,24 @@ impl Workspace {
             let focus_handle = self.left_panel.read(cx).focus_handle(cx);
             focus_handle.focus(window, cx);
         }
+    }
+}
+
+/// Reveals a file in the platform's native file explorer (Explorer on Windows, Finder on macOS, xdg-open on Linux).
+fn reveal_in_file_explorer(path: &std::path::Path) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer")
+            .arg(format!("/select,{}", path.to_string_lossy()))
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let parent = path.parent().unwrap_or(path);
+        let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
     }
 }

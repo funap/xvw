@@ -20,12 +20,16 @@ use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::search::SearchMode;
 use crate::service::document_service::DocumentService;
-use crate::ui::components::goto_offset_bar::{GotoBarEvent, GotoOffsetBar};
-use crate::ui::components::hex_view::{self, HexView};
-use crate::ui::components::search_bar::{SearchBar, SearchBarEvent};
 use crate::ui::icon::IconName;
+use crate::ui::views::hex_view::{self, HexView};
 use std::ops::Range;
 use std::path::PathBuf;
+
+pub mod goto_offset_bar;
+pub mod search_bar;
+
+pub use goto_offset_bar::{GotoBarEvent, GotoOffsetBar};
+pub use search_bar::{SearchBar, SearchBarEvent};
 
 const CONTEXT: &str = "EditorPanel";
 
@@ -44,6 +48,8 @@ impl Drop for EditorDocumentLease {
 pub fn init(cx: &mut App) {
     // Initialize HexView actions and keybindings
     hex_view::init(cx);
+    goto_offset_bar::init(cx);
+    search_bar::init(cx);
 }
 
 pub struct EditorPanel {
@@ -152,8 +158,8 @@ impl EditorPanel {
         .detach();
 
         // Subscribe to HexView scroll events to update highlights when scrolling
-        cx.subscribe(&hex_view, |this, _, event: &crate::ui::components::hex_view::HexViewEvent, cx| {
-            if let crate::ui::components::hex_view::HexViewEvent::Scrolled(_) = event {
+        cx.subscribe(&hex_view, |this, _, event: &crate::ui::views::hex_view::HexViewEvent, cx| {
+            if let crate::ui::views::hex_view::HexViewEvent::Scrolled(_) = event {
                 this.update_highlights(cx);
             }
         })

@@ -387,9 +387,9 @@ fn check_calculate_scroll_top_for_range() {
 
 fn check_hex_editing_state() {
     use super::input_controller::{HexCommit, HexInputResult, PendingHexInput};
-    use crate::ui::components::hex_view::types::EditColumn;
+    use super::types::EditColumn;
 
-    let mut input = crate::ui::components::hex_view::InputController::new();
+    let mut input = super::InputController::new();
     assert!(!input.has_pending());
     assert_eq!(input.pending_hex_digit(), None);
     assert!(input.is_hex());

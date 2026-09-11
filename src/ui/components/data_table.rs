@@ -8,7 +8,7 @@ use gpui_kit::{
 };
 
 pub const CONTEXT: &str = "VirtualTable";
-pub const TABLE_SCROLLBAR_WIDTH: Pixels = crate::ui::scrollbar::SCROLLBAR_WIDTH;
+pub const TABLE_SCROLLBAR_WIDTH: Pixels = super::scrollbar::SCROLLBAR_WIDTH;
 pub const DEFAULT_AUTOFIT_CHAR_WIDTH: f32 = 7.2;
 pub const DEFAULT_AUTOFIT_PADDING: f32 = 16.0;
 
@@ -670,7 +670,7 @@ impl VirtualTable {
                         .axis(ScrollbarAxis::Horizontal)
                         .mode(ScrollbarMode::Always)
                         .scroll_size(size(total_w, px(0.0)))
-                        .styles(|_| crate::ui::scrollbar::common_scrollbar_styles(theme)),
+                        .styles(|_| super::scrollbar::common_scrollbar_styles(theme)),
                 ),
         )
     }
@@ -688,7 +688,7 @@ impl VirtualTable {
                 Scrollbar::vertical(&state.vertical_scroll_handle)
                     .axis(ScrollbarAxis::Vertical)
                     .mode(ScrollbarMode::Always)
-                    .styles(|_| crate::ui::scrollbar::common_scrollbar_styles(theme)),
+                    .styles(|_| super::scrollbar::common_scrollbar_styles(theme)),
             )
     }
 }
