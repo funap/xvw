@@ -21,7 +21,7 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
-pub use crate::core::inspector::InspectorField;
+pub use crate::core::inspector::{InspectorField, format_hex_values};
 
 pub struct DataInspector {
     pub editor: Option<Entity<Editor>>,
@@ -488,37 +488,6 @@ impl DataInspector {
         let day = days_since_epoch + 1;
         format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC", year, month, day, hour, minute, second)
     }
-}
-
-pub fn format_hex_values(bytes: &[u8], is_big_endian: bool) -> (String, String, String, String) {
-    let mut hex8 = "--".to_string();
-    let mut hex16 = "--".to_string();
-    let mut hex32 = "--".to_string();
-    let mut hex64 = "--".to_string();
-
-    if !bytes.is_empty() {
-        hex8 = format!("0x{:02X}", bytes[0]);
-    }
-
-    if bytes.len() >= 2 {
-        let arr: [u8; 2] = bytes[0..2].try_into().expect("2-byte slice");
-        let val = if is_big_endian { u16::from_be_bytes(arr) } else { u16::from_le_bytes(arr) };
-        hex16 = format!("0x{:04X}", val);
-    }
-
-    if bytes.len() >= 4 {
-        let arr: [u8; 4] = bytes[0..4].try_into().expect("4-byte slice");
-        let val = if is_big_endian { u32::from_be_bytes(arr) } else { u32::from_le_bytes(arr) };
-        hex32 = format!("0x{:08X}", val);
-    }
-
-    if bytes.len() >= 8 {
-        let arr: [u8; 8] = bytes[0..8].try_into().expect("8-byte slice");
-        let val = if is_big_endian { u64::from_be_bytes(arr) } else { u64::from_le_bytes(arr) };
-        hex64 = format!("0x{:016X}", val);
-    }
-
-    (hex8, hex16, hex32, hex64)
 }
 
 impl Render for DataInspector {
