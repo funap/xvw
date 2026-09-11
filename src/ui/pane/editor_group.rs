@@ -68,6 +68,11 @@ impl EditorGroup {
         self.tabs.get_mut(self.active_index)
     }
 
+    /// Returns whether this tab is the active tab across the entire workspace (target of AppMenu and shortcuts).
+    pub fn is_workspace_active_tab(&self, index: usize) -> bool {
+        self.is_active_group && index == self.active_index
+    }
+
     pub fn active_content(&self) -> Option<&TabContent> {
         self.active_tab().map(|t| &t.content)
     }
@@ -348,7 +353,7 @@ impl Focusable for EditorGroup {
 }
 
 impl Render for EditorGroup {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let tab_bar_bg = theme.tab_bar;
         let group_id = self.id;
@@ -403,7 +408,7 @@ impl Render for EditorGroup {
                                 let title_for_drag = title.clone();
                                 let close_group = format!("tab-close-hover-{tab_id}");
                                 let tab_focus_handle = tab.focus_handle(cx);
-                                let is_tab_focused = is_active && (tab_focus_handle.is_focused(window) || tab_focus_handle.contains_focused(window, cx));
+                                let is_workspace_active = self.is_workspace_active_tab(idx);
 
                                 div()
                                     .id(ElementId::NamedInteger("tab-item".into(), tab_id as u64))
@@ -427,7 +432,7 @@ impl Render for EditorGroup {
                                             .text_color(theme.muted_foreground)
                                             .hover(|style| style.bg(theme.accent.opacity(0.12)))
                                     })
-                                    .when(is_tab_focused, |s| {
+                                    .when(is_workspace_active, |s| {
                                         s.child(div().absolute().top_0().left_0().right_0().h(px(2.0)).bg(theme.primary))
                                     })
                                     .on_mouse_down(
