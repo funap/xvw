@@ -1401,3 +1401,27 @@ impl IntoElement for VisualMapElement {
         self
     }
 }
+
+impl crate::ui::pane::WorkspaceTab for Entity<VisualMapPanel> {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn title(&self, _cx: &App) -> String {
+        "Visual Map".to_string()
+    }
+
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.read(cx).focus_handle(cx)
+    }
+
+    fn render(&self) -> AnyElement {
+        self.clone().into_any_element()
+    }
+
+    fn create_split(&self, _window: &mut Window, cx: &mut App) -> Option<crate::ui::pane::TabContent> {
+        let ed = self.read(cx).editor.clone();
+        let new_vm = cx.new(|cx| VisualMapPanel::new(ed, cx));
+        Some(crate::ui::pane::TabContent::new(new_vm))
+    }
+}

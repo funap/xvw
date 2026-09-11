@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use super::types::{DropPlacement, SplitDirection, TabContent, TabDrag, TabItem};
 use crate::app_state::AppState;
 use crate::core::editor::Editor;
-use crate::ui::panels::editor_panel::EditorPanel;
 
 #[allow(dead_code)]
 pub enum EditorGroupEvent {
@@ -77,8 +76,8 @@ impl EditorGroup {
         self.active_content().and_then(|c| c.editor(cx))
     }
 
-    pub fn active_editor_panel(&self) -> Option<Entity<EditorPanel>> {
-        self.active_content().and_then(|c| c.editor_panel())
+    pub fn active_tab_as<T: Clone + 'static>(&self) -> Option<T> {
+        self.active_content().and_then(|c| c.downcast::<T>())
     }
 
     fn observe_tab_dirty_state(&mut self, tab: &TabItem, cx: &mut Context<Self>) {

@@ -98,7 +98,7 @@ impl Workspace {
                             .update(|window, cx| {
                                 view.update(cx, |this, cx| {
                                     this.record_recent_file(recent_path.clone(), Some(crate::core::format::FileFormat::Binary), cx);
-                                    this.open_editor_panel(document, window, cx);
+                                    this.open_editor_view(document, window, cx);
                                 });
                             })
                             .ok();
@@ -145,14 +145,14 @@ impl Workspace {
                                 let diff_result = diff_result_task.await;
 
                                 let _ = workspace.update_in(window, |workspace_view, window, cx| {
-                                    use crate::ui::panels::diff_panel::DiffPanel;
+                                    use crate::ui::views::diff_view::DiffView;
                                     let diff_view = cx.new(|cx| {
-                                        let mut view = DiffPanel::new(left_document.clone(), right_document.clone(), window, cx);
+                                        let mut view = DiffView::new(left_document.clone(), right_document.clone(), window, cx);
                                         view.set_diff_result(diff_result.clone(), cx);
                                         view
                                     });
 
-                                    let content = TabContent::from_diff(diff_view);
+                                    let content = TabContent::new(diff_view);
                                     workspace_view.pane_tree.update(cx, |tree, cx| {
                                         tree.open_tab(content, window, cx);
                                     });
@@ -403,7 +403,7 @@ impl Workspace {
                                             let buffer = crate::core::buffer::Buffer::new(data);
                                             let doc = crate::core::document::Document::new_read_only(canonical_path, buffer).with_format(detected_format);
                                             let doc_arc = std::sync::Arc::new(std::sync::RwLock::new(doc));
-                                            this.open_editor_panel(doc_arc, window, cx);
+                                            this.open_editor_view(doc_arc, window, cx);
                                             window.push_notification(gpui_kit::component::notification::Notification::info("Imported Base64 successfully"), cx);
                                         });
                                     })
@@ -440,7 +440,7 @@ impl Workspace {
                                             .with_address_map(import_result.address_map.clone())
                                             .with_format(detected_format);
                                         let doc_arc = std::sync::Arc::new(std::sync::RwLock::new(doc));
-                                        this.open_editor_panel(doc_arc, window, cx);
+                                        this.open_editor_view(doc_arc, window, cx);
                                         let gap_msg = if import_result.address_map.has_gaps() {
                                             format!(" ({} segments with address gaps)", import_result.address_map.segments.len())
                                         } else {

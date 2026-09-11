@@ -10,7 +10,7 @@ use crate::ui::workspace::activity_bar::Activity;
 
 impl Workspace {
     pub(crate) fn on_action_select_all(&mut self, action: &SelectAll, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.select_all(action, window, cx);
             });
@@ -18,7 +18,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_go_to_beginning(&mut self, action: &GoToBeginning, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.go_to_beginning(action, window, cx);
             });
@@ -26,7 +26,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_go_to_end(&mut self, action: &GoToEnd, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.go_to_end(action, window, cx);
             });
@@ -34,7 +34,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_toggle_search(&mut self, action: &ToggleSearch, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.toggle_search(action, window, cx);
             });
@@ -42,7 +42,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_toggle_goto_address(&mut self, action: &ToggleGoToAddress, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.toggle_goto_address(action, window, cx);
             });
@@ -50,7 +50,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_search_next(&mut self, action: &SearchNext, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.search_next(action, window, cx);
             });
@@ -58,7 +58,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_search_prev(&mut self, action: &SearchPrev, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.search_prev(action, window, cx);
             });
@@ -66,7 +66,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_copy(&mut self, action: &Copy, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.copy(action, window, cx);
             });
@@ -74,7 +74,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_copy_as_hexdump(&mut self, action: &CopyAsHexDump, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.copy_as_hexdump(action, window, cx);
             });
@@ -82,7 +82,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_copy_as_cpp_array(&mut self, action: &CopyAsCppArray, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.copy_as_cpp_array(action, window, cx);
             });
@@ -90,7 +90,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_copy_as_hex_stream(&mut self, action: &CopyAsHexStream, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.copy_as_hex_stream(action, window, cx);
             });
@@ -98,7 +98,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_copy_as_hex_spaces(&mut self, action: &CopyAsHexSpaces, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.copy_as_hex_spaces(action, window, cx);
             });
@@ -106,7 +106,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_copy_as_printable_text(&mut self, action: &CopyAsPrintableText, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.copy_as_printable_text(action, window, cx);
             });
@@ -114,7 +114,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_copy_as_base64(&mut self, action: &CopyAsBase64, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.copy_as_base64(action, window, cx);
             });
@@ -122,7 +122,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_copy_as_escaped_string(&mut self, action: &CopyAsEscapedString, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.copy_as_escaped_string(action, window, cx);
             });
@@ -130,7 +130,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_copy_as_binary(&mut self, action: &CopyAsBinary, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.copy_as_binary(action, window, cx);
             });
@@ -138,7 +138,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_copy_as_rust_array(&mut self, action: &CopyAsRustArray, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.copy_as_rust_array(action, window, cx);
             });
@@ -146,7 +146,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_copy_as_json_array(&mut self, action: &CopyAsJsonArray, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.copy_as_json_array(action, window, cx);
             });
@@ -174,7 +174,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_bookmark_red(&mut self, action: &BookmarkRed, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.bookmark_red(action, window, cx);
             });
@@ -182,7 +182,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_bookmark_orange(&mut self, action: &BookmarkOrange, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.bookmark_orange(action, window, cx);
             });
@@ -190,7 +190,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_bookmark_yellow(&mut self, action: &BookmarkYellow, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.bookmark_yellow(action, window, cx);
             });
@@ -198,7 +198,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_bookmark_green(&mut self, action: &BookmarkGreen, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.bookmark_green(action, window, cx);
             });
@@ -206,7 +206,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_bookmark_cyan(&mut self, action: &BookmarkCyan, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.bookmark_cyan(action, window, cx);
             });
@@ -214,7 +214,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_bookmark_blue(&mut self, action: &BookmarkBlue, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.bookmark_blue(action, window, cx);
             });
@@ -222,7 +222,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_bookmark_purple(&mut self, action: &BookmarkPurple, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.bookmark_purple(action, window, cx);
             });
@@ -230,7 +230,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_bookmark_pink(&mut self, action: &BookmarkPink, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.bookmark_pink(action, window, cx);
             });
@@ -238,7 +238,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_clear_bookmark(&mut self, action: &ClearBookmark, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.clear_bookmark(action, window, cx);
             });
@@ -246,7 +246,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_clear_all_bookmarks(&mut self, action: &ClearAllBookmarks, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.clear_all_bookmarks(action, window, cx);
             });
@@ -254,7 +254,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_show_all_bookmarks(&mut self, action: &ShowAllBookmarks, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.show_all_bookmarks(action, window, cx);
             });
@@ -262,7 +262,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_hide_all_bookmarks(&mut self, action: &HideAllBookmarks, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.hide_all_bookmarks(action, window, cx);
             });
@@ -270,7 +270,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_toggle_hide_unbookmarked(&mut self, action: &ToggleHideUnbookmarked, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.toggle_hide_unbookmarked(action, window, cx);
             });
@@ -278,7 +278,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_unfold_bookmark_at_cursor(&mut self, action: &UnfoldBookmarkAtCursor, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.unfold_bookmark_at_cursor(action, window, cx);
             });
@@ -286,7 +286,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_add_custom_break(&mut self, action: &AddCustomBreak, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.add_custom_break(action, window, cx);
             });
@@ -294,7 +294,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_remove_custom_break_backward(&mut self, action: &RemoveCustomBreakBackward, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.remove_custom_break_backward(action, window, cx);
             });
@@ -302,7 +302,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_remove_custom_break_forward(&mut self, action: &RemoveCustomBreakForward, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.remove_custom_break_forward(action, window, cx);
             });
@@ -310,7 +310,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_join_line(&mut self, action: &JoinLine, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.join_line(action, window, cx);
             });
@@ -318,7 +318,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_clear_all_custom_breaks(&mut self, action: &ClearAllCustomBreaks, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.clear_all_custom_breaks(action, window, cx);
             });
@@ -332,7 +332,7 @@ impl Workspace {
                 cx.notify();
             });
         }
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.focus_hex_view(&FocusHexView, window, cx);
             });
@@ -363,7 +363,7 @@ impl Workspace {
                 cx.notify();
             });
         }
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.focus_hex_view(&FocusHexView, window, cx);
             });
@@ -378,7 +378,7 @@ impl Workspace {
                 cx.notify();
             });
         }
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.focus_hex_view(&FocusHexView, window, cx);
             });
@@ -393,7 +393,7 @@ impl Workspace {
                 cx.notify();
             });
         }
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.focus_hex_view(&FocusHexView, window, cx);
             });
@@ -408,7 +408,7 @@ impl Workspace {
                 cx.notify();
             });
         }
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.focus_hex_view(&FocusHexView, window, cx);
             });
@@ -423,7 +423,7 @@ impl Workspace {
                 cx.notify();
             });
         }
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.focus_hex_view(&FocusHexView, window, cx);
             });
@@ -438,7 +438,7 @@ impl Workspace {
                 cx.notify();
             });
         }
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.focus_hex_view(&FocusHexView, window, cx);
             });
@@ -453,7 +453,7 @@ impl Workspace {
                 cx.notify();
             });
         }
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.focus_hex_view(&FocusHexView, window, cx);
             });
@@ -468,7 +468,7 @@ impl Workspace {
                 cx.notify();
             });
         }
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.focus_hex_view(&FocusHexView, window, cx);
             });
@@ -483,7 +483,7 @@ impl Workspace {
                 cx.notify();
             });
         }
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.focus_hex_view(&FocusHexView, window, cx);
             });
@@ -498,7 +498,7 @@ impl Workspace {
                 cx.notify();
             });
         }
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.focus_hex_view(&FocusHexView, window, cx);
             });
@@ -513,7 +513,7 @@ impl Workspace {
                 cx.notify();
             });
         }
-        if let Some(panel) = self.active_editor_panel(cx) {
+        if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.focus_hex_view(&FocusHexView, window, cx);
             });
@@ -687,20 +687,20 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_settings_panel(window, cx);
+        self.open_settings_view(window, cx);
     }
 
     pub(crate) fn on_action_open_about(&mut self, _: &OpenAbout, window: &mut Window, cx: &mut Context<Self>) {
         self.open_about_dialog(window, cx);
     }
 
-    pub(crate) fn open_settings_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::panels::settings_panel::SettingsPanel;
+    pub(crate) fn open_settings_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::ui::views::settings_view::SettingsView;
 
         // Check if settings is already open in any group
         for group in self.pane_tree.read(cx).all_groups() {
             for (idx, tab) in group.read(cx).tabs.iter().enumerate() {
-                if tab.content.is_settings() {
+                if tab.content.downcast::<Entity<SettingsView>>().is_some() {
                     group.update(cx, |g, cx| {
                         g.activate_tab(idx, window, cx);
                     });
@@ -714,8 +714,8 @@ impl Workspace {
             }
         }
 
-        let settings_panel = cx.new(|cx| SettingsPanel::new(window, cx));
-        let content = TabContent::from_settings(settings_panel);
+        let settings_view = cx.new(|cx| SettingsView::new(window, cx));
+        let content = TabContent::new(settings_view);
         self.pane_tree.update(cx, |tree, cx| {
             tree.open_tab(content, window, cx);
         });

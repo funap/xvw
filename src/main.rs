@@ -137,8 +137,8 @@ fn init_app_state(cx: &mut App) {
     ui::panels::struct_tree_view::init(cx);
     ui::panels::bookmark_panel::init(cx);
     ui::panels::data_inspector::init(cx);
-    ui::panels::editor_panel::init(cx);
-    ui::panels::diff_panel::init(cx);
+    ui::views::editor_view::init(cx);
+    ui::views::diff_view::init(cx);
 }
 
 /// Registers the application top menu bar items.

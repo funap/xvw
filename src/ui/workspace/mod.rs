@@ -4,9 +4,9 @@ use gpui_kit::*;
 use crate::actions::*;
 
 use crate::ui::pane::{PaneTree, PaneTreeEvent, TabContent};
-use crate::ui::panels::editor_panel::EditorPanel;
 use crate::ui::panels::file_tree_view::{FileTreeView, FileTreeViewEvent};
 use crate::ui::panels::left_panel::{LeftPanel, LeftPanelTab};
+use crate::ui::views::editor_view::EditorView;
 
 use crate::app_state::{AppState, InsertModeState};
 use crate::core::editor::Editor;
@@ -216,7 +216,7 @@ impl Workspace {
 
         cx.subscribe_in(&title_bar, window, |this, _, event, window, cx| match event {
             AppTitleBarEvent::OpenSettings => {
-                this.open_settings_panel(window, cx);
+                this.open_settings_view(window, cx);
             }
             AppTitleBarEvent::OpenAbout => {
                 this.open_about_dialog(window, cx);
@@ -233,7 +233,7 @@ impl Workspace {
                 this.select_activity(*activity, window, cx);
             }
             ActivityBarEvent::OpenSettings => {
-                this.open_settings_panel(window, cx);
+                this.open_settings_view(window, cx);
             }
         })
         .detach();
@@ -288,10 +288,10 @@ impl Workspace {
                     this.on_action_import_bookmarks(&crate::actions::ImportBookmarks, _window, cx);
                 }
                 crate::ui::panels::bookmark_panel::BookmarkPanelEvent::NavigateTo { offset, size } => {
-                    if let Some(editor_panel) = this.active_editor_panel(cx) {
-                        editor_panel.update(cx, |panel, cx| {
+                    if let Some(editor_view) = this.active_editor_view(cx) {
+                        editor_view.update(cx, |view, cx| {
                             let len = (*size).max(1);
-                            panel.scroll_to_range_if_needed(*offset..offset.saturating_add(len), cx);
+                            view.scroll_to_range_if_needed(*offset..offset.saturating_add(len), cx);
                         });
                     }
                 }
@@ -304,10 +304,10 @@ impl Workspace {
             window,
             |this, _, event: &crate::ui::panels::struct_tree_view::StructTreeViewEvent, _window, cx| match event {
                 crate::ui::panels::struct_tree_view::StructTreeViewEvent::NavigateTo { offset, size } => {
-                    if let Some(editor_panel) = this.active_editor_panel(cx) {
-                        editor_panel.update(cx, |panel, cx| {
+                    if let Some(editor_view) = this.active_editor_view(cx) {
+                        editor_view.update(cx, |view, cx| {
                             let len = (*size).max(1);
-                            panel.scroll_to_range_if_needed(*offset..offset.saturating_add(len), cx);
+                            view.scroll_to_range_if_needed(*offset..offset.saturating_add(len), cx);
                         });
                     }
                 }
@@ -320,17 +320,17 @@ impl Workspace {
             window,
             |this, _, event: &crate::ui::panels::search_panel::SearchPanelEvent, window, cx| match event {
                 crate::ui::panels::search_panel::SearchPanelEvent::NavigateTo { offset, len } => {
-                    if let Some(editor_panel) = this.active_editor_panel(cx) {
-                        editor_panel.update(cx, |panel, cx| {
+                    if let Some(editor_view) = this.active_editor_view(cx) {
+                        editor_view.update(cx, |view, cx| {
                             let match_len = (*len).max(1);
-                            panel.scroll_to_range_if_needed(*offset..offset.saturating_add(match_len), cx);
+                            view.scroll_to_range_if_needed(*offset..offset.saturating_add(match_len), cx);
                         });
                     }
                 }
                 crate::ui::panels::search_panel::SearchPanelEvent::FocusEditor => {
-                    if let Some(editor_panel) = this.active_editor_panel(cx) {
-                        editor_panel.update(cx, |panel, cx| {
-                            panel.hex_view().read(cx).focus_handle(cx).focus(window, cx);
+                    if let Some(editor_view) = this.active_editor_view(cx) {
+                        editor_view.update(cx, |view, cx| {
+                            view.hex_view().read(cx).focus_handle(cx).focus(window, cx);
                         });
                     }
                 }
@@ -343,17 +343,17 @@ impl Workspace {
             window,
             |this, _, event: &crate::ui::panels::strings_panel::StringsPanelEvent, window, cx| match event {
                 crate::ui::panels::strings_panel::StringsPanelEvent::NavigateTo { offset, len } => {
-                    if let Some(editor_panel) = this.active_editor_panel(cx) {
-                        editor_panel.update(cx, |panel, cx| {
+                    if let Some(editor_view) = this.active_editor_view(cx) {
+                        editor_view.update(cx, |view, cx| {
                             let match_len = (*len).max(1);
-                            panel.scroll_to_range_if_needed(*offset..offset.saturating_add(match_len), cx);
+                            view.scroll_to_range_if_needed(*offset..offset.saturating_add(match_len), cx);
                         });
                     }
                 }
                 crate::ui::panels::strings_panel::StringsPanelEvent::FocusEditor => {
-                    if let Some(editor_panel) = this.active_editor_panel(cx) {
-                        editor_panel.update(cx, |panel, cx| {
-                            panel.hex_view().read(cx).focus_handle(cx).focus(window, cx);
+                    if let Some(editor_view) = this.active_editor_view(cx) {
+                        editor_view.update(cx, |view, cx| {
+                            view.hex_view().read(cx).focus_handle(cx).focus(window, cx);
                         });
                     }
                 }
@@ -400,8 +400,8 @@ impl Workspace {
         self.pane_tree.read(cx).active_editor(cx)
     }
 
-    pub fn active_editor_panel(&self, cx: &App) -> Option<Entity<EditorPanel>> {
-        self.pane_tree.read(cx).active_editor_panel(cx)
+    pub fn active_editor_view(&self, cx: &App) -> Option<Entity<EditorView>> {
+        self.pane_tree.read(cx).active_tab_as::<Entity<EditorView>>(cx)
     }
 
     pub(crate) fn publish_recent_history(&mut self, cx: &mut Context<Self>) {
@@ -556,7 +556,7 @@ impl Workspace {
         })
     }
 
-    pub(crate) fn open_editor_panel(&mut self, document: Arc<RwLock<crate::core::document::Document>>, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_editor_view(&mut self, document: Arc<RwLock<crate::core::document::Document>>, window: &mut Window, cx: &mut Context<Self>) {
         let default_encoding = *cx.global::<Encoding>();
         let bytes_per_row = cx.global::<crate::core::layout::BytesPerRow>().0;
         let editor = cx.new(|_| {
@@ -566,8 +566,8 @@ impl Workspace {
             editor
         });
 
-        let editor_panel = cx.new(|cx| EditorPanel::new(editor, window, cx));
-        let content = TabContent::from_editor(editor_panel);
+        let editor_view = cx.new(|cx| EditorView::new(editor, window, cx));
+        let content = TabContent::new(editor_view);
 
         self.pane_tree.update(cx, |tree, cx| {
             tree.open_tab(content, window, cx);
@@ -614,7 +614,7 @@ impl Workspace {
         let buffer = crate::core::buffer::Buffer::new(data);
         let document = Arc::new(RwLock::new(crate::core::document::Document::new(path, buffer)));
 
-        self.open_editor_panel(document, window, cx);
+        self.open_editor_view(document, window, cx);
         cx.notify();
     }
 
@@ -747,7 +747,7 @@ impl Workspace {
                                             let _ = window.update(|window, cx| {
                                                 view.update(cx, |this, cx| {
                                                     this.record_recent_file(recent_path.clone(), Some(crate::core::format::FileFormat::Binary), cx);
-                                                    this.open_editor_panel(document, window, cx);
+                                                    this.open_editor_view(document, window, cx);
                                                 });
                                             });
                                         }

@@ -11,13 +11,14 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Action, Anchor, App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString, Subscription, Window, div,
+    Action, Anchor, AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString, Subscription,
+    Window, div,
 };
 
 #[derive(Clone, PartialEq, Action)]
 pub struct UpdateSettingInput;
 
-pub struct SettingsPanel {
+pub struct SettingsView {
     focus_handle: FocusHandle,
     font_family_input: Entity<InputState>,
     font_size_input: Entity<InputState>,
@@ -25,7 +26,7 @@ pub struct SettingsPanel {
     _subscriptions: Vec<Subscription>,
 }
 
-impl SettingsPanel {
+impl SettingsView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
 
@@ -147,7 +148,7 @@ impl SettingsPanel {
     }
 }
 
-impl Render for SettingsPanel {
+impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let container = div().p_4().flex().flex_col().gap_6();
 
@@ -248,13 +249,13 @@ impl Render for SettingsPanel {
     }
 }
 
-impl EventEmitter<PanelEvent> for SettingsPanel {}
-impl Focusable for SettingsPanel {
+impl EventEmitter<PanelEvent> for SettingsView {}
+impl Focusable for SettingsView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
-impl Panel for SettingsPanel {
+impl Panel for SettingsView {
     fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         "Settings"
     }
@@ -266,9 +267,9 @@ impl Panel for SettingsPanel {
     }
 }
 
-impl gpui_kit::base::dock::Panel for SettingsPanel {
+impl gpui_kit::base::dock::Panel for SettingsView {
     fn panel_name(&self) -> &'static str {
-        "SettingsPanel"
+        "SettingsView"
     }
     fn closable(&self, _: &App) -> bool {
         true
@@ -285,4 +286,27 @@ impl gpui_kit::base::dock::Panel for SettingsPanel {
         }
     }
     fn set_zoomed(&mut self, _: bool, _: &mut Window, _: &mut Context<Self>) {}
+}
+
+impl crate::ui::pane::WorkspaceTab for Entity<SettingsView> {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn title(&self, _cx: &App) -> String {
+        "Settings".to_string()
+    }
+
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.read(cx).focus_handle(cx)
+    }
+
+    fn render(&self) -> AnyElement {
+        self.clone().into_any_element()
+    }
+
+    fn create_split(&self, window: &mut Window, cx: &mut App) -> Option<crate::ui::pane::TabContent> {
+        let new_settings = cx.new(|cx| SettingsView::new(window, cx));
+        Some(crate::ui::pane::TabContent::new(new_settings))
+    }
 }

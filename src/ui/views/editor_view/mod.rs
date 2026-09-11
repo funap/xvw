@@ -5,7 +5,8 @@ use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    App, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable, IntoElement, SharedString, Subscription, Task, WeakEntity, Window, div, hsla, px,
+    AnyElement, App, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable, IntoElement, SharedString, Subscription, Task, WeakEntity, Window, div,
+    hsla, px,
 };
 
 use crate::actions::{
@@ -31,7 +32,7 @@ pub mod search_bar;
 pub use goto_offset_bar::{GotoBarEvent, GotoOffsetBar};
 pub use search_bar::{SearchBar, SearchBarEvent};
 
-const CONTEXT: &str = "EditorPanel";
+const CONTEXT: &str = "EditorView";
 
 struct EditorDocumentLease {
     service: DocumentService,
@@ -52,7 +53,7 @@ pub fn init(cx: &mut App) {
     search_bar::init(cx);
 }
 
-pub struct EditorPanel {
+pub struct EditorView {
     editor: Entity<Editor>,
     focus_handle: FocusHandle,
     hex_view: Entity<HexView>,
@@ -68,7 +69,7 @@ pub struct EditorPanel {
     _document_lease: Option<EditorDocumentLease>,
 }
 
-impl EditorPanel {
+impl EditorView {
     pub fn new(editor: Entity<Editor>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         let appearance = cx.global::<Appearance>().clone();
@@ -306,7 +307,7 @@ impl EditorPanel {
     }
 
     #[allow(dead_code)]
-    pub fn create_split_clone(&self, window: &mut Window, cx: &mut App) -> Entity<EditorPanel> {
+    pub fn create_split_clone(&self, window: &mut Window, cx: &mut App) -> Entity<EditorView> {
         let (doc, options, show_inline_structure_view, collapsed_struct_ids, cursor_state, bytes_per_row) = {
             let ed = self.editor.read(cx);
             (
@@ -333,11 +334,11 @@ impl EditorPanel {
         });
 
         cx.new(|cx| {
-            let panel = EditorPanel::new(new_editor, window, cx);
-            panel.hex_view.update(cx, |hv, _| {
+            let view = EditorView::new(new_editor, window, cx);
+            view.hex_view.update(cx, |hv, _| {
                 hv.apply_layout_state(&layout_state);
             });
-            panel
+            view
         })
     }
 
@@ -687,15 +688,15 @@ impl EditorPanel {
     }
 }
 
-impl EventEmitter<PanelEvent> for EditorPanel {}
+impl EventEmitter<PanelEvent> for EditorView {}
 
-impl Focusable for EditorPanel {
+impl Focusable for EditorView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
 
-impl Panel for EditorPanel {
+impl Panel for EditorView {
     fn title(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let editor = self.editor.read(cx);
         let doc = editor.document.read().expect("document read lock");
@@ -777,9 +778,9 @@ impl Panel for EditorPanel {
     }
 }
 
-impl gpui_kit::base::dock::Panel for EditorPanel {
+impl gpui_kit::base::dock::Panel for EditorView {
     fn panel_name(&self) -> &'static str {
-        "EditorPanel"
+        "EditorView"
     }
 
     fn closable(&self, _cx: &App) -> bool {
@@ -808,7 +809,7 @@ impl gpui_kit::base::dock::Panel for EditorPanel {
 
     fn dump(&self, cx: &App) -> gpui_kit::component::dock::PanelState {
         let mut state = gpui_kit::component::dock::PanelState::new(self.panel_name());
-        let panel_state = EditorPanelState {
+        let panel_state = EditorViewState {
             path: Some(self.editor.read(cx).document.read().expect("document read lock").path().to_path_buf()),
         };
         state.info = gpui_kit::component::dock::PanelInfo::panel(panel_state.to_value());
@@ -816,7 +817,7 @@ impl gpui_kit::base::dock::Panel for EditorPanel {
     }
 }
 
-impl Render for EditorPanel {
+impl Render for EditorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let container = div().size_full().flex().flex_col().key_context(CONTEXT).track_focus(&self.focus_handle);
 
@@ -870,18 +871,64 @@ impl Render for EditorPanel {
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct EditorPanelState {
+pub struct EditorViewState {
     pub path: Option<std::path::PathBuf>,
 }
 
-impl EditorPanelState {
+impl EditorViewState {
     #[allow(dead_code)]
     pub fn to_value(&self) -> serde_json::Value {
-        serde_json::to_value(self).expect("serialize EditorPanelState")
+        serde_json::to_value(self).expect("serialize EditorViewState")
     }
 
     #[allow(dead_code)]
     pub fn from_value(value: serde_json::Value) -> Option<Self> {
         serde_json::from_value(value).ok()
+    }
+}
+
+impl crate::ui::pane::WorkspaceTab for Entity<EditorView> {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn title(&self, cx: &App) -> String {
+        let path = self.read(cx).path(cx);
+        path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Untitled".to_string())
+    }
+
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.read(cx).focus_handle(cx)
+    }
+
+    fn is_dirty(&self, cx: &App) -> bool {
+        self.read(cx).editor().read(cx).document.read().map(|d| d.is_dirty()).unwrap_or(false)
+    }
+
+    fn is_read_only(&self, cx: &App) -> bool {
+        self.read(cx).editor().read(cx).document.read().map(|d| d.is_read_only()).unwrap_or(false)
+    }
+
+    fn path(&self, cx: &App) -> Option<PathBuf> {
+        Some(self.read(cx).path(cx))
+    }
+
+    fn render(&self) -> AnyElement {
+        self.clone().into_any_element()
+    }
+
+    fn editor(&self, cx: &App) -> Option<Entity<Editor>> {
+        Some(self.read(cx).editor())
+    }
+
+    fn document(&self, cx: &App) -> Option<std::sync::Arc<std::sync::RwLock<crate::core::document::Document>>> {
+        Some(self.read(cx).editor().read(cx).document.clone())
+    }
+
+    fn create_split(&self, window: &mut Window, cx: &mut App) -> Option<crate::ui::pane::TabContent> {
+        let new_editor_view = self.update(cx, |ep, cx| ep.create_split_clone(window, cx));
+        Some(crate::ui::pane::TabContent::new(new_editor_view))
     }
 }

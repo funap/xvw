@@ -6,7 +6,6 @@ use gpui_kit::*;
 use super::editor_group::{EditorGroup, EditorGroupEvent};
 use super::types::{DropPlacement, SplitDirection, TabContent, TabDrag, TabItem};
 use crate::core::editor::Editor;
-use crate::ui::panels::editor_panel::EditorPanel;
 
 pub enum PaneNode {
     Leaf { id: usize, group: Entity<EditorGroup> },
@@ -68,8 +67,8 @@ impl PaneTree {
         self.active_group(cx)?.read(cx).active_editor(cx)
     }
 
-    pub fn active_editor_panel(&self, cx: &App) -> Option<Entity<EditorPanel>> {
-        self.active_group(cx)?.read(cx).active_editor_panel()
+    pub fn active_tab_as<T: Clone + 'static>(&self, cx: &App) -> Option<T> {
+        self.active_group(cx)?.read(cx).active_tab_as::<T>()
     }
 
     pub fn find_group(&self, group_id: usize) -> Option<Entity<EditorGroup>> {

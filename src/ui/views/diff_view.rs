@@ -15,7 +15,7 @@ use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::ui::views::hex_view::{HexView, HexViewEvent, HorizontalScrollTarget, ScrollColumn};
 
-const CONTEXT: &str = "DiffPanel";
+const CONTEXT: &str = "DiffView";
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -28,7 +28,7 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
-pub struct DiffPanel {
+pub struct DiffView {
     pub left_document: Arc<RwLock<Document>>,
     pub right_document: Arc<RwLock<Document>>,
     left_view: Entity<HexView>,
@@ -41,7 +41,7 @@ pub struct DiffPanel {
     _subscriptions: Vec<Subscription>,
 }
 
-impl DiffPanel {
+impl DiffView {
     pub fn new(left_document: Arc<RwLock<Document>>, right_document: Arc<RwLock<Document>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let default_encoding = *cx.global::<Encoding>();
         let bytes_per_row = cx.global::<crate::core::layout::BytesPerRow>().0;
@@ -298,15 +298,15 @@ impl DiffPanel {
     }
 }
 
-impl EventEmitter<PanelEvent> for DiffPanel {}
+impl EventEmitter<PanelEvent> for DiffView {}
 
-impl Focusable for DiffPanel {
+impl Focusable for DiffView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
 
-impl Panel for DiffPanel {
+impl Panel for DiffView {
     fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let left_name = self
             .left_path()
@@ -348,9 +348,9 @@ impl Panel for DiffPanel {
     }
 }
 
-impl gpui_kit::base::dock::Panel for DiffPanel {
+impl gpui_kit::base::dock::Panel for DiffView {
     fn panel_name(&self) -> &'static str {
-        "DiffPanel"
+        "DiffView"
     }
 
     fn closable(&self, _cx: &App) -> bool {
@@ -375,7 +375,7 @@ impl gpui_kit::base::dock::Panel for DiffPanel {
 
     fn dump(&self, _cx: &App) -> gpui_kit::component::dock::PanelState {
         let mut state = gpui_kit::component::dock::PanelState::new(self.panel_name());
-        let diff_state = DiffPanelState {
+        let diff_state = DiffViewState {
             left_path: self.left_path().to_string_lossy().to_string(),
             right_path: self.right_path().to_string_lossy().to_string(),
         };
@@ -385,12 +385,12 @@ impl gpui_kit::base::dock::Panel for DiffPanel {
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct DiffPanelState {
+pub struct DiffViewState {
     pub left_path: String,
     pub right_path: String,
 }
 
-impl Render for DiffPanel {
+impl Render for DiffView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let sync_scroll = self.sync_scroll;
@@ -505,5 +505,45 @@ impl Render for DiffPanel {
             .on_action(cx.listener(Self::toggle_sync_scroll))
             .on_action(cx.listener(Self::on_action_swap_diff))
             .on_action(cx.listener(Self::on_action_refresh_diff))
+    }
+}
+
+impl crate::ui::pane::WorkspaceTab for Entity<DiffView> {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn title(&self, cx: &App) -> String {
+        let dp = self.read(cx);
+        let left_name = dp
+            .left_path()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "Left".to_string());
+        let right_name = dp
+            .right_path()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "Right".to_string());
+        format!("Diff: {} ↔ {}", left_name, right_name)
+    }
+
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.read(cx).focus_handle(cx)
+    }
+
+    fn render(&self) -> AnyElement {
+        self.clone().into_any_element()
+    }
+
+    fn create_split(&self, window: &mut Window, cx: &mut App) -> Option<crate::ui::pane::TabContent> {
+        let (left_doc, right_doc) = {
+            let dp = self.read(cx);
+            (dp.left_document.clone(), dp.right_document.clone())
+        };
+        let new_diff = cx.new(|cx| DiffView::new(left_doc, right_doc, window, cx));
+        Some(crate::ui::pane::TabContent::new(new_diff))
     }
 }
