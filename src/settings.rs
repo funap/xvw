@@ -1,4 +1,4 @@
-use crate::core::appearance::Appearance;
+use crate::core::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
 use crate::core::structure::{DefinitionHistory, FileHistory, RecentFileEntry};
@@ -168,7 +168,7 @@ impl Settings {
         if self.appearance.font_family.trim().is_empty() {
             self.appearance.font_family = defaults.font_family;
         }
-        if !self.appearance.font_size.is_finite() || self.appearance.font_size <= 0.0 {
+        if !self.appearance.font_size.is_finite() || !(MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&self.appearance.font_size) {
             self.appearance.font_size = defaults.font_size;
         }
         if self.light_theme.trim().is_empty() {

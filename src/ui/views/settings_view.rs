@@ -1,4 +1,4 @@
-use crate::core::appearance::Appearance;
+use crate::core::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
 use gpui_kit::component::{
@@ -31,7 +31,7 @@ impl SettingsView {
         let focus_handle = cx.focus_handle();
 
         let font_family_input = cx.new(|cx| InputState::new(window, cx));
-        let font_size_input = cx.new(|cx| InputState::new(window, cx));
+        let font_size_input = cx.new(|cx| InputState::new(window, cx).step(1.0).min(MIN_FONT_SIZE as f64).max(MAX_FONT_SIZE as f64));
         let bytes_per_row_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .step(1.0)
@@ -90,7 +90,9 @@ impl SettingsView {
         subscriptions.push(cx.subscribe(&font_size_input, |_, input: Entity<InputState>, event: &input::InputEvent, cx| {
             if let input::InputEvent::Change = event {
                 let value = input.read(cx).value().to_string();
-                if let Ok(size) = value.parse::<f32>() {
+                if let Ok(size) = value.parse::<f32>()
+                    && (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&size)
+                {
                     cx.update_global::<Appearance, _>(|appearance, _| {
                         appearance.font_size = size;
                     });
@@ -206,7 +208,7 @@ impl Render for SettingsView {
                             .items_center()
                             .gap_4()
                             .child(div().w_32().child("Font Size"))
-                            .child(div().w_48().child(Input::new(&self.font_size_input))),
+                            .child(div().w_48().child(NumberInput::new(&self.font_size_input))),
                     )
                     .child(
                         div()

@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_FONT_SIZE: f32 = 14.0;
+pub const MIN_FONT_SIZE: f32 = 6.0;
+pub const MAX_FONT_SIZE: f32 = 72.0;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Appearance {
@@ -19,7 +23,7 @@ impl Default for Appearance {
 
         Self {
             font_family: font_family.into(),
-            font_size: 14.0,
+            font_size: DEFAULT_FONT_SIZE,
         }
     }
 }
