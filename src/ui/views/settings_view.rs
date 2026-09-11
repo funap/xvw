@@ -227,7 +227,19 @@ impl Render for SettingsView {
                                     .dropdown_caret(true)
                                     .with_size(Size::Small)
                                     .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
-                                        Encoding::categories().iter().fold(menu, |menu, (cat, encs)| {
+                                        let menu =
+                                            Encoding::primary_encodings().iter().copied().fold(menu, |menu, encoding| {
+                                                menu.item(PopupMenuItem::new(encoding.label()).checked(encoding == default_encoding).on_click(
+                                                    move |_, _, cx| {
+                                                        cx.update_global::<Encoding, _>(|current, _| {
+                                                            *current = encoding;
+                                                        });
+                                                        crate::settings::save_current(cx);
+                                                    },
+                                                ))
+                                            });
+                                        let menu = menu.separator();
+                                        Encoding::secondary_categories().iter().fold(menu, |menu, (cat, encs)| {
                                             menu.submenu(cat.label(), window, cx, move |menu, _window, _cx| {
                                                 encs.iter().copied().fold(menu, |menu, encoding| {
                                                     menu.item(PopupMenuItem::new(encoding.label()).checked(encoding == default_encoding).on_click(

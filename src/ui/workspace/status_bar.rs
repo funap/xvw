@@ -186,7 +186,12 @@ impl Render for StatusBar {
                             .menu("Big Endian", Box::new(SetByteOrderBigEndian))
                     })
                     .submenu("Encoding", window, cx, move |menu, window, cx| {
-                        Encoding::categories().iter().fold(menu, |menu, (cat, encs)| {
+                        let menu = Encoding::primary_encodings()
+                            .iter()
+                            .copied()
+                            .fold(menu, |menu, encoding| menu.menu(encoding.label(), Box::new(SetEncoding { encoding })));
+                        let menu = menu.separator();
+                        Encoding::secondary_categories().iter().fold(menu, |menu, (cat, encs)| {
                             menu.submenu(cat.label(), window, cx, move |menu, _window, _cx| {
                                 encs.iter()
                                     .copied()
@@ -357,7 +362,12 @@ impl Render for StatusBar {
                                 .with_size(Size::XSmall)
                                 .tooltip("Click to change Text Encoding")
                                 .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, window, cx| {
-                                    Encoding::categories().iter().fold(menu, |menu, (cat, encs)| {
+                                    let menu = Encoding::primary_encodings()
+                                        .iter()
+                                        .copied()
+                                        .fold(menu, |menu, encoding| menu.menu(encoding.label(), Box::new(SetEncoding { encoding })));
+                                    let menu = menu.separator();
+                                    Encoding::secondary_categories().iter().fold(menu, |menu, (cat, encs)| {
                                         menu.submenu(cat.label(), window, cx, move |menu, _window, _cx| {
                                             encs.iter()
                                                 .copied()

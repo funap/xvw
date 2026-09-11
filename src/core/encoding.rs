@@ -213,13 +213,72 @@ impl Encoding {
         }
     }
 
+    /// Primary encodings that should be displayed at top-level in menus (ASCII, UTF-8, UTF-16LE, UTF-16BE).
+    pub const PRIMARY_ENCODINGS: &'static [Encoding] = &[Encoding::Ascii, Encoding::Utf8, Encoding::Utf16Le, Encoding::Utf16Be];
+
+    /// Returns primary encodings that should be displayed at top-level in menus (ASCII, UTF-8, UTF-16LE, UTF-16BE).
+    pub fn primary_encodings() -> &'static [Encoding] {
+        Self::PRIMARY_ENCODINGS
+    }
+
+    /// Returns whether this is a primary encoding (ASCII or Unicode).
+    pub fn is_primary(self) -> bool {
+        matches!(self, Self::Ascii | Self::Utf8 | Self::Utf16Le | Self::Utf16Be)
+    }
+
+    /// Returns secondary encodings grouped by regional/legacy categories.
+    pub fn secondary_categories() -> &'static [(EncodingCategory, &'static [Encoding])] {
+        &[
+            (EncodingCategory::Japanese, &[Encoding::ShiftJis, Encoding::EucJp, Encoding::Iso2022Jp]),
+            (
+                EncodingCategory::ChineseKorean,
+                &[Encoding::Gbk, Encoding::Gb18030, Encoding::Big5, Encoding::EucKr],
+            ),
+            (
+                EncodingCategory::Iso8859,
+                &[
+                    Encoding::Iso8859_1,
+                    Encoding::Iso8859_2,
+                    Encoding::Iso8859_3,
+                    Encoding::Iso8859_4,
+                    Encoding::Iso8859_5,
+                    Encoding::Iso8859_6,
+                    Encoding::Iso8859_7,
+                    Encoding::Iso8859_8,
+                    Encoding::Iso8859_8I,
+                    Encoding::Iso8859_10,
+                    Encoding::Iso8859_13,
+                    Encoding::Iso8859_14,
+                    Encoding::Iso8859_15,
+                    Encoding::Iso8859_16,
+                ],
+            ),
+            (
+                EncodingCategory::Windows,
+                &[
+                    Encoding::Windows1250,
+                    Encoding::Windows1251,
+                    Encoding::Windows1252,
+                    Encoding::Windows1253,
+                    Encoding::Windows1254,
+                    Encoding::Windows1255,
+                    Encoding::Windows1256,
+                    Encoding::Windows1257,
+                    Encoding::Windows1258,
+                ],
+            ),
+            (
+                EncodingCategory::Legacy,
+                &[Encoding::Koi8R, Encoding::Koi8U, Encoding::Macintosh, Encoding::Ibm866],
+            ),
+        ]
+    }
+
     /// Returns the list of all supported encodings grouped by category.
+    #[allow(dead_code)]
     pub fn categories() -> &'static [(EncodingCategory, &'static [Encoding])] {
         &[
-            (
-                EncodingCategory::Unicode,
-                &[Encoding::Ascii, Encoding::Utf8, Encoding::Utf16Le, Encoding::Utf16Be],
-            ),
+            (EncodingCategory::Unicode, Self::PRIMARY_ENCODINGS),
             (EncodingCategory::Japanese, &[Encoding::ShiftJis, Encoding::EucJp, Encoding::Iso2022Jp]),
             (
                 EncodingCategory::ChineseKorean,
@@ -1157,5 +1216,28 @@ mod tests {
         // Unprintable / Invalid bytes replaced by '.'
         let mixed_buf = [0x00, 0x41, 0xFF, 0x42];
         assert_eq!(Encoding::Ascii.format_preview(&mixed_buf, 0, 4), ".A.B");
+    }
+
+    #[test]
+    fn test_primary_and_secondary_encodings() {
+        let primary = Encoding::primary_encodings();
+        assert_eq!(primary, &[Encoding::Ascii, Encoding::Utf8, Encoding::Utf16Le, Encoding::Utf16Be]);
+        for enc in primary {
+            assert!(enc.is_primary());
+            assert_eq!(enc.category(), EncodingCategory::Unicode);
+        }
+
+        assert!(!Encoding::ShiftJis.is_primary());
+        assert!(!Encoding::Windows1252.is_primary());
+
+        let secondary = Encoding::secondary_categories();
+        for (cat, encs) in secondary {
+            assert_ne!(*cat, EncodingCategory::Unicode);
+            for enc in *encs {
+                assert!(!enc.is_primary());
+            }
+        }
+
+        assert_eq!(Encoding::categories().len(), 1 + secondary.len());
     }
 }

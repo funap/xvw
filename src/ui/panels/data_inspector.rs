@@ -1,6 +1,5 @@
 use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
-use crate::core::encoding::Encoding;
 use crate::core::selection::Selection;
 use crate::ui::icon::IconName;
 use gpui_kit::component::input::{self, Input, InputState};
@@ -612,7 +611,7 @@ impl Render for DataInspector {
         let (current_encoding, current_enc_val) = if let Some(ed) = &self.editor {
             let ed = ed.read(cx);
             let enc = ed.options.encoding;
-            if !matches!(enc, Encoding::Ascii | Encoding::Utf8 | Encoding::Utf16Le | Encoding::Utf16Be) {
+            if !enc.is_primary() {
                 let mut val = ".".to_string();
                 if !bytes_at_cursor.is_empty()
                     && let Some((c, _)) = enc.decode_char_at(&bytes_at_cursor, 0)

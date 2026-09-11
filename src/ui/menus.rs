@@ -273,20 +273,31 @@ fn build_edit_menu() -> MenuDef {
 }
 
 fn build_view_menu() -> MenuDef {
-    let encoding_items = crate::core::encoding::Encoding::categories()
-        .iter()
-        .map(|(category, encodings)| {
-            let cat_items = encodings
-                .iter()
-                .copied()
-                .map(|encoding| MenuItemDef::action_with_condition(encoding.label(), crate::actions::SetEncoding { encoding }, |s| s.has_doc))
-                .collect();
-            MenuItemDef::Submenu {
-                label: category.label(),
-                items: cat_items,
-            }
-        })
-        .collect();
+    let mut encoding_items = Vec::new();
+
+    // Primary encodings (ASCII, UTF-8, UTF-16LE, UTF-16BE) directly at top level
+    for encoding in crate::core::encoding::Encoding::primary_encodings() {
+        encoding_items.push(MenuItemDef::action_with_condition(
+            encoding.label(),
+            crate::actions::SetEncoding { encoding: *encoding },
+            |s| s.has_doc,
+        ));
+    }
+
+    encoding_items.push(MenuItemDef::separator());
+
+    // Regional/legacy categories as submenus
+    for (category, encodings) in crate::core::encoding::Encoding::secondary_categories() {
+        let cat_items = encodings
+            .iter()
+            .copied()
+            .map(|encoding| MenuItemDef::action_with_condition(encoding.label(), crate::actions::SetEncoding { encoding }, |s| s.has_doc))
+            .collect();
+        encoding_items.push(MenuItemDef::Submenu {
+            label: category.label(),
+            items: cat_items,
+        });
+    }
 
     MenuDef {
         name: "View",
@@ -441,5 +452,46 @@ mod tests {
             assert_eq!(gpui_menu.name.as_ref(), menu.name);
             assert!(!gpui_menu.items.is_empty());
         }
+    }
+
+    #[test]
+    fn test_view_encoding_menu_structure() {
+        let menus = application_menus();
+        let view_menu = menus.iter().find(|m| m.name == "View").expect("View menu found");
+        let encoding_submenu = view_menu
+            .items
+            .iter()
+            .find_map(|item| match item {
+                MenuItemDef::Submenu { label, items } if *label == "Encoding" => Some(items),
+                _ => None,
+            })
+            .expect("Encoding submenu found");
+
+        // The first 4 items must be top-level action items for ASCII & Unicode
+        assert_eq!(encoding_submenu.len(), 4 + 1 + 5); // 4 primary + 1 separator + 5 categories
+        let primary_labels: Vec<&str> = encoding_submenu[..4]
+            .iter()
+            .map(|item| match item {
+                MenuItemDef::Action { label, .. } => *label,
+                _ => panic!("Expected action item"),
+            })
+            .collect();
+        assert_eq!(primary_labels, vec!["ASCII", "UTF-8", "UTF-16 LE", "UTF-16 BE"]);
+
+        // Followed by a separator
+        assert!(matches!(encoding_submenu[4], MenuItemDef::Separator));
+
+        // Followed by regional/legacy submenus
+        let category_labels: Vec<&str> = encoding_submenu[5..]
+            .iter()
+            .map(|item| match item {
+                MenuItemDef::Submenu { label, .. } => *label,
+                _ => panic!("Expected submenu"),
+            })
+            .collect();
+        assert_eq!(
+            category_labels,
+            vec!["Japanese", "Chinese & Korean", "ISO-8859", "Windows Code Pages", "Legacy / DOS / Mac"]
+        );
     }
 }
