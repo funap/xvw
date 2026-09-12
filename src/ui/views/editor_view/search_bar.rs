@@ -93,10 +93,17 @@ impl Render for SearchBar {
             .items_center()
             .gap_2()
             .p_2()
+            .w(px(420.0))
+            .max_w_full()
             .bg(cx.theme().background)
-            .border_b_1()
+            .border_1()
             .border_color(cx.theme().border)
+            .rounded_lg()
+            .shadow_xl()
             .key_context("SearchBar")
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
             .on_action(cx.listener(|_, _: &crate::actions::SearchNext, _, cx| {
                 cx.emit(SearchBarEvent::Next);
             }))

@@ -96,6 +96,7 @@ impl EditorView {
             }
             SearchBarEvent::Dismiss => {
                 this.is_search_visible = false;
+                this.update_top_overlay_state(cx);
                 this.update_highlights(cx);
                 cx.dispatch_action(&FocusHexView);
                 cx.notify();
@@ -107,6 +108,8 @@ impl EditorView {
             GotoBarEvent::Jump { offset, extend_selection } => {
                 let target = *offset;
                 let extend = *extend_selection;
+                this.is_goto_visible = false;
+                this.update_top_overlay_state(cx);
                 this.editor.update(cx, |editor, cx| {
                     editor.go_to_offset(target, extend);
                     cx.notify();
@@ -115,12 +118,13 @@ impl EditorView {
                 this.hex_view.update(cx, |view, cx| {
                     view.scroll_to_byte_if_needed(cursor_offset, cx);
                 });
-                this.is_goto_visible = false;
                 cx.dispatch_action(&FocusHexView);
                 cx.notify();
             }
             GotoBarEvent::SelectRange { range } => {
                 let r = range.clone();
+                this.is_goto_visible = false;
+                this.update_top_overlay_state(cx);
                 this.editor.update(cx, |editor, cx| {
                     editor.go_to_range(r);
                     cx.notify();
@@ -129,12 +133,12 @@ impl EditorView {
                 this.hex_view.update(cx, |view, cx| {
                     view.scroll_to_byte_if_needed(cursor_offset, cx);
                 });
-                this.is_goto_visible = false;
                 cx.dispatch_action(&FocusHexView);
                 cx.notify();
             }
             GotoBarEvent::Dismiss => {
                 this.is_goto_visible = false;
+                this.update_top_overlay_state(cx);
                 cx.dispatch_action(&FocusHexView);
                 cx.notify();
             }
@@ -342,6 +346,13 @@ impl EditorView {
         })
     }
 
+    fn update_top_overlay_state(&self, cx: &mut Context<Self>) {
+        let is_visible = self.is_search_visible || self.is_goto_visible;
+        self.hex_view.update(cx, |view, cx| {
+            view.set_top_overlay_visible(is_visible, cx);
+        });
+    }
+
     pub fn toggle_search(&mut self, _: &ToggleSearch, window: &mut Window, cx: &mut Context<Self>) {
         self.is_search_visible = !self.is_search_visible;
         if self.is_search_visible {
@@ -352,6 +363,7 @@ impl EditorView {
         } else {
             self.hex_view.read(cx).focus_handle(cx).focus(window, cx);
         }
+        self.update_top_overlay_state(cx);
         cx.notify();
     }
 
@@ -369,6 +381,7 @@ impl EditorView {
         } else {
             self.hex_view.read(cx).focus_handle(cx).focus(window, cx);
         }
+        self.update_top_overlay_state(cx);
         cx.notify();
     }
 
@@ -819,7 +832,7 @@ impl gpui_kit::base::dock::Panel for EditorView {
 
 impl Render for EditorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let container = div().size_full().flex().flex_col().key_context(CONTEXT).track_focus(&self.focus_handle);
+        let container = div().size_full().relative().key_context(CONTEXT).track_focus(&self.focus_handle);
 
         container
             .on_action(cx.listener(Self::toggle_search))
@@ -864,9 +877,13 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::hide_all_bookmarks))
             .on_action(cx.listener(Self::toggle_hide_unbookmarked))
             .on_action(cx.listener(Self::unfold_bookmark_at_cursor))
-            .when(self.is_search_visible, |el| el.child(self.search_bar.clone()))
-            .when(self.is_goto_visible, |el| el.child(self.goto_bar.clone()))
-            .child(div().flex_1().w_full().min_h_0().child(self.hex_view.clone()))
+            .child(div().size_full().child(self.hex_view.clone()))
+            .when(self.is_search_visible, |el| {
+                el.child(div().absolute().top(px(8.0)).right(px(20.0)).child(self.search_bar.clone()))
+            })
+            .when(self.is_goto_visible, |el| {
+                el.child(div().absolute().top(px(8.0)).right(px(20.0)).child(self.goto_bar.clone()))
+            })
     }
 }
 

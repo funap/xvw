@@ -38,7 +38,7 @@ impl EventEmitter<GotoBarEvent> for GotoOffsetBar {}
 
 impl GotoOffsetBar {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Address or Range (e.g. 0x100, 0x100..0x1ff, +10, 50%)..."));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Go to address or range..."));
 
         // Subscribe to input changes
         cx.subscribe(&input, |this, input, event: &input::InputEvent, cx| {
@@ -107,12 +107,12 @@ impl Render for GotoOffsetBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
-        let preview_info = match &self.parsed_result {
-            None => {
-                let current_addr = self.address_map.offset_to_address(self.current_cursor);
-                let text = format!("Pos: 0x{:X} / Size: 0x{:X}", current_addr, self.total_size);
-                div().text_sm().text_color(theme.muted_foreground).child(text)
-            }
+        let bottom_info = match &self.parsed_result {
+            None => div()
+                .px_1()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("e.g. 0x100, 0x100..0x1FF, +0x20, 50%"),
             Some(Ok(parsed)) => {
                 let text = if let Some(range) = &parsed.selection_range {
                     let len = range.len();
@@ -136,26 +136,34 @@ impl Render for GotoOffsetBar {
                     String::new()
                 };
                 div()
+                    .px_1()
                     .flex()
                     .items_center()
                     .gap_1()
-                    .text_sm()
+                    .text_xs()
                     .text_color(if parsed.is_out_of_bounds { theme.yellow } else { theme.foreground })
                     .child(text)
                     .when(!warning.is_empty(), |el| el.child(div().text_color(theme.yellow).child(warning)))
             }
-            Some(Err(err)) => div().text_sm().text_color(theme.red).child(format!("{}", err)),
+            Some(Err(err)) => div().px_1().text_xs().text_color(theme.red).child(format!("{}", err)),
         };
 
         div()
             .flex()
-            .items_center()
-            .gap_2()
+            .flex_col()
+            .gap_1p5()
             .p_2()
+            .w(px(400.0))
+            .max_w_full()
             .bg(theme.background)
-            .border_b_1()
+            .border_1()
             .border_color(theme.border)
+            .rounded_lg()
+            .shadow_xl()
             .key_context("GotoOffsetBar")
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
             .on_action(cx.listener(|this, _: &GotoJump, _, cx| {
                 this.execute_jump(false, cx);
             }))
@@ -167,16 +175,22 @@ impl Render for GotoOffsetBar {
             }))
             .child(
                 div()
-                    .flex_1()
-                    .child(Input::new(&self.input).prefix(Icon::new(IconName::Hash).size_3p5()).cleanable(true)),
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(Input::new(&self.input).prefix(Icon::new(IconName::Hash).size_3p5()).cleanable(true)),
+                    )
+                    .child(Button::new("go_jump").label("Go").primary().on_click(cx.listener(|this, _, _, cx| {
+                        this.execute_jump(false, cx);
+                    })))
+                    .child(Button::new("close").ghost().icon(IconName::Close).on_click(cx.listener(|_, _, _, cx| {
+                        cx.emit(GotoBarEvent::Dismiss);
+                    }))),
             )
-            .child(preview_info)
-            .child(Button::new("go_jump").label("Go").primary().on_click(cx.listener(|this, _, _, cx| {
-                this.execute_jump(false, cx);
-            })))
-            .child(Button::new("close").ghost().icon(IconName::Close).on_click(cx.listener(|_, _, _, cx| {
-                cx.emit(GotoBarEvent::Dismiss);
-            })))
+            .child(bottom_info)
     }
 }
 

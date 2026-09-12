@@ -646,6 +646,17 @@ impl HexView {
         self.scroll.clamp_scroll_offsets(max_hex, max_desc, max_comment, layout);
     }
 
+    pub fn set_top_overlay_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        let max_overscroll = if visible { 3 } else { 0 };
+        let changed = self.scroll.set_max_top_overscroll_rows(max_overscroll);
+        if changed || (!visible && self.scroll.top_overscroll_rows > 0) {
+            if !visible {
+                self.scroll.top_overscroll_rows = 0;
+            }
+            cx.notify();
+        }
+    }
+
     pub fn auto_fit_column(&mut self, col: ResizingColumn, cx: &mut Context<Self>) {
         match col {
             ResizingColumn::Address => {
@@ -956,6 +967,14 @@ impl HexView {
 
         if let Some(target_top) = calculate_scroll_top_for_range(self.scroll.scroll_offset, visible_rows, total_rows, start_row, end_row) {
             self.scroll_to_row(target_top, cx);
+        }
+
+        if self.scroll.max_top_overscroll_rows > 0 && self.scroll.scroll_offset == 0 && start_row < self.scroll.max_top_overscroll_rows {
+            let needed = self.scroll.max_top_overscroll_rows.saturating_sub(start_row);
+            if self.scroll.top_overscroll_rows < needed {
+                self.scroll.top_overscroll_rows = needed;
+                cx.notify();
+            }
         }
     }
 
@@ -2151,7 +2170,11 @@ impl HexView {
         let doc = editor.document.read().ok()?;
         let line_starts = editor.line_starts();
         let rel_y = f32::from(point.y - list_bounds.top()).max(0.0);
-        let row_offset_in_view = (rel_y / ROW_HEIGHT).floor() as usize;
+        let top_overscroll_px = self.scroll.top_overscroll_rows as f32 * ROW_HEIGHT;
+        if rel_y < top_overscroll_px {
+            return None;
+        }
+        let row_offset_in_view = ((rel_y - top_overscroll_px) / ROW_HEIGHT).floor() as usize;
         let row_idx = self.scroll.scroll_offset + row_offset_in_view;
         let total_size = doc.buffer.len();
         let bytes_per_row = line_starts.max_bytes_per_row();
@@ -2315,7 +2338,11 @@ impl HexView {
         }
 
         let rel_y = f32::from(point.y - list_bounds.top()).max(0.0);
-        let row_offset_in_view = (rel_y / ROW_HEIGHT).floor() as usize;
+        let top_overscroll_px = self.scroll.top_overscroll_rows as f32 * ROW_HEIGHT;
+        if rel_y < top_overscroll_px {
+            return None;
+        }
+        let row_offset_in_view = ((rel_y - top_overscroll_px) / ROW_HEIGHT).floor() as usize;
         let row_idx = self.scroll.scroll_offset + row_offset_in_view;
         let total_size = buffer_len;
         let bytes_per_row = line_starts.max_bytes_per_row();
@@ -3420,6 +3447,7 @@ impl Render for HexView {
             .child(div().flex_1().w_full().min_w_0().min_h_0().relative().overflow_hidden().child({
                 let editor_entity = self.editor.clone();
                 let scroll_offset = self.scroll.scroll_offset;
+                let top_overscroll_rows = self.scroll.top_overscroll_rows;
                 let outer_scroll_x = self.scroll.outer_scroll_x;
                 let hex_scroll_x = self.scroll.hex_scroll_x;
                 let ascii_scroll_x = self.scroll.ascii_scroll_x;
@@ -3522,7 +3550,10 @@ impl Render for HexView {
                         let end_row = (top_row + visible_rows).min(total_rows);
 
                         for (k, row_idx) in (top_row..end_row).enumerate() {
-                            let row_y = bounds.top() + px(k as f32 * ROW_HEIGHT);
+                            let row_y = bounds.top() + px((k + top_overscroll_rows) as f32 * ROW_HEIGHT);
+                            if row_y >= bounds.bottom() {
+                                break;
+                            }
                             let row_bounds = Bounds::new(point(bounds.left(), row_y), size(bounds.size.width, px(ROW_HEIGHT)));
                             paint_hex_row(
                                 RowPaintParams {
