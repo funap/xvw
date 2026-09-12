@@ -20,7 +20,7 @@ autocorrect = "2.14.2"
 serde = { version = "1.0.229", features = ["derive"] }
 schemars = "1.2.2"
 serde_json = "1.0.151"
-toml = "1.1.5"
+toml = "1.1.6"
 bstr = "1.13.1"
 serde_yaml = "0.9"
 memmap2 = "0.9.11"
