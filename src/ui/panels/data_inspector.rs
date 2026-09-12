@@ -272,8 +272,6 @@ impl DataInspector {
 
         let value_color = if value == "--" { theme.muted_foreground } else { theme.foreground };
 
-        let row_group = SharedString::from(format!("inspector-row-{}", label));
-
         let value_el = if is_editing {
             let has_error = self.edit_error.is_some();
             h_flex()
@@ -351,51 +349,24 @@ impl DataInspector {
                 );
             }
 
-            let normal_fade = theme.background;
-            let hover_fade = theme.background.blend(theme.muted.opacity(0.4));
-
             let value_text_el = div()
-                .relative()
                 .flex_1()
-                .min_w_0()
+                .text_right()
+                .font_family(font_family.to_string())
+                .text_xs()
                 .overflow_hidden()
-                .child(
-                    div()
-                        .flex_1()
-                        .text_right()
-                        .font_family(font_family.to_string())
-                        .text_xs()
-                        .whitespace_nowrap()
-                        .text_color(value_color)
-                        .child(value),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .left_0()
-                        .w(px(24.0))
-                        .bg(linear_gradient(
-                            90.0,
-                            linear_color_stop(normal_fade, 0.0),
-                            linear_color_stop(normal_fade.opacity(0.0), 1.0),
-                        ))
-                        .group_hover(row_group.clone(), move |style| {
-                            style.bg(linear_gradient(
-                                90.0,
-                                linear_color_stop(hover_fade, 0.0),
-                                linear_color_stop(hover_fade.opacity(0.0), 1.0),
-                            ))
-                        }),
-                );
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .text_color(value_color)
+                .child(value);
 
             h_flex()
                 .flex_1()
-                .min_w_0()
-                .items_center()
                 .justify_end()
+                .items_center()
                 .gap_1()
+                .overflow_hidden()
+                .min_w_0()
                 .child(value_text_el)
                 .child(action_buttons)
                 .into_any_element()
@@ -403,7 +374,6 @@ impl DataInspector {
 
         let mut row_content = h_flex()
             .id(label)
-            .group(row_group)
             .w_full()
             .justify_between()
             .items_center()
