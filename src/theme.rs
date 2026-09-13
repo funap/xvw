@@ -127,6 +127,10 @@ mod tests {
     fn test_embedded_themes_load_all_presets() {
         let embedded = EmbeddedThemes::load_from_assets(&Assets);
 
+        // Verify Default themes
+        assert!(embedded.get("Default Light").is_some());
+        assert!(embedded.get("Default Dark").is_some());
+
         // Verify Ayu themes
         assert!(embedded.get("Ayu Light").is_some());
         assert!(embedded.get("Ayu Dark").is_some());
@@ -149,16 +153,69 @@ mod tests {
         // Verify Solarized themes
         assert!(embedded.get("Solarized Light").is_some());
         assert!(embedded.get("Solarized Dark").is_some());
+
+        // Verify Adventure themes
+        assert!(embedded.get("Adventure").is_some());
+        assert!(embedded.get("Adventure Time").is_some());
+
+        // Verify Alduin and Asciinema
+        assert!(embedded.get("Alduin").is_some());
+        assert!(embedded.get("Asciinema").is_some());
+
+        // Verify Aurora
+        assert!(embedded.get("Aurora Light").is_some());
+
+        // Verify Everforest themes
+        assert!(embedded.get("Everforest Light").is_some());
+        assert!(embedded.get("Everforest Dark").is_some());
+
+        // Verify Fahrenheit
+        assert!(embedded.get("Fahrenheit").is_some());
+
+        // Verify Flexoki themes
+        assert!(embedded.get("Flexoki Light").is_some());
+        assert!(embedded.get("Flexoki Dark").is_some());
+
+        // Verify Harper, Hybrid, Jellybeans, Kibble
+        assert!(embedded.get("Harper").is_some());
+        assert!(embedded.get("Hybrid Light").is_some());
+        assert!(embedded.get("Hybrid Dark").is_some());
+        assert!(embedded.get("Jellybeans").is_some());
+        assert!(embedded.get("Kibble").is_some());
+
+        // Verify macOS Classic themes
+        assert!(embedded.get("macOS Classic Light").is_some());
+        assert!(embedded.get("macOS Classic Dark").is_some());
+
+        // Verify Mellifluous themes
+        assert!(embedded.get("Mellifluous Light").is_some());
+        assert!(embedded.get("Mellifluous Dark").is_some());
+
+        // Verify Molokai themes
+        assert!(embedded.get("Molokai Light").is_some());
+        assert!(embedded.get("Molokai Dark").is_some());
+
+        // Verify Spaceduck and Twilight
+        assert!(embedded.get("Spaceduck").is_some());
+        assert!(embedded.get("Twilight").is_some());
+
+        assert_eq!(embedded.theme_names().len(), 38);
     }
 
     #[test]
     fn test_embedded_themes_names_sorted() {
         let embedded = EmbeddedThemes::load_from_assets(&Assets);
         let names = embedded.theme_names();
+        assert_eq!(names.len(), 38);
+        assert!(names.contains(&SharedString::from("Adventure")));
         assert!(names.contains(&SharedString::from("Ayu Light")));
         assert!(names.contains(&SharedString::from("Catppuccin Mocha")));
-        assert!(names.contains(&SharedString::from("Tokyo Night")));
+        assert!(names.contains(&SharedString::from("Default Light")));
+        assert!(names.contains(&SharedString::from("Everforest Dark")));
         assert!(names.contains(&SharedString::from("Gruvbox Dark")));
+        assert!(names.contains(&SharedString::from("macOS Classic Light")));
         assert!(names.contains(&SharedString::from("Solarized Light")));
+        assert!(names.contains(&SharedString::from("Tokyo Night")));
+        assert!(names.contains(&SharedString::from("Twilight")));
     }
 }
