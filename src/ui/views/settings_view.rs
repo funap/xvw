@@ -12,7 +12,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Action, Anchor, AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString, Subscription,
-    Window, div,
+    Window, div, px,
 };
 
 #[derive(Clone, PartialEq, Action)]
@@ -175,7 +175,7 @@ impl Render for SettingsView {
                                     .dropdown_caret(true)
                                     .with_size(Size::Small)
                                     .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
-                                        all_themes.iter().fold(menu, |menu, theme_name| {
+                                        all_themes.iter().fold(menu.scrollable(true).max_h(px(360.)), |menu, theme_name| {
                                             let is_active = theme_name == &active_theme_name;
                                             let name = theme_name.clone();
                                             menu.item(PopupMenuItem::new(name.clone()).checked(is_active).on_click(move |_, window, cx| {
