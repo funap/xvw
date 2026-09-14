@@ -51,3 +51,16 @@ fn test_deduplicate_dirty_documents_different_paths() {
     let deduplicated = deduplicate_dirty_documents(list);
     assert_eq!(deduplicated.len(), 2);
 }
+
+#[test]
+fn test_new_empty_file_document_properties() {
+    let title = format!("Untitled-{}.bin", 1);
+    let path = PathBuf::from(title);
+    let data = vec![0u8; 0];
+    let buffer = Buffer::new(data);
+    let doc = Document::new(path.clone(), buffer);
+    assert_eq!(doc.path, path);
+    assert_eq!(doc.buffer.len(), 0);
+    assert!(!doc.is_dirty());
+    assert!(!doc.is_read_only());
+}

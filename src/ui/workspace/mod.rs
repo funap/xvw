@@ -77,6 +77,11 @@ pub fn init(cx: &mut App) {
             workspace.on_action_new_file(&NewFile, window, cx);
         });
     });
+    cx.on_action::<crate::actions::NewEmptyFile>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_new_empty_file(&crate::actions::NewEmptyFile, window, cx);
+        });
+    });
     cx.on_action::<crate::actions::FillSelection>(|_, cx| {
         defer_in_active_workspace(cx, |workspace, window, cx| {
             workspace.on_action_fill_selection(window, cx);
@@ -601,6 +606,10 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(crate) fn on_action_new_empty_file(&mut self, _: &crate::actions::NewEmptyFile, window: &mut Window, cx: &mut Context<Self>) {
+        self.create_new_file(0, 0, window, cx);
+    }
+
     fn close_new_file_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.new_file_modal = None;
         self.sync_active_editor(window, cx);
@@ -872,6 +881,7 @@ impl Render for Workspace {
         div()
             .id("workspace")
             .on_action(cx.listener(Self::on_action_new_file))
+            .on_action(cx.listener(Self::on_action_new_empty_file))
             .on_action(cx.listener(Self::on_action_open_file))
             .on_action(cx.listener(Self::on_action_save))
             .on_action(cx.listener(Self::on_action_save_as))

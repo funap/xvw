@@ -399,6 +399,20 @@ impl Render for EditorGroup {
                                     target_index: this.tabs.len(),
                                 });
                             }))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                    if let Some(tab) = this.active_tab() {
+                                        tab.focus_handle(cx).focus(window, cx);
+                                    } else {
+                                        this.focus_handle.focus(window, cx);
+                                    }
+                                    cx.emit(EditorGroupEvent::Focused);
+                                    if event.click_count == 2 {
+                                        window.dispatch_action(Box::new(crate::actions::NewEmptyFile), cx);
+                                    }
+                                }),
+                            )
                             .children(self.tabs.iter().enumerate().map(|(idx, tab)| {
                                 let tab_id = tab.id;
                                 let is_active = idx == active_index;
@@ -438,12 +452,14 @@ impl Render for EditorGroup {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, window, cx| {
+                                            cx.stop_propagation();
                                             this.activate_tab(idx, window, cx);
                                         }),
                                     )
                                     .on_mouse_down(
                                         MouseButton::Middle,
                                         cx.listener(move |this, _, window, cx| {
+                                            cx.stop_propagation();
                                             this.close_tab(tab_id, window, cx);
                                         }),
                                     )
@@ -636,6 +652,7 @@ impl Render for EditorGroup {
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(move |this, _, window, cx| {
+                                                    cx.stop_propagation();
                                                     this.close_tab(tab_id, window, cx);
                                                 }),
                                             )
