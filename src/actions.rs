@@ -3,6 +3,10 @@ use gpui_kit::Action;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+const fn default_record_recent() -> bool {
+    true
+}
+
 #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
 #[action(namespace = app)]
 #[serde(deny_unknown_fields)]
@@ -10,6 +14,8 @@ pub struct OpenFile {
     pub path: String,
     #[serde(default)]
     pub format: Option<FileFormat>,
+    #[serde(default = "default_record_recent")]
+    pub record_recent: bool,
 }
 
 impl OpenFile {
@@ -17,11 +23,24 @@ impl OpenFile {
         Self {
             path: path.into(),
             format: None,
+            record_recent: true,
         }
     }
 
     pub fn with_format(path: impl Into<String>, format: Option<FileFormat>) -> Self {
-        Self { path: path.into(), format }
+        Self {
+            path: path.into(),
+            format,
+            record_recent: true,
+        }
+    }
+
+    pub fn without_recording(path: impl Into<String>, format: Option<FileFormat>) -> Self {
+        Self {
+            path: path.into(),
+            format,
+            record_recent: false,
+        }
     }
 }
 
@@ -510,3 +529,40 @@ pub struct ExportIntelHex;
 /// Exports the current document as a raw binary file.
 #[derive(Clone, PartialEq, Action)]
 pub struct ExportRawBinary;
+
+#[cfg(test)]
+mod tests {
+    use super::OpenFile;
+    use crate::core::format::FileFormat;
+
+    #[test]
+    fn test_open_file_constructors() {
+        let default_open = OpenFile::new("file.bin");
+        assert_eq!(default_open.path, "file.bin");
+        assert_eq!(default_open.format, None);
+        assert!(default_open.record_recent);
+
+        let with_fmt = OpenFile::with_format("file.hex", Some(FileFormat::IntelHex));
+        assert_eq!(with_fmt.path, "file.hex");
+        assert_eq!(with_fmt.format, Some(FileFormat::IntelHex));
+        assert!(with_fmt.record_recent);
+
+        let without_rec = OpenFile::without_recording("file.bin", None);
+        assert_eq!(without_rec.path, "file.bin");
+        assert_eq!(without_rec.format, None);
+        assert!(!without_rec.record_recent);
+    }
+
+    #[test]
+    fn test_open_file_deserialization_defaults() {
+        let json = r#"{"path":"test.bin"}"#;
+        let action: OpenFile = serde_json::from_str(json).unwrap();
+        assert_eq!(action.path, "test.bin");
+        assert_eq!(action.format, None);
+        assert!(action.record_recent);
+
+        let json_with_record_false = r#"{"path":"test.bin","record_recent":false}"#;
+        let action: OpenFile = serde_json::from_str(json_with_record_false).unwrap();
+        assert!(!action.record_recent);
+    }
+}

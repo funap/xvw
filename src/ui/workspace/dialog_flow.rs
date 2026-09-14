@@ -25,9 +25,6 @@ impl Workspace {
                 window
                     .update(|window, cx| {
                         view.update(cx, |this, cx| {
-                            this.left_panel.update(cx, |panel, cx| {
-                                panel.sync_file_history(cx);
-                            });
                             let action = crate::actions::OpenFile::new(path.to_string_lossy().to_string());
                             this.on_action_open_file(&action, window, cx);
                         });
@@ -72,7 +69,9 @@ impl Workspace {
                         tree.set_active_group(group.read(cx).id, cx);
                     });
                     self.sync_active_editor(window, cx);
-                    self.record_recent_file(path.clone(), action.format, cx);
+                    if action.record_recent {
+                        self.record_recent_file(path.clone(), action.format, cx);
+                    }
                     cx.notify();
                     return;
                 }
@@ -82,12 +81,13 @@ impl Workspace {
         if let Some(format) = action.format
             && format.is_import()
         {
-            self.import_file_from_path(path, Some(format), window, cx);
+            self.import_file_from_path(path, Some(format), action.record_recent, window, cx);
             return;
         }
 
         let view = cx.entity();
         let recent_path = path.clone();
+        let record_recent = action.record_recent;
         cx.spawn_in(window, async move |_, window| {
             let document_service_opt = window.update(|_, cx| AppState::global(cx).document_service.clone()).ok();
 
@@ -97,7 +97,9 @@ impl Workspace {
                         window
                             .update(|window, cx| {
                                 view.update(cx, |this, cx| {
-                                    this.record_recent_file(recent_path.clone(), Some(crate::core::format::FileFormat::Binary), cx);
+                                    if record_recent {
+                                        this.record_recent_file(recent_path.clone(), Some(crate::core::format::FileFormat::Binary), cx);
+                                    }
                                     this.open_editor_view(document, window, cx);
                                 });
                             })
@@ -383,6 +385,7 @@ impl Workspace {
         &mut self,
         path: PathBuf,
         format: Option<crate::core::format::FileFormat>,
+        record_recent: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -399,7 +402,9 @@ impl Workspace {
                                         view.update(cx, |this, cx| {
                                             let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
                                             let detected_format = crate::core::format::FileFormat::Base64;
-                                            this.record_recent_file(canonical_path.clone(), Some(detected_format), cx);
+                                            if record_recent {
+                                                this.record_recent_file(canonical_path.clone(), Some(detected_format), cx);
+                                            }
                                             let buffer = crate::core::buffer::Buffer::new(data);
                                             let doc = crate::core::document::Document::new_read_only(canonical_path, buffer).with_format(detected_format);
                                             let doc_arc = std::sync::Arc::new(std::sync::RwLock::new(doc));
@@ -434,7 +439,9 @@ impl Workspace {
                                     view.update(cx, |this, cx| {
                                         let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
                                         let detected_format = crate::core::format::FileFormat::from(import_result.format);
-                                        this.record_recent_file(canonical_path.clone(), Some(detected_format), cx);
+                                        if record_recent {
+                                            this.record_recent_file(canonical_path.clone(), Some(detected_format), cx);
+                                        }
                                         let buffer = crate::core::buffer::Buffer::new(import_result.data);
                                         let doc = crate::core::document::Document::new_read_only(canonical_path, buffer)
                                             .with_address_map(import_result.address_map.clone())
@@ -495,7 +502,7 @@ impl Workspace {
                 window
                     .update(|window, cx| {
                         view.update(cx, |this, cx| {
-                            this.import_file_from_path(path, None, window, cx);
+                            this.import_file_from_path(path, None, true, window, cx);
                         });
                     })
                     .ok();
@@ -518,7 +525,7 @@ impl Workspace {
                 window
                     .update(|window, cx| {
                         view.update(cx, |this, cx| {
-                            this.import_file_from_path(path, Some(crate::core::format::FileFormat::Base64), window, cx);
+                            this.import_file_from_path(path, Some(crate::core::format::FileFormat::Base64), true, window, cx);
                         });
                     })
                     .ok();

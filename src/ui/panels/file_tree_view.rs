@@ -54,7 +54,11 @@ pub fn init(cx: &mut App) {
 }
 
 pub enum FileTreeViewEvent {
-    OpenFile { path: PathBuf, format: Option<FileFormat> },
+    OpenFile {
+        path: PathBuf,
+        format: Option<FileFormat>,
+        record_recent: bool,
+    },
 }
 
 /// Tracks recent files for UI display, allowing re-sorting to be deferred
@@ -102,6 +106,7 @@ impl RecentDisplayHistory {
     }
 
     /// Sets whether re-ordering should be deferred upon updates.
+    #[allow(dead_code)]
     pub fn set_deferred(&mut self, deferred: bool) {
         self.defer_reorder = deferred;
     }
@@ -125,6 +130,7 @@ impl RecentDisplayHistory {
 
     /// Resets the deferred state and synchronizes displayed entries with latest entries.
     /// Returns true if the displayed list changed.
+    #[allow(dead_code)]
     pub fn sync(&mut self) -> bool {
         self.defer_reorder = false;
         if self.displayed_entries != self.latest_entries {
@@ -227,13 +233,6 @@ impl FileTreeView {
         }
     }
 
-    /// Synchronizes the displayed recent file paths with the latest history.
-    pub fn sync_recent_file_history(&mut self, cx: &mut Context<Self>) {
-        if self.recent_history.sync() {
-            cx.notify();
-        }
-    }
-
     fn load_root(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         cx.spawn(|view: WeakEntity<FileTreeView>, cx: &mut AsyncApp| {
             let mut cx = cx.clone();
@@ -303,6 +302,7 @@ impl FileTreeView {
                 cx.emit(FileTreeViewEvent::OpenFile {
                     path: PathBuf::from(item.id.to_string()),
                     format: None,
+                    record_recent: true,
                 });
             }
             cx.notify();
@@ -344,7 +344,6 @@ impl FileTreeView {
     }
 
     pub fn close_folder(&mut self, cx: &mut Context<Self>) {
-        self.sync_recent_file_history(cx);
         self.root_path = None;
         self.loaded_paths.clear();
         self.items.clear();
@@ -619,11 +618,11 @@ impl Render for FileTreeView {
                                 .tooltip(move |_window, cx| cx.new(|_| gpui_kit::component::tooltip::Tooltip::new(tooltip_text.clone())).into())
                                 .hover(|style| style.bg(theme.muted.opacity(0.4)))
                                 .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.recent_history.set_deferred(true);
                                     this.focus_handle.focus(window, cx);
                                     cx.emit(FileTreeViewEvent::OpenFile {
                                         path: open_path.clone(),
                                         format: open_format,
+                                        record_recent: false,
                                     });
                                 }))
                                 .child(Icon::new(IconName::File).with_size(gpui_kit::component::Size::XSmall))
@@ -818,6 +817,7 @@ impl Render for FileTreeView {
                                         cx.emit(FileTreeViewEvent::OpenFile {
                                             path: PathBuf::from(item.id.to_string()),
                                             format: None,
+                                            record_recent: true,
                                         });
                                     }
                                     this.clear_tree_selection(cx);
@@ -1013,5 +1013,28 @@ mod tests {
         assert_eq!(page_up(4), 0);
         assert_eq!(page_down(2), 12);
         assert_eq!(page_down(10), 14);
+    }
+
+    #[test]
+    fn test_file_tree_view_event_open_file_record_recent_flag() {
+        use super::FileTreeViewEvent;
+
+        let recents_event = FileTreeViewEvent::OpenFile {
+            path: PathBuf::from("recent.bin"),
+            format: None,
+            record_recent: false,
+        };
+        match recents_event {
+            FileTreeViewEvent::OpenFile { record_recent, .. } => assert!(!record_recent),
+        }
+
+        let tree_event = FileTreeViewEvent::OpenFile {
+            path: PathBuf::from("tree.bin"),
+            format: None,
+            record_recent: true,
+        };
+        match tree_event {
+            FileTreeViewEvent::OpenFile { record_recent, .. } => assert!(record_recent),
+        }
     }
 }

@@ -362,8 +362,13 @@ impl Workspace {
         .detach();
 
         cx.subscribe(&left_panel, |_, _, event: &FileTreeViewEvent, cx| match event {
-            FileTreeViewEvent::OpenFile { path, format } => {
-                cx.dispatch_action(&crate::actions::OpenFile::with_format(path.to_string_lossy().to_string(), *format));
+            FileTreeViewEvent::OpenFile { path, format, record_recent } => {
+                let action = if *record_recent {
+                    crate::actions::OpenFile::with_format(path.to_string_lossy().to_string(), *format)
+                } else {
+                    crate::actions::OpenFile::without_recording(path.to_string_lossy().to_string(), *format)
+                };
+                cx.dispatch_action(&action);
             }
         })
         .detach();
@@ -460,9 +465,6 @@ impl Workspace {
         self.is_left_panel_visible = visible;
 
         if visible {
-            self.left_panel.update(cx, |panel, cx| {
-                panel.sync_file_history(cx);
-            });
             let focus_handle = self.left_panel.read(cx).focus_handle(cx);
             focus_handle.focus(window, cx);
         } else {
@@ -976,9 +978,6 @@ impl Render for Workspace {
             .on_drop(cx.listener(move |this, external_paths: &ExternalPaths, window, cx| {
                 for path in external_paths.paths() {
                     if path.is_file() {
-                        this.left_panel.update(cx, |panel, cx| {
-                            panel.sync_file_history(cx);
-                        });
                         let action = crate::actions::OpenFile::new(path.to_string_lossy().to_string());
                         this.on_action_open_file(&action, window, cx);
                     } else if path.is_dir() {
