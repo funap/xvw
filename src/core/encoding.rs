@@ -370,7 +370,7 @@ impl Encoding {
     }
 
     /// Returns the underlying `encoding_rs::Encoding` reference if backed by `encoding_rs`.
-    fn encoding_rs_ref(self) -> Option<&'static encoding_rs::Encoding> {
+    pub(crate) fn encoding_rs_ref(self) -> Option<&'static encoding_rs::Encoding> {
         match self {
             Self::Ascii | Self::Iso8859_1 => None,
             Self::Utf8 => Some(encoding_rs::UTF_8),

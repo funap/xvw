@@ -285,6 +285,8 @@ impl KaitaiInterpreter {
             parse_result: None,
         });
 
+        self.evaluate_value_instances_silent(&ksy_arc.instances, stream);
+
         for attr in &ksy_arc.seq {
             if let Some(token) = cancel_token
                 && token.load(std::sync::atomic::Ordering::Relaxed)
@@ -334,6 +336,7 @@ impl KaitaiInterpreter {
                 break;
             }
             fields.extend(parsed);
+            self.evaluate_value_instances_silent(&ksy_arc.instances, stream);
 
             let cur_pos = stream.pos() as usize;
             if !pending_fields.is_empty() {
@@ -484,6 +487,40 @@ impl KaitaiInterpreter {
         }
     }
 
+    fn evaluate_value_instances_silent(&mut self, instances: &HashMap<String, KsyAttr>, stream: &KaitaiStream) {
+        for (id, inst_attr) in instances {
+            if inst_attr.value.is_some() && inst_attr.pos.is_none() {
+                let ctx = self.make_eval_ctx_silent(stream);
+                let rich_val = if let Some(ref ast) = inst_attr.compiled_value {
+                    ExprEvaluator::eval_ast_rich(ast, &ctx)
+                } else if let Some(ref val_expr) = inst_attr.value {
+                    ExprEvaluator::evaluate_rich(val_expr, &ctx)
+                } else {
+                    continue;
+                };
+                let full_id = if self.id_stack.is_empty() {
+                    id.clone()
+                } else {
+                    format!("{}.{}", self.id_stack.join("."), id)
+                };
+                let val = rich_val.to_i64();
+                self.context.insert(full_id.clone(), val);
+                self.context.insert(id.clone(), val);
+                match rich_val {
+                    crate::core::structure::expression::ExprValue::Str(s) => {
+                        self.string_context.insert(full_id.clone(), s.clone());
+                        self.string_context.insert(id.clone(), s);
+                    }
+                    crate::core::structure::expression::ExprValue::Bytes(b) => {
+                        self.byte_arrays.insert(full_id.clone(), b.clone());
+                        self.byte_arrays.insert(id.clone(), b);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     fn parse_attr_repeated(&mut self, attr: &KsyAttr, stream: &mut KaitaiStream, scope: TypeScope, is_instance: bool) -> Vec<ParsedField> {
         self.parse_attr_repeated_cb_cancellable(attr, stream, scope, is_instance, None, &mut |_, _| {})
     }
@@ -521,9 +558,24 @@ impl KaitaiInterpreter {
             } else {
                 format!("{}.{}", self.id_stack.join("."), field_id)
             };
-            self.context.insert(full_id, val);
+            self.context.insert(full_id.clone(), val);
             if let Some(ref raw_id) = attr.id {
                 self.context.insert(raw_id.clone(), val);
+            }
+            match &rich_val {
+                crate::core::structure::expression::ExprValue::Str(s) => {
+                    self.string_context.insert(full_id.clone(), s.clone());
+                    if let Some(ref raw_id) = attr.id {
+                        self.string_context.insert(raw_id.clone(), s.clone());
+                    }
+                }
+                crate::core::structure::expression::ExprValue::Bytes(b) => {
+                    self.byte_arrays.insert(full_id.clone(), b.clone());
+                    if let Some(ref raw_id) = attr.id {
+                        self.byte_arrays.insert(raw_id.clone(), b.clone());
+                    }
+                }
+                _ => {}
             }
             if is_instance {
                 let f_val = match rich_val {
@@ -537,6 +589,7 @@ impl KaitaiInterpreter {
                     crate::core::structure::expression::ExprValue::Float(v) => FieldValue::F64(v),
                     crate::core::structure::expression::ExprValue::Str(s) => FieldValue::String(s),
                     crate::core::structure::expression::ExprValue::Bool(b) => FieldValue::Bool(b),
+                    crate::core::structure::expression::ExprValue::Bytes(b) => FieldValue::Bytes(b),
                 };
                 let color = palette::color(self.color_index);
                 self.color_index += 1;
@@ -627,6 +680,12 @@ impl KaitaiInterpreter {
                                 self.context.insert(full_underscore, field.value.to_i64());
                                 for child in &field.children {
                                     self.context.insert(format!("_.{}", child.id), child.value.to_i64());
+                                    if let FieldValue::String(s) = &child.value {
+                                        self.string_context.insert(format!("_.{}", child.id), s.clone());
+                                    }
+                                    if let FieldValue::Bytes(b) = &child.value {
+                                        self.byte_arrays.insert(format!("_.{}", child.id), b.clone());
+                                    }
                                 }
                                 results.push(field);
                                 on_item(&results, stream.pos() as usize);
@@ -997,26 +1056,7 @@ impl KaitaiInterpreter {
 
     fn decode_string(&self, buf: &[u8], attr: &KsyAttr) -> String {
         if let Some(encoding_str) = &attr.encoding {
-            let enc = crate::core::encoding::Encoding::from_name(encoding_str).unwrap_or(crate::core::encoding::Encoding::Utf8);
-
-            if (enc == crate::core::encoding::Encoding::Utf8 || enc == crate::core::encoding::Encoding::Ascii)
-                && let Ok(s) = std::str::from_utf8(buf)
-            {
-                return s.to_string();
-            }
-
-            let mut result = String::with_capacity(buf.len());
-            let mut offset = 0;
-            while offset < buf.len() {
-                if let Some((c, len)) = enc.decode_char_at(buf, offset) {
-                    result.push(c);
-                    offset += len;
-                } else {
-                    result.push(buf[offset] as char);
-                    offset += 1;
-                }
-            }
-            result
+            crate::core::structure::expression::decode_bytes(buf, encoding_str)
         } else if let Ok(s) = std::str::from_utf8(buf) {
             s.to_string()
         } else {
@@ -1150,26 +1190,7 @@ impl KaitaiInterpreter {
                 self.errors.borrow_mut().truncate(errors_before_sub);
 
                 // Pre-evaluate value instances without recording errors (in case seq sizes depend on them)
-                for (id, inst_attr) in &type_def.instances {
-                    if inst_attr.value.is_some()
-                        && inst_attr.pos.is_none()
-                        && let Some(ref val_expr) = inst_attr.value
-                    {
-                        let ctx = self.make_eval_ctx_silent(&sub_stream);
-                        let val = if let Some(ref ast) = inst_attr.compiled_value {
-                            ExprEvaluator::eval_ast_i64(ast, &ctx)
-                        } else {
-                            ExprEvaluator::eval_i64(val_expr, &ctx)
-                        };
-                        let full_id = if self.id_stack.is_empty() {
-                            id.clone()
-                        } else {
-                            format!("{}.{}", self.id_stack.join("."), id)
-                        };
-                        self.context.insert(full_id, val);
-                        self.context.insert(id.clone(), val);
-                    }
-                }
+                self.evaluate_value_instances_silent(&type_def.instances, &sub_stream);
 
                 for nested_attr in &type_def.seq {
                     let parsed = self.parse_attr_repeated(nested_attr, &mut sub_stream, nested_scope, false);
@@ -1187,6 +1208,7 @@ impl KaitaiInterpreter {
                         return None;
                     }
                     fields.extend(parsed);
+                    self.evaluate_value_instances_silent(&type_def.instances, &sub_stream);
                 }
 
                 // Evaluate instances after seq so that instances can refer to parsed seq attributes
@@ -1224,26 +1246,7 @@ impl KaitaiInterpreter {
                 self.errors.borrow_mut().truncate(errors_before);
 
                 // Pre-evaluate value instances without recording errors (in case seq sizes depend on them)
-                for (id, inst_attr) in &type_def.instances {
-                    if inst_attr.value.is_some()
-                        && inst_attr.pos.is_none()
-                        && let Some(ref val_expr) = inst_attr.value
-                    {
-                        let ctx = self.make_eval_ctx_silent(stream);
-                        let val = if let Some(ref ast) = inst_attr.compiled_value {
-                            ExprEvaluator::eval_ast_i64(ast, &ctx)
-                        } else {
-                            ExprEvaluator::eval_i64(val_expr, &ctx)
-                        };
-                        let full_id = if self.id_stack.is_empty() {
-                            id.clone()
-                        } else {
-                            format!("{}.{}", self.id_stack.join("."), id)
-                        };
-                        self.context.insert(full_id, val);
-                        self.context.insert(id.clone(), val);
-                    }
-                }
+                self.evaluate_value_instances_silent(&type_def.instances, stream);
 
                 let mut fields = Vec::new();
                 for nested_attr in &type_def.seq {
@@ -1262,6 +1265,7 @@ impl KaitaiInterpreter {
                         return None;
                     }
                     fields.extend(parsed);
+                    self.evaluate_value_instances_silent(&type_def.instances, stream);
                 }
 
                 // Evaluate instances after seq so that instances can refer to parsed seq attributes
@@ -1378,7 +1382,21 @@ impl KaitaiInterpreter {
                     }
                 }
                 if let Some(expr_val) = map.get("expr").and_then(|v| v.as_str()) {
+                    let full_underscore_id = if self.id_stack.is_empty() {
+                        "_".to_string()
+                    } else {
+                        format!("{}.{}", self.id_stack.join("."), "_")
+                    };
                     self.context.insert("_".to_string(), actual.to_i64());
+                    self.context.insert(full_underscore_id.clone(), actual.to_i64());
+                    if let FieldValue::Bytes(b) = actual {
+                        self.byte_arrays.insert("_".to_string(), b.clone());
+                        self.byte_arrays.insert(full_underscore_id.clone(), b.clone());
+                    }
+                    if let FieldValue::String(s) = actual {
+                        self.string_context.insert("_".to_string(), s.clone());
+                        self.string_context.insert(full_underscore_id.clone(), s.clone());
+                    }
                     let ctx = self.make_eval_ctx(stream);
                     if !ExprEvaluator::eval_bool(expr_val, &ctx) {
                         self.errors.borrow_mut().push(ParseError {

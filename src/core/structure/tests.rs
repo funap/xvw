@@ -1700,3 +1700,183 @@ fn test_expression_overflow_division() {
 
     assert!(errors.borrow().len() >= 2);
 }
+
+#[test]
+fn test_byte_array_validation_and_methods() {
+    let yaml = r#"
+meta:
+  id: test_png_chunk
+seq:
+  - id: len
+    type: u4be
+  - id: type_raw
+    size: 4
+    valid:
+      expr: |
+        (_[0] >= 0x41 and _[0] <= 0x5a or _[0] >= 0x61 and _[0] <= 0x7a) and
+        (_[1] >= 0x41 and _[1] <= 0x5a or _[1] >= 0x61 and _[1] <= 0x7a) and
+        (_[2] >= 0x41 and _[2] <= 0x5a or _[2] >= 0x61 and _[2] <= 0x7a) and
+        (_[3] >= 0x41 and _[3] <= 0x5a or _[3] >= 0x61 and _[3] <= 0x7a)
+  - id: body
+    size: len
+    type:
+      switch-on: type
+      cases:
+        '"sRGB"': srgb_chunk
+types:
+  srgb_chunk:
+    seq:
+      - id: rendering_intent
+        type: u1
+instances:
+  type:
+    value: type_raw.to_s('ASCII')
+  is_ancillary:
+    value: type_raw[0] & 0x20 != 0
+"#;
+    let ksy = parse_ksy_yaml(yaml);
+    let data = vec![0x00, 0x00, 0x00, 0x01, 0x73, 0x52, 0x47, 0x42, 0x00];
+    let mut stream = KaitaiStream::new(&data);
+    let interpreter = KaitaiInterpreter::new(ksy);
+    let result = interpreter.parse(&mut stream);
+
+    assert!(result.errors.is_empty(), "Parse errors: {:?}", result.errors);
+    let fields: Vec<_> = result.fields.iter().collect();
+    assert_eq!(fields[0].id, "len");
+    assert_eq!(fields[1].id, "type_raw");
+    assert_eq!(fields[2].id, "body");
+    assert_eq!(fields[2].children.len(), 1);
+    assert_eq!(fields[2].children[0].id, "rendering_intent");
+}
+
+#[test]
+fn test_repeat_until_instance_string_matching() {
+    let yaml = r#"
+meta:
+  id: test_chunks
+seq:
+  - id: chunks
+    type: chunk
+    repeat: until
+    repeat-until: _.type == "IEND" or _io.eof
+types:
+  chunk:
+    seq:
+      - id: len
+        type: u4be
+      - id: type_raw
+        size: 4
+      - id: body
+        size: len
+    instances:
+      type:
+        value: type_raw.to_s('ASCII')
+"#;
+    let ksy = parse_ksy_yaml(yaml);
+    let mut data = vec![0x00, 0x00, 0x00, 0x01, 0x73, 0x52, 0x47, 0x42, 0x00];
+    data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44]);
+    let mut stream = KaitaiStream::new(&data);
+    let interpreter = KaitaiInterpreter::new(ksy);
+    let result = interpreter.parse(&mut stream);
+
+    assert!(result.errors.is_empty(), "Parse errors: {:?}", result.errors);
+    let fields: Vec<_> = result.fields.iter().collect();
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].id, "chunks[0]");
+    assert_eq!(fields[1].id, "chunks[1]");
+}
+
+#[test]
+fn test_expression_method_calls() {
+    use crate::core::structure::expression::{EvalContext, ExprEvaluator};
+    use std::collections::HashMap;
+
+    let mut byte_map = HashMap::new();
+    byte_map.insert("raw".to_string(), vec![0x41, 0x42, 0x43, 0x44]); // "ABCD"
+    let mut string_map = HashMap::new();
+    string_map.insert("greeting".to_string(), "Hello, World!".to_string());
+    string_map.insert("num_str".to_string(), "12345".to_string());
+    string_map.insert("hex_str".to_string(), "0x1a".to_string());
+
+    let empty_values = HashMap::new();
+    let empty_enums = HashMap::new();
+    let base_path = Vec::new();
+
+    let ctx = EvalContext {
+        values: &empty_values,
+        string_values: &string_map,
+        byte_arrays: &byte_map,
+        base_path: &base_path,
+        stream_eof: false,
+        stream_size: 0,
+        stream_pos: 0,
+        enums: &empty_enums,
+        errors: None,
+        instance_resolver: None,
+    };
+
+    assert_eq!(ExprEvaluator::eval_string("raw.to_s('ASCII')", &ctx), "ABCD");
+    assert_eq!(ExprEvaluator::eval_string("raw.to_s", &ctx), "ABCD");
+    assert_eq!(ExprEvaluator::eval_i64("raw.length", &ctx), 4);
+    assert_eq!(ExprEvaluator::eval_i64("raw.size", &ctx), 4);
+    assert_eq!(ExprEvaluator::eval_i64("raw[1]", &ctx), 0x42);
+    assert_eq!(ExprEvaluator::eval_string("greeting.substring(0, 5)", &ctx), "Hello");
+    assert_eq!(ExprEvaluator::eval_i64("greeting.length", &ctx), 13);
+    assert_eq!(ExprEvaluator::eval_i64("num_str.to_i", &ctx), 12345);
+    assert_eq!(ExprEvaluator::eval_i64("hex_str.to_i", &ctx), 0x1a);
+}
+
+#[test]
+fn test_decode_bytes_kaitai_encodings() {
+    use crate::core::structure::expression::decode_bytes;
+
+    // ASCII
+    assert_eq!(decode_bytes(b"Hello", "ASCII"), "Hello");
+    assert_eq!(decode_bytes(b"Hello", "US-ASCII"), "Hello");
+
+    // UTF-8
+    assert_eq!(decode_bytes("こんにちは".as_bytes(), "UTF-8"), "こんにちは");
+    assert_eq!(decode_bytes("こんにちは".as_bytes(), "utf8"), "こんにちは");
+
+    // Shift_JIS / SJIS / CP932
+    let sjis_bytes = [0x82, 0xb1, 0x82, 0xf1]; // "こん"
+    assert_eq!(decode_bytes(&sjis_bytes, "Shift_JIS"), "こん");
+    assert_eq!(decode_bytes(&sjis_bytes, "SJIS"), "こん");
+    assert_eq!(decode_bytes(&sjis_bytes, "CP932"), "こん");
+    assert_eq!(decode_bytes(&sjis_bytes, "sjis"), "こん");
+
+    // EUC-JP
+    let euc_jp_bytes = [0xa4, 0xb3, 0xa4, 0xf3]; // "こん"
+    assert_eq!(decode_bytes(&euc_jp_bytes, "EUC-JP"), "こん");
+    assert_eq!(decode_bytes(&euc_jp_bytes, "eucjp"), "こん");
+
+    // IBM437 / CP437
+    let cp437_bytes = [0x41, 0x82, 0x9c]; // 'A', 'é', '£'
+    assert_eq!(decode_bytes(&cp437_bytes, "IBM437"), "Aé£");
+    assert_eq!(decode_bytes(&cp437_bytes, "cp437"), "Aé£");
+    assert_eq!(decode_bytes(&cp437_bytes, "437"), "Aé£");
+
+    // UTF-16
+    let u16le_bytes = [0x41, 0x00, 0x42, 0x00];
+    assert_eq!(decode_bytes(&u16le_bytes, "UTF-16LE"), "AB");
+    assert_eq!(decode_bytes(&u16le_bytes, "utf16le"), "AB");
+    let u16be_bytes = [0x00, 0x41, 0x00, 0x42];
+    assert_eq!(decode_bytes(&u16be_bytes, "UTF-16BE"), "AB");
+    assert_eq!(decode_bytes(&u16be_bytes, "utf16be"), "AB");
+
+    // UTF-32
+    let u32le_bytes = [0x41, 0x00, 0x00, 0x00, 0x42, 0x00, 0x00, 0x00];
+    assert_eq!(decode_bytes(&u32le_bytes, "UTF-32LE"), "AB");
+    let u32be_bytes = [0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x42];
+    assert_eq!(decode_bytes(&u32be_bytes, "UTF-32BE"), "AB");
+
+    // ISO-8859-1
+    let latin1_bytes = [0xe9]; // 'é' (0xE9)
+    assert_eq!(decode_bytes(&latin1_bytes, "ISO-8859-1"), "é");
+    assert_eq!(decode_bytes(&latin1_bytes, "latin1"), "é");
+
+    // Windows-1252 (0x80 is Euro symbol)
+    let win1252_bytes = [0x80];
+    assert_eq!(decode_bytes(&win1252_bytes, "windows-1252"), "€");
+    assert_eq!(decode_bytes(&win1252_bytes, "cp1252"), "€");
+}
