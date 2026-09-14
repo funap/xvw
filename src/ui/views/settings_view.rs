@@ -167,7 +167,7 @@ impl Render for SettingsView {
                         let active_theme_name = cx.theme().theme_name().clone();
                         let all_themes = crate::theme::all_theme_names(cx);
 
-                        div().flex().items_center().gap_4().child(div().w_24().child("Theme")).child(
+                        div().flex().items_center().gap_4().child(div().w_32().child("Theme")).child(
                             div().w_48().child(
                                 Button::new("theme-selection")
                                     .label(active_theme_name.clone())
