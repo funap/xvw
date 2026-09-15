@@ -1,7 +1,6 @@
 use crate::core::color::RgbaColor;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, HashSet};
-use std::fs;
 use std::ops::Range;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -364,17 +363,6 @@ impl BookmarkFile {
         };
         Ok(serde_yaml::to_string(&file)?)
     }
-
-    pub fn save_to_path(path: &Path, bookmarks: &[BookmarkItem], file_path: Option<&Path>) -> anyhow::Result<()> {
-        let yaml = Self::to_yaml(bookmarks, file_path)?;
-        fs::write(path, yaml)?;
-        Ok(())
-    }
-
-    pub fn load_from_path(path: &Path) -> anyhow::Result<Vec<BookmarkItem>> {
-        let content = fs::read_to_string(path)?;
-        Self::from_yaml(&content)
-    }
 }
 
 /// Summary details for a folded region created by hidden bookmarks or gaps.
@@ -591,8 +579,8 @@ impl BookmarkStore {
         self.items.iter().map(|h| (h.range(), h.rgba_color())).collect()
     }
 
-    pub fn export_to_file(&self, path: &Path, doc_path: Option<&Path>) -> anyhow::Result<()> {
-        BookmarkFile::save_to_path(path, &self.items, doc_path)
+    pub fn to_yaml(&self, doc_path: Option<&Path>) -> anyhow::Result<String> {
+        BookmarkFile::to_yaml(&self.items, doc_path)
     }
 
     pub fn import_items(&mut self, items: Vec<BookmarkItem>, total_size: usize) -> usize {
@@ -601,11 +589,6 @@ impl BookmarkStore {
             self.add(item, total_size);
         }
         count
-    }
-
-    pub fn import_from_file(&mut self, path: &Path, total_size: usize) -> anyhow::Result<usize> {
-        let loaded = BookmarkFile::load_from_path(path)?;
-        Ok(self.import_items(loaded, total_size))
     }
 
     pub fn is_color_hidden(&self, color: BookmarkColor) -> bool {
@@ -999,19 +982,14 @@ mod tests {
     }
 
     #[test]
-    fn test_bookmark_file_disk_io() {
-        let temp_dir = std::env::temp_dir();
-        let temp_path = temp_dir.join("test_xvw_bookmarks.bookmark.yaml");
-
+    fn test_bookmark_file_yaml_roundtrip() {
         let items = vec![
             BookmarkItem::new(1024, 256, BookmarkColor::Yellow, "Data block"),
             BookmarkItem::new(2048, 128, BookmarkColor::Purple, "Signature"),
         ];
 
-        BookmarkFile::save_to_path(&temp_path, &items, Some(Path::new("firmware.bin"))).unwrap();
-        assert!(temp_path.exists());
-
-        let loaded = BookmarkFile::load_from_path(&temp_path).unwrap();
+        let yaml = BookmarkFile::to_yaml(&items, Some(Path::new("firmware.bin"))).unwrap();
+        let loaded = BookmarkFile::from_yaml(&yaml).unwrap();
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].offset, 1024);
         assert_eq!(loaded[0].size, 256);
@@ -1021,8 +999,6 @@ mod tests {
         assert_eq!(loaded[1].size, 128);
         assert_eq!(loaded[1].color, BookmarkColor::Purple);
         assert_eq!(loaded[1].comment, "Signature");
-
-        let _ = std::fs::remove_file(temp_path);
     }
 
     #[test]

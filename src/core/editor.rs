@@ -22,7 +22,6 @@ use crate::core::selection::Selection;
 use crate::core::structure::{ParseResult, ParsedField};
 use std::collections::BTreeSet;
 use std::ops::Range;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -63,9 +62,9 @@ impl<'a> BookmarkSessionRef<'a> {
             .custom_bookmarks_for_rendering()
     }
 
-    pub fn export_to_file(&self, path: &Path) -> anyhow::Result<()> {
+    pub fn to_yaml(&self) -> anyhow::Result<String> {
         let doc = self.document.read().expect("document read lock");
-        doc.metadata.bookmarks.export_to_file(path, Some(doc.path()))
+        doc.metadata.bookmarks.to_yaml(Some(doc.path()))
     }
 
     pub fn is_color_hidden(&self, color: BookmarkColor) -> bool {
@@ -158,13 +157,13 @@ impl<'a> BookmarkSessionMut<'a> {
         self.layout.invalidate();
     }
 
-    pub fn import_from_file(&mut self, path: &Path) -> anyhow::Result<usize> {
+    pub fn import_items(&mut self, items: Vec<BookmarkItem>) -> usize {
         let mut doc = self.document.write().expect("document write lock");
         let total = doc.buffer.len();
         doc.bump_layout_version();
-        let count = doc.metadata.bookmarks.import_from_file(path, total)?;
+        let count = doc.metadata.bookmarks.import_items(items, total);
         self.layout.invalidate();
-        Ok(count)
+        count
     }
 
     pub fn toggle_color(&mut self, color: BookmarkColor) {

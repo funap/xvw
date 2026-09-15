@@ -331,10 +331,13 @@ impl Workspace {
                 window
                     .update(|_, cx| {
                         view.update(cx, |this, cx| {
-                            if let Some(editor) = this.active_editor(cx)
-                                && let Err(e) = editor.read(cx).bookmarks().export_to_file(&path)
-                            {
-                                eprintln!("Failed to export bookmarks: {}", e);
+                            if let Some(editor) = this.active_editor(cx) {
+                                let ed = editor.read(cx);
+                                let items = ed.bookmarks().snapshot();
+                                let doc_path = ed.document.read().ok().map(|d| d.path().to_path_buf());
+                                if let Err(e) = crate::service::BookmarkService::export_to_file(&path, &items, doc_path.as_deref()) {
+                                    eprintln!("Failed to export bookmarks: {}", e);
+                                }
                             }
                         });
                     })
@@ -360,14 +363,17 @@ impl Workspace {
                         view.update(cx, |this, cx| {
                             if let Some(editor) = this.active_editor(cx) {
                                 let doc_path = editor.read(cx).document.read().ok().map(|d| d.path().to_path_buf());
-                                editor.update(cx, |ed, cx| match ed.bookmarks_mut().import_from_file(&path) {
-                                    Ok(_) => {
-                                        cx.notify();
+                                match crate::service::BookmarkService::import_from_file(&path) {
+                                    Ok(items) => {
+                                        editor.update(cx, |ed, cx| {
+                                            ed.bookmarks_mut().import_items(items);
+                                            cx.notify();
+                                        });
                                     }
                                     Err(e) => {
                                         eprintln!("Failed to import bookmarks: {}", e);
                                     }
-                                });
+                                }
                                 if let Some(ref p) = doc_path {
                                     let service = crate::app_state::AppState::global(cx).document_service.clone();
                                     service.notify_document_changed(p, cx);

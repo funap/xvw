@@ -1298,12 +1298,13 @@ fn test_editor_bookmarks_crud_and_file_io() {
 
     // Test export and import
     let temp_file = std::env::temp_dir().join("editor_bookmarks_test.bookmark.yaml");
-    editor.bookmarks().export_to_file(&temp_file).unwrap();
+    crate::service::BookmarkService::export_to_file(&temp_file, &editor.bookmarks().snapshot(), None).unwrap();
     assert!(temp_file.exists());
 
     // Create new editor and import
     let mut editor2 = create_editor_with_content(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
-    let count = editor2.bookmarks_mut().import_from_file(&temp_file).unwrap();
+    let loaded = crate::service::BookmarkService::import_from_file(&temp_file).unwrap();
+    let count = editor2.bookmarks_mut().import_items(loaded);
     assert_eq!(count, 2);
     assert_eq!(editor2.bookmarks().snapshot().len(), 2);
     assert_eq!(editor2.bookmarks().snapshot()[0].comment, "ELF Magic");
@@ -1331,10 +1332,11 @@ fn test_import_and_add_bookmark_no_id_collision() {
     editor.bookmarks_mut().add(item1);
 
     let temp_file = std::env::temp_dir().join("collision_test.bookmark.yaml");
-    editor.bookmarks().export_to_file(&temp_file).unwrap();
+    crate::service::BookmarkService::export_to_file(&temp_file, &editor.bookmarks().snapshot(), None).unwrap();
 
     let mut editor2 = create_editor_with_content(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
-    editor2.bookmarks_mut().import_from_file(&temp_file).unwrap();
+    let loaded = crate::service::BookmarkService::import_from_file(&temp_file).unwrap();
+    editor2.bookmarks_mut().import_items(loaded);
     assert_eq!(editor2.bookmarks().snapshot().len(), 1);
 
     // Now add a new bookmark
