@@ -1,6 +1,6 @@
-use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::selection::Selection;
+use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 use gpui_kit::component::input::{self, Input, InputState};
 use gpui_kit::component::scroll::ScrollableElement;

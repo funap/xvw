@@ -8,6 +8,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use crate::core::search::SearchMode;
+use crate::ui::panels::search_panel::SearchModeExt;
 
 #[allow(dead_code)]
 pub enum SearchBarEvent {

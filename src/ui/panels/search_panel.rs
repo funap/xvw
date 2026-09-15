@@ -1,7 +1,7 @@
-use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::search::{SearchLimit, SearchMode, find_occurrences_segmented, parse_hex_pattern, parse_text_pattern};
+use crate::ui::appearance::Appearance;
 use crate::ui::components::data_table::{self as table, TableColumn, VirtualTable, VirtualTableState};
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -10,6 +10,19 @@ use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::{ActiveTheme as _, Disableable, Sizable, Size, StyledExt, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+
+pub trait SearchModeExt {
+    fn placeholder(&self) -> &'static str;
+}
+
+impl SearchModeExt for SearchMode {
+    fn placeholder(&self) -> &'static str {
+        match self {
+            SearchMode::Hex => "Hex (e.g. 48 89 ?? 24, FF, ?)...",
+            SearchMode::Text => "Text (e.g. hello, magic, HTTP)...",
+        }
+    }
+}
 
 actions!(search_panel, [FocusTable, ClearResults]);
 

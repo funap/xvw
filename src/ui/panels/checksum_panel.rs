@@ -1,6 +1,6 @@
-use crate::core::appearance::Appearance;
 use crate::core::checksum::{ChecksumAlgorithm, ChecksumResults};
 use crate::core::editor::Editor;
+use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::scroll::ScrollableElement;

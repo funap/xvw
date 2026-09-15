@@ -6,10 +6,10 @@ use gpui_kit::component::{ActiveTheme as _, Disableable, Icon, Sizable, Size, h_
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use crate::core::appearance::Appearance;
 use crate::core::fill::{FillPattern, RandomMode, SequentialWidth, parse_pattern_hex, parse_pattern_text, parse_step_val, parse_u64_val};
 use crate::core::new_file::parse_fill_byte;
 use crate::core::radix::ByteOrder;
+use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 
 #[derive(Clone, PartialEq, Action)]

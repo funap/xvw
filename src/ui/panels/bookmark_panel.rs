@@ -1,6 +1,6 @@
-use crate::core::appearance::Appearance;
 use crate::core::bookmark::{BookmarkColor, BookmarkItem};
 use crate::core::editor::Editor;
+use crate::ui::appearance::Appearance;
 use crate::ui::color::BookmarkColorExt;
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};

@@ -5,16 +5,6 @@ pub enum SearchMode {
     Text,
 }
 
-impl SearchMode {
-    /// Returns the placeholder text showing example inputs for this search mode.
-    pub fn placeholder(&self) -> &'static str {
-        match self {
-            SearchMode::Hex => "Hex (e.g. 48 89 ?? 24, FF, ?)...",
-            SearchMode::Text => "Text (e.g. hello, magic, HTTP)...",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 pub enum SearchLimit {
@@ -621,16 +611,6 @@ mod tests {
         let pattern_half = parse_hex_pattern("24 ?8").unwrap();
         let results_half = find_occurrences(data, &pattern_half, SearchLimit::Unlimited, None);
         assert_eq!(results_half, vec![3, 8]);
-    }
-
-    #[test]
-    fn test_search_mode_placeholders() {
-        let hex_ph = SearchMode::Hex.placeholder();
-        assert!(hex_ph.contains('?'), "Hex placeholder should include wildcard example '?'");
-        assert!(hex_ph.starts_with("Hex (e.g. "));
-
-        let text_ph = SearchMode::Text.placeholder();
-        assert!(text_ph.starts_with("Text (e.g. "));
     }
 
     #[test]

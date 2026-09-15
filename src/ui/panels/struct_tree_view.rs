@@ -1,8 +1,8 @@
-use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::format::{format_size_friendly, format_with_commas};
 use crate::core::radix::DisplayRadix;
 use crate::core::structure::{ParseResult, ParsedField, format_parse_result_as_text, format_parse_result_as_yaml};
+use crate::ui::appearance::Appearance;
 use crate::ui::components::data_table::{TableColumn, VirtualTable, VirtualTableState};
 use crate::ui::icon::IconName;
 use gpui_kit::component::menu::ContextMenuExt as _;

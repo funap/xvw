@@ -1,6 +1,6 @@
-use crate::core::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
+use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use gpui_kit::component::{
     ActiveTheme, Sizable as _, Size, StyledExt,
     button::Button,

@@ -1,5 +1,5 @@
-use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
+use crate::ui::appearance::Appearance;
 use crate::ui::components::scrollbar::{CanvasScrollbar, SCROLLBAR_WIDTH, calculate_scrollbar_geometry};
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};

@@ -17,10 +17,10 @@ use crate::actions::{
     ToggleSearch, Undo, UnfoldBookmarkAtCursor,
 };
 use crate::app_state::{AppState, InsertModeState};
-use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::search::SearchMode;
 use crate::service::document_service::DocumentService;
+use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 use crate::ui::views::hex_view::{self, HexView};
 use std::ops::Range;

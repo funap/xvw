@@ -132,8 +132,6 @@ pub enum Encoding {
     Ibm866,
 }
 
-impl gpui_kit::Global for Encoding {}
-
 impl Encoding {
     /// Returns the display label used by the UI and menus.
     pub fn label(self) -> &'static str {

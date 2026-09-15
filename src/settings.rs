@@ -1,7 +1,7 @@
-use crate::core::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
 use crate::core::structure::{DefinitionHistory, FileHistory, RecentFileEntry};
+use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use gpui_kit::App;
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use serde::{Deserialize, Serialize};

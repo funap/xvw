@@ -1,9 +1,9 @@
 use crate::actions::*;
 use crate::app_state::InsertModeState;
-use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::format::{decode_uint_value, format_binary_repr, format_size_friendly, format_text_repr};
+use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _};
