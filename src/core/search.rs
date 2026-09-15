@@ -118,41 +118,41 @@ pub fn parse_hex_pattern(query: &str) -> Option<Vec<PatternByte>> {
     let mut pattern = Vec::new();
 
     for token in query.split_whitespace() {
-        let chars: Vec<char> = token.chars().collect();
+        let bytes = token.as_bytes();
         let mut i = 0;
-        while i < chars.len() {
-            let c1 = chars[i];
-            if i + 1 < chars.len() {
-                let c2 = chars[i + 1];
-                let is_c1_wild = c1 == '?' || c1 == '*';
-                let is_c2_wild = c2 == '?' || c2 == '*';
-                let is_c1_hex = c1.is_ascii_hexdigit();
-                let is_c2_hex = c2.is_ascii_hexdigit();
+        while i < bytes.len() {
+            let b1 = bytes[i];
+            if i + 1 < bytes.len() {
+                let b2 = bytes[i + 1];
+                let is_b1_wild = b1 == b'?' || b1 == b'*';
+                let is_b2_wild = b2 == b'?' || b2 == b'*';
+                let is_b1_hex = b1.is_ascii_hexdigit();
+                let is_b2_hex = b2.is_ascii_hexdigit();
 
-                if is_c1_wild && is_c2_wild {
+                if is_b1_wild && is_b2_wild {
                     pattern.push(PatternByte::new_wildcard());
-                } else if is_c1_hex && is_c2_hex {
-                    let val_high = c1.to_digit(16).expect("valid hex digit") as u8;
-                    let val_low = c2.to_digit(16).expect("valid hex digit") as u8;
+                } else if is_b1_hex && is_b2_hex {
+                    let val_high = (b1 as char).to_digit(16)? as u8;
+                    let val_low = (b2 as char).to_digit(16)? as u8;
                     pattern.push(PatternByte::new_exact((val_high << 4) | val_low));
-                } else if is_c1_hex && is_c2_wild {
-                    let val_high = c1.to_digit(16).expect("valid hex digit") as u8;
+                } else if is_b1_hex && is_b2_wild {
+                    let val_high = (b1 as char).to_digit(16)? as u8;
                     pattern.push(PatternByte {
                         value: val_high << 4,
                         mask: 0xF0,
                     });
-                } else if is_c1_wild && is_c2_hex {
-                    let val_low = c2.to_digit(16).expect("valid hex digit") as u8;
+                } else if is_b1_wild && is_b2_hex {
+                    let val_low = (b2 as char).to_digit(16)? as u8;
                     pattern.push(PatternByte { value: val_low, mask: 0x0F });
                 } else {
                     return None;
                 }
                 i += 2;
             } else {
-                if c1 == '?' || c1 == '*' {
+                if b1 == b'?' || b1 == b'*' {
                     pattern.push(PatternByte::new_wildcard());
-                } else if c1.is_ascii_hexdigit() {
-                    let val = c1.to_digit(16).expect("valid hex digit") as u8;
+                } else if b1.is_ascii_hexdigit() {
+                    let val = (b1 as char).to_digit(16)? as u8;
                     pattern.push(PatternByte::new_exact(val));
                 } else {
                     return None;

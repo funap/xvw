@@ -3,12 +3,19 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Represents the lifecycle status of structure parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StructureParseStatus {
+    #[default]
+    Idle,
+    Parsing,
+    Finalizing,
+}
+
 /// Encapsulates Kaitai Struct parsing and inline visualization state for [`Editor`].
 #[derive(Clone, Debug)]
 pub struct EditorStructureState {
-    pub is_parsing: bool,
-    /// True after byte parsing reaches the end and display indexes are being finalized.
-    pub is_finalizing: bool,
+    pub status: StructureParseStatus,
     pub progress_offset: usize,
     pub total_size: usize,
     pub generation: usize,
@@ -24,8 +31,7 @@ pub struct EditorStructureState {
 impl Default for EditorStructureState {
     fn default() -> Self {
         Self {
-            is_parsing: false,
-            is_finalizing: false,
+            status: StructureParseStatus::Idle,
             progress_offset: 0,
             total_size: 0,
             generation: 0,
@@ -43,21 +49,49 @@ impl EditorStructureState {
         Self::default()
     }
 
+    #[inline]
+    pub fn is_idle(&self) -> bool {
+        matches!(self.status, StructureParseStatus::Idle)
+    }
+
+    #[inline]
+    pub fn is_parsing(&self) -> bool {
+        matches!(self.status, StructureParseStatus::Parsing)
+    }
+
+    #[inline]
+    pub fn is_finalizing(&self) -> bool {
+        matches!(self.status, StructureParseStatus::Finalizing)
+    }
+
+    #[inline]
+    pub fn set_idle(&mut self) {
+        self.status = StructureParseStatus::Idle;
+    }
+
+    #[inline]
+    pub fn set_parsing(&mut self) {
+        self.status = StructureParseStatus::Parsing;
+    }
+
+    #[inline]
+    pub fn set_finalizing(&mut self) {
+        self.status = StructureParseStatus::Finalizing;
+    }
+
     pub fn cancel(&mut self) {
         if let Some(token) = self.cancel_token.take() {
             token.store(true, Ordering::SeqCst);
         }
         self.generation = self.generation.wrapping_add(1);
         self.reparse_requested = false;
-        self.is_parsing = false;
-        self.is_finalizing = false;
+        self.status = StructureParseStatus::Idle;
     }
 
     pub fn reset_progress(&mut self) {
         self.progress_offset = 0;
         self.total_size = 0;
-        self.is_parsing = false;
-        self.is_finalizing = false;
+        self.status = StructureParseStatus::Idle;
     }
 
     pub fn toggle_collapsed(&mut self, struct_id: &str) {
@@ -96,15 +130,13 @@ impl EditorStructureState {
         self.cancel();
         self.is_async = true;
         self.reparse_requested = false;
-        self.is_parsing = true;
-        self.is_finalizing = false;
+        self.status = StructureParseStatus::Parsing;
         self.progress_offset = 0;
         self.total_size = total_size;
         self.cancel_token = Some(cancel_token);
     }
 
     pub fn finish_parse(&mut self) {
-        self.is_parsing = false;
-        self.is_finalizing = false;
+        self.status = StructureParseStatus::Idle;
     }
 }

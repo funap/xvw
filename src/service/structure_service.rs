@@ -270,14 +270,18 @@ impl StructureService {
                     if editor.structure.generation != generation {
                         return ParseUpdateDelivery::Stale(batch);
                     }
-                    if !editor.structure.is_parsing && !batch.is_done {
+                    if !editor.structure.is_parsing() && !batch.is_done {
                         return ParseUpdateDelivery::Stale(batch);
                     }
                     let is_done = batch.is_done;
                     let has_more_fields = batch.has_more_fields;
                     editor.structure.progress_offset = batch.parsed_offset;
                     editor.structure.total_size = batch.total_bytes;
-                    editor.structure.is_finalizing = batch.is_finalizing;
+                    if batch.is_finalizing {
+                        editor.structure.set_finalizing();
+                    } else if editor.structure.is_finalizing() {
+                        editor.structure.set_parsing();
+                    }
                     if let Some(res) = batch.parse_result {
                         editor.set_parse_result_arc(res);
                     } else if !batch.fields.is_empty() {

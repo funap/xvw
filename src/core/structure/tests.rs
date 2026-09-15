@@ -1096,11 +1096,11 @@ seq:
 
     assert_eq!(editor.line_starts(), vec![0, 2, 4]);
 
-    editor.structure.is_parsing = true;
+    editor.structure.set_parsing();
     editor.invalidate_line_map();
     assert_eq!(editor.line_starts(), vec![0]);
 
-    editor.structure.is_parsing = false;
+    editor.structure.set_idle();
     editor.invalidate_line_map();
     assert_eq!(editor.line_starts(), vec![0, 2, 4]);
 }
@@ -1534,20 +1534,20 @@ fn test_editor_parse_progress_tracking() {
 
     assert_eq!(editor.structure.progress_offset, 0);
     assert_eq!(editor.structure.total_size, 0);
-    assert!(!editor.structure.is_parsing);
+    assert!(!editor.structure.is_parsing());
 
     // Update progress
-    editor.structure.is_parsing = true;
+    editor.structure.set_parsing();
     editor.update_parse_progress(2, 4, None);
     assert_eq!(editor.structure.progress_offset, 2);
     assert_eq!(editor.structure.total_size, 4);
-    assert!(editor.structure.is_parsing);
+    assert!(editor.structure.is_parsing());
 
     // Clear
     editor.clear_structure_definition();
     assert_eq!(editor.structure.progress_offset, 0);
     assert_eq!(editor.structure.total_size, 0);
-    assert!(!editor.structure.is_parsing);
+    assert!(!editor.structure.is_parsing());
 }
 
 #[test]
@@ -1584,7 +1584,7 @@ fn test_clear_structure_definition_discards_a_completed_result() {
 
     assert!(editor.ksy_definition().is_none());
     assert!(editor.parse_result().is_none());
-    assert!(!editor.structure.is_parsing);
+    assert!(!editor.structure.is_parsing());
     assert!(!editor.structure.is_async);
     assert_eq!(editor.structure.progress_offset, 0);
     assert_eq!(editor.structure.total_size, 0);

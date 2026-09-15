@@ -264,7 +264,7 @@ impl StructTreeView {
                     r.fields.len(),
                     doc_version,
                     editor_lock.structure.generation,
-                    editor_lock.structure.is_parsing,
+                    editor_lock.structure.is_parsing(),
                 )
             });
             (parse_id, editor_lock.cursor.offset)
@@ -1154,7 +1154,7 @@ impl Render for StructTreeView {
         let table_overlay = VirtualTable::render_table_overlay(&self.table_state, cx, |this| &mut this.table_state);
 
         let view = cx.entity().clone();
-        let is_parsing = self.editor.as_ref().is_some_and(|ed| ed.read(cx).structure.is_parsing);
+        let is_parsing = self.editor.as_ref().is_some_and(|ed| ed.read(cx).structure.is_parsing());
         let is_empty = self.flattened_fields.is_empty() && self.parse_result.as_ref().is_none_or(|result| result.fields.is_empty());
         let show_parsing_placeholder = is_parsing && self.flattened_fields.is_empty();
         let is_focused = self.focus_handle.is_focused(window);
@@ -1162,7 +1162,7 @@ impl Render for StructTreeView {
         let has_active_editor = self.editor.is_some();
         let parse_progress = self.editor.as_ref().and_then(|editor| {
             let editor = editor.read(cx);
-            if !editor.structure.is_parsing && !editor.structure.is_finalizing {
+            if editor.structure.is_idle() {
                 return None;
             }
 
@@ -1176,7 +1176,7 @@ impl Render for StructTreeView {
             } else {
                 0.0
             };
-            Some((progress, editor.structure.progress_offset, total_bytes, editor.structure.is_finalizing))
+            Some((progress, editor.structure.progress_offset, total_bytes, editor.structure.is_finalizing()))
         });
 
         let has_structure = self.parse_result.as_ref().is_some_and(|result| !result.fields.is_empty()) || !self.flattened_fields.is_empty();

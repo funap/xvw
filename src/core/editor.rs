@@ -745,18 +745,18 @@ impl Editor {
         self.layout.line_starts(
             &doc,
             self.structure.show_inline_structure_view,
-            self.structure.is_parsing,
+            self.structure.is_parsing(),
             &self.structure.collapsed_struct_ids,
         )
     }
 
     pub fn has_custom_layout(&self) -> bool {
         let doc = self.document.read().expect("document read lock");
-        LayoutEngine::has_custom_layout(&doc, self.structure.show_inline_structure_view, self.structure.is_parsing)
+        LayoutEngine::has_custom_layout(&doc, self.structure.show_inline_structure_view, self.structure.is_parsing())
     }
 
     pub fn has_custom_layout_doc(&self, doc: &Document) -> bool {
-        LayoutEngine::has_custom_layout(doc, self.structure.show_inline_structure_view, self.structure.is_parsing)
+        LayoutEngine::has_custom_layout(doc, self.structure.show_inline_structure_view, self.structure.is_parsing())
     }
     pub fn parse_result(&self) -> Option<Arc<ParseResult>> {
         self.document.read().expect("document read lock").metadata.parse_result.clone()
@@ -1075,7 +1075,9 @@ impl Editor {
 
     pub fn set_parse_result(&mut self, result: ParseResult) {
         self.structure.progress_offset = result.total_parsed_bytes;
-        self.structure.is_finalizing = false;
+        if self.structure.is_finalizing() {
+            self.structure.set_idle();
+        }
         {
             let mut doc = self.document.write().expect("document write lock");
             doc.bump_layout_version();
@@ -1094,7 +1096,9 @@ impl Editor {
         if let Some(old_res) = old {
             crate::core::dealloc::discard_in_background(old_res);
         }
-        self.structure.is_finalizing = false;
+        if self.structure.is_finalizing() {
+            self.structure.set_idle();
+        }
         self.layout.invalidate();
     }
 
@@ -1124,7 +1128,9 @@ impl Editor {
 
     pub fn set_parse_result_arc(&mut self, result: Arc<ParseResult>) {
         self.structure.progress_offset = result.total_parsed_bytes;
-        self.structure.is_finalizing = false;
+        if self.structure.is_finalizing() {
+            self.structure.set_idle();
+        }
         let old = {
             let mut doc = self.document.write().expect("document write lock");
             doc.bump_layout_version();
@@ -1185,8 +1191,7 @@ impl Editor {
         if self.structure.is_async && self.ksy_definition().is_some() {
             self.cancel_structure_parsing();
             self.structure.reparse_requested = true;
-            self.structure.is_parsing = true;
-            self.structure.is_finalizing = false;
+            self.structure.set_parsing();
             self.structure.progress_offset = 0;
             self.structure.total_size = self.total_size();
 
