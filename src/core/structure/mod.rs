@@ -1,7 +1,9 @@
+pub mod collection;
 pub mod definition;
 pub mod export;
 pub mod expression;
 pub mod history;
+pub mod index;
 pub mod interpreter;
 pub mod palette;
 pub mod stream;
