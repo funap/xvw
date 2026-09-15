@@ -125,9 +125,62 @@ impl Document {
         &self.path
     }
 
+    /// Returns a reference to the underlying buffer.
+    pub fn buffer(&self) -> &Buffer {
+        &self.buffer
+    }
+
+    /// Returns the length of the document buffer in bytes.
+    pub fn len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    /// Returns true if the document buffer is empty.
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+
+    /// Returns a slice of the document's byte data.
+    pub fn data(&self) -> &[u8] {
+        self.buffer.data()
+    }
+
+    /// Returns a reference to the document's edit history.
+    pub fn history(&self) -> &History {
+        &self.history
+    }
+
+    /// Returns a reference to the document's address map.
+    pub fn address_map(&self) -> &AddressMap {
+        &self.address_map
+    }
+
+    /// Returns a reference to the document's metadata.
+    pub fn metadata(&self) -> &DocumentMetadata {
+        &self.metadata
+    }
+
+    /// Returns a mutable reference to the document's metadata.
+    pub fn metadata_mut(&mut self) -> &mut DocumentMetadata {
+        &mut self.metadata
+    }
+
     /// Changes the file path used by subsequent save operations.
     pub fn set_path(&mut self, path: PathBuf) {
         self.path = path;
+    }
+
+    /// Atomically replaces bytes, adjusting address map and layout metadata.
+    /// Does nothing and returns false if the document is read-only.
+    pub fn replace_bytes(&mut self, offset: usize, old_len: usize, new_bytes: &[u8]) -> bool {
+        if self.read_only {
+            return false;
+        }
+        let new_len = new_bytes.len();
+        self.buffer.replace_range(offset..offset.saturating_add(old_len), new_bytes);
+        self.address_map.adjust_after_edit(offset, old_len, new_len);
+        self.adjust_metadata_after_edit(offset, old_len, new_len);
+        true
     }
 
     /// Returns true if the document has unsaved changes.
@@ -411,5 +464,32 @@ mod tests {
         assert!(doc.can_undo());
         assert!(!doc.can_redo());
         assert!(doc.is_dirty());
+    }
+
+    #[test]
+    fn test_read_only_invariant_blocks_replace_bytes() {
+        let mut doc = Document::new_read_only(PathBuf::from("readonly.bin"), Buffer::new(b"immutable".to_vec()));
+        assert!(doc.is_read_only());
+
+        // Attempting direct replace_bytes should fail and return false
+        assert!(!doc.replace_bytes(0, 9, b"corrupted"));
+        assert_eq!(doc.data(), b"immutable");
+
+        // Attempting execute_command should also return None
+        use crate::core::command::ReplaceRangeCommand;
+        assert!(
+            doc.execute_command(Box::new(ReplaceRangeCommand::new(0, b"immutable".to_vec(), b"corrupted".to_vec())))
+                .is_none()
+        );
+        assert_eq!(doc.data(), b"immutable");
+    }
+
+    #[test]
+    fn test_document_accessors() {
+        let doc = Document::new(PathBuf::from("test.bin"), Buffer::new(b"test data".to_vec()));
+        assert_eq!(doc.len(), 9);
+        assert!(!doc.is_empty());
+        assert_eq!(doc.data(), b"test data");
+        assert_eq!(doc.buffer().len(), 9);
     }
 }

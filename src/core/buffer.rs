@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -133,74 +132,6 @@ impl Buffer {
     }
 }
 
-/// Trait representing an abstract readable binary data source.
-#[allow(dead_code)]
-pub trait BinarySource: Send + Sync {
-    /// Returns the length of the binary source in bytes.
-    fn len(&self) -> usize;
-
-    /// Returns true if the binary source contains no bytes.
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Returns a slice of the binary source in the specified range as a `Cow<[u8]>`.
-    /// Out-of-bounds ranges are clamped safely.
-    fn slice(&self, range: Range<usize>) -> Cow<'_, [u8]>;
-
-    /// Returns the byte at the specified offset, or `None` if out of bounds.
-    fn byte_at(&self, offset: usize) -> Option<u8>;
-}
-
-impl BinarySource for Buffer {
-    fn len(&self) -> usize {
-        self.len()
-    }
-
-    fn slice(&self, range: Range<usize>) -> Cow<'_, [u8]> {
-        let slice = self.data.as_slice();
-        let start = range.start.min(slice.len());
-        let end = range.end.min(slice.len()).max(start);
-        Cow::Borrowed(&slice[start..end])
-    }
-
-    fn byte_at(&self, offset: usize) -> Option<u8> {
-        self.data.as_slice().get(offset).copied()
-    }
-}
-
-impl BinarySource for [u8] {
-    fn len(&self) -> usize {
-        <[u8]>::len(self)
-    }
-
-    fn slice(&self, range: Range<usize>) -> Cow<'_, [u8]> {
-        let start = range.start.min(self.len());
-        let end = range.end.min(self.len()).max(start);
-        Cow::Borrowed(&self[start..end])
-    }
-
-    fn byte_at(&self, offset: usize) -> Option<u8> {
-        self.get(offset).copied()
-    }
-}
-
-impl BinarySource for Vec<u8> {
-    fn len(&self) -> usize {
-        self.len()
-    }
-
-    fn slice(&self, range: Range<usize>) -> Cow<'_, [u8]> {
-        let start = range.start.min(self.len());
-        let end = range.end.min(self.len()).max(start);
-        Cow::Borrowed(&self[start..end])
-    }
-
-    fn byte_at(&self, offset: usize) -> Option<u8> {
-        self.get(offset).copied()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,29 +198,5 @@ mod tests {
 
         assert_eq!(buffer.replace_range(1..3, &[5, 6, 7]), vec![3, 4]);
         assert_eq!(buffer.data(), &[1, 5, 6, 7]);
-    }
-
-    #[test]
-    fn test_binary_source_trait() {
-        let buffer = Buffer::new(vec![10, 20, 30, 40, 50]);
-        let source: &dyn BinarySource = &buffer;
-
-        assert_eq!(source.len(), 5);
-        assert!(!source.is_empty());
-        assert_eq!(source.byte_at(0), Some(10));
-        assert_eq!(source.byte_at(4), Some(50));
-        assert_eq!(source.byte_at(5), None);
-
-        assert_eq!(source.slice(1..4).as_ref(), &[20, 30, 40]);
-        assert_eq!(source.slice(3..10).as_ref(), &[40, 50]);
-        assert_eq!(source.slice(10..20).as_ref(), &[] as &[u8]);
-
-        let slice_ref: &[u8] = &[1, 2, 3];
-        assert_eq!(slice_ref.byte_at(1), Some(2));
-        assert_eq!(slice_ref.slice(0..2).as_ref(), &[1, 2]);
-
-        let vec_source: Vec<u8> = vec![100, 200];
-        assert_eq!(vec_source.byte_at(0), Some(100));
-        assert_eq!(vec_source.slice(1..2).as_ref(), &[200]);
     }
 }

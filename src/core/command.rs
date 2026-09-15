@@ -51,9 +51,9 @@ impl Command for ReplaceRangeCommand {
         }
         let old_len = self.old.len();
         let new_len = self.new.len();
-        doc.buffer.replace_range(self.position..self.position.saturating_add(old_len), &self.new);
-        doc.address_map.adjust_after_edit(self.position, old_len, new_len);
-        doc.adjust_metadata_after_edit(self.position, old_len, new_len);
+        if !doc.replace_bytes(self.position, old_len, &self.new) {
+            return None;
+        }
         Some(EditDelta {
             offset: self.position,
             old_len,
@@ -67,9 +67,9 @@ impl Command for ReplaceRangeCommand {
         }
         let old_len = self.old.len();
         let new_len = self.new.len();
-        doc.buffer.replace_range(self.position..self.position.saturating_add(new_len), &self.old);
-        doc.address_map.adjust_after_edit(self.position, new_len, old_len);
-        doc.adjust_metadata_after_edit(self.position, new_len, old_len);
+        if !doc.replace_bytes(self.position, new_len, &self.old) {
+            return None;
+        }
         Some(EditDelta {
             offset: self.position,
             old_len: new_len,
