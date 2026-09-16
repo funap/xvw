@@ -169,19 +169,13 @@ impl ParseUpdateMailbox {
 
 /// Service managing asynchronous structure parsing, progress streaming,
 /// and background object lifecycle management.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct StructureService;
 
 impl StructureService {
     /// Creates a new `StructureService`.
     pub fn new() -> Self {
         Self
-    }
-
-    /// Safely discards heavy AST/field data structures on a background thread pool.
-    #[allow(dead_code)]
-    pub fn discard_in_background<T: Send + 'static>(&self, value: T) {
-        crate::core::dealloc::discard_in_background(value);
     }
 
     /// Spawns background structure parsing with incremental progress streaming.
@@ -217,14 +211,16 @@ impl StructureService {
         let cancel_token_clone = cancel_token.clone();
 
         let (doc_arc, doc_path, generation) = editor_entity.update(cx, |editor, cx| {
-            let total = editor.document.read().expect("document read lock").buffer.len();
-            let path = editor.document.read().ok().map(|d| d.path().to_path_buf());
+            let (total, path) = {
+                let doc = editor.document.read().expect("document read lock");
+                (doc.buffer.len(), doc.path().to_path_buf())
+            };
             editor.structure.start_async_parse(total, cancel_token.clone());
             editor.set_ksy_definition(ksy.clone());
             editor.begin_partial_parse_result(ksy.meta.id.clone());
             editor.invalidate_line_map();
             cx.notify();
-            (editor.document.clone(), path, editor.structure.generation)
+            (editor.document.clone(), Some(path), editor.structure.generation)
         });
 
         if let Some(ref path) = doc_path {
@@ -235,7 +231,7 @@ impl StructureService {
         let mailbox = Arc::new(ParseUpdateMailbox::new());
         let producer_mailbox = mailbox.clone();
 
-        let buffer = { if let Ok(doc) = doc_arc.read() { doc.buffer.clone() } else { Buffer::empty() } };
+        let buffer = doc_arc.read().map(|doc| doc.buffer.clone()).unwrap_or_else(|_| Buffer::empty());
 
         let progress_mailbox = producer_mailbox.clone();
         self.parse_structure_async(
@@ -394,9 +390,9 @@ mod tests {
     }
 
     #[test]
-    fn test_structure_service_discard() {
+    fn test_structure_service_new() {
         let service = StructureService::new();
-        let heavy_data = vec![0u8; 1024];
-        service.discard_in_background(heavy_data);
+        let _cloned = service.clone();
+        assert_eq!(format!("{service:?}"), "StructureService");
     }
 }

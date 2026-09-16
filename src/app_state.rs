@@ -1,7 +1,4 @@
-use crate::service::diff_service::DiffService;
-use crate::service::document_service::DocumentService;
-use crate::service::search_service::SearchService;
-use crate::service::structure_service::StructureService;
+use crate::service::{DiffService, DocumentService, SearchService, StructureService};
 use gpui_kit::{App, BorrowAppContext, Global};
 
 /// Application-wide editing mode shared by every open document view.

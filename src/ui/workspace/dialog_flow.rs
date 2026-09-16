@@ -1087,7 +1087,7 @@ impl Workspace {
 
 async fn save_single_dirty_document(
     window: &mut AsyncWindowContext,
-    service: &crate::service::document_service::DocumentService,
+    service: &crate::service::DocumentService,
     doc: Arc<RwLock<crate::core::document::Document>>,
     title: &str,
 ) -> Result<(), ()> {

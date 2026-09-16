@@ -19,7 +19,7 @@ use crate::actions::{
 use crate::app_state::{AppState, InsertModeState};
 use crate::core::editor::Editor;
 use crate::core::search::SearchMode;
-use crate::service::document_service::DocumentService;
+use crate::service::DocumentService;
 use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 use crate::ui::views::hex_view::{self, HexView};

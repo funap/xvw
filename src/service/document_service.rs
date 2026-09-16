@@ -1,22 +1,50 @@
+use crate::core::address_map::AddressMap;
 use crate::core::buffer::Buffer;
 use crate::core::document::Document;
 use crate::core::editor::Editor;
+use crate::core::format::FileFormat;
 use gpui_kit::{App, Entity, EntityId, Task, WeakEntity};
 use std::collections::HashMap;
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+/// Determines the target file format for saving, preferring file extensions if applicable.
+pub fn determine_export_format(path: &Path, fallback_format: FileFormat) -> FileFormat {
+    if crate::core::hex_import::is_mot_extension(path) {
+        FileFormat::MotorolaSrec
+    } else if crate::core::hex_import::is_hex_extension(path) {
+        FileFormat::IntelHex
+    } else if crate::core::format::is_base64_extension(path) {
+        FileFormat::Base64
+    } else {
+        fallback_format
+    }
+}
+
+/// Serializes raw buffer bytes and address map into the bytes corresponding to the target format.
+pub fn export_document_bytes(contents: &[u8], address_map: &AddressMap, format: FileFormat) -> Vec<u8> {
+    match format {
+        FileFormat::MotorolaSrec | FileFormat::HexOrMot => crate::core::hex_import::export_motorola_srec(contents, address_map).into_bytes(),
+        FileFormat::IntelHex => crate::core::hex_import::export_intel_hex(contents, address_map).into_bytes(),
+        FileFormat::Binary => crate::core::hex_import::export_raw_binary(contents, address_map, 0x00),
+        FileFormat::Base64 => crate::core::format::export_base64(contents, address_map).into_bytes(),
+    }
+}
+
 /// A service for managing file buffers, documents, and synchronization across open views.
 /// It caches open files to avoid redundant reads and ensures thread-safe access.
-#[allow(dead_code)]
 #[derive(Clone)]
 pub struct DocumentService {
     documents: Arc<RwLock<HashMap<PathBuf, Arc<RwLock<Document>>>>>,
     editors: Arc<RwLock<HashMap<PathBuf, Vec<WeakEntity<Editor>>>>>,
 }
 
-#[allow(dead_code)]
+impl std::fmt::Debug for DocumentService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DocumentService").finish_non_exhaustive()
+    }
+}
+
 impl DocumentService {
     /// Creates a new, empty DocumentService.
     pub fn new() -> Self {
@@ -97,6 +125,9 @@ impl DocumentService {
         let path_clone = path.clone();
         let buffer = tokio::task::spawn_blocking(move || -> anyhow::Result<Buffer> {
             let file = std::fs::File::open(&path_clone)?;
+            if file.metadata()?.len() == 0 {
+                return Ok(Buffer::empty());
+            }
             // SAFETY: Memory mapping the opened file is safe as long as the file is not
             // concurrently truncated or modified outside this process. Buffer encapsulates
             // read-only access to this memory mapping.
@@ -121,6 +152,7 @@ impl DocumentService {
     }
 
     /// Closes a file by removing it from the document cache.
+    #[allow(dead_code)]
     pub fn close_file(&self, path: &std::path::Path) {
         let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let mut documents = self.documents.write().expect("documents write lock");
@@ -130,27 +162,20 @@ impl DocumentService {
     /// Writes the current document snapshot to its path on a background
     /// executor. The document lock is released before any filesystem await.
     pub fn save_document(&self, document: Arc<RwLock<Document>>, cx: &App) -> Task<anyhow::Result<()>> {
-        let (path, contents, address_map, format) = {
+        let (path, buffer, address_map, format) = {
             let document = document.read().expect("document read lock");
             if document.is_read_only() {
                 return cx.background_executor().spawn(async { Err(anyhow::anyhow!("document is read-only")) });
             }
             (
                 document.path().to_path_buf(),
-                document.buffer.data().to_vec(),
+                document.buffer.clone(),
                 document.address_map.clone(),
                 document.format,
             )
         };
         cx.background_executor().spawn(async move {
-            let bytes_to_write = match format {
-                crate::core::format::FileFormat::MotorolaSrec | crate::core::format::FileFormat::HexOrMot => {
-                    crate::core::hex_import::export_motorola_srec(&contents, &address_map).into_bytes()
-                }
-                crate::core::format::FileFormat::IntelHex => crate::core::hex_import::export_intel_hex(&contents, &address_map).into_bytes(),
-                crate::core::format::FileFormat::Binary => crate::core::hex_import::export_raw_binary(&contents, &address_map, 0x00),
-                crate::core::format::FileFormat::Base64 => crate::core::format::export_base64(&contents, &address_map).into_bytes(),
-            };
+            let bytes_to_write = export_document_bytes(buffer.data(), &address_map, format);
             std::fs::write(path, bytes_to_write)?;
             Ok(())
         })
@@ -159,77 +184,16 @@ impl DocumentService {
     /// Writes a document snapshot to an explicit path on a background
     /// executor. This is used by Save As workflows.
     pub fn save_document_to_path(&self, document: Arc<RwLock<Document>>, path: PathBuf, cx: &App) -> Task<anyhow::Result<()>> {
-        let (contents, address_map, format) = {
+        let (buffer, address_map, format) = {
             let document = document.read().expect("document read lock");
-            (document.buffer.data().to_vec(), document.address_map.clone(), document.format)
+            let target_format = determine_export_format(&path, document.format);
+            (document.buffer.clone(), document.address_map.clone(), target_format)
         };
         cx.background_executor().spawn(async move {
-            let bytes_to_write = if crate::core::hex_import::is_mot_extension(&path) {
-                crate::core::hex_import::export_motorola_srec(&contents, &address_map).into_bytes()
-            } else if crate::core::hex_import::is_hex_extension(&path) {
-                crate::core::hex_import::export_intel_hex(&contents, &address_map).into_bytes()
-            } else if crate::core::format::is_base64_extension(&path) {
-                crate::core::format::export_base64(&contents, &address_map).into_bytes()
-            } else {
-                match format {
-                    crate::core::format::FileFormat::MotorolaSrec | crate::core::format::FileFormat::HexOrMot => {
-                        crate::core::hex_import::export_motorola_srec(&contents, &address_map).into_bytes()
-                    }
-                    crate::core::format::FileFormat::IntelHex => crate::core::hex_import::export_intel_hex(&contents, &address_map).into_bytes(),
-                    crate::core::format::FileFormat::Binary => crate::core::hex_import::export_raw_binary(&contents, &address_map, 0x00),
-                    crate::core::format::FileFormat::Base64 => crate::core::format::export_base64(&contents, &address_map).into_bytes(),
-                }
-            };
+            let bytes_to_write = export_document_bytes(buffer.data(), &address_map, format);
             std::fs::write(path, bytes_to_write)?;
             Ok(())
         })
-    }
-
-    /// Searches for a query in the given buffer based on the search options.
-    /// Returns a Task that executes the search in the background.
-    pub fn search(&self, buffer: Arc<Buffer>, query: String, options: crate::core::search::SearchOptions, cx: &App) -> Task<Vec<usize>> {
-        crate::service::search_service::SearchService.search(buffer, query, options, cx)
-    }
-
-    /// Searches for a query in the given buffer respecting memory segment boundaries.
-    pub fn search_with_segments(
-        &self,
-        buffer: Arc<Buffer>,
-        query: String,
-        options: crate::core::search::SearchOptions,
-        segments: Vec<std::ops::Range<usize>>,
-        cx: &App,
-    ) -> Task<Vec<usize>> {
-        crate::service::search_service::SearchService.search_with_segments(buffer, query, options, segments, cx)
-    }
-
-    /// Performs a search and updates the provided Editor entity with the results.
-    pub fn perform_search(
-        &self,
-        editor: Entity<crate::core::editor::Editor>,
-        query: String,
-        options: crate::core::search::SearchOptions,
-        generation: usize,
-        is_full: bool,
-        cx: &App,
-    ) -> Task<()> {
-        crate::service::search_service::SearchService.perform_search(editor, query, options, generation, is_full, cx)
-    }
-
-    /// Performs an incremental search: immediate viewport search followed by background full search.
-    pub fn incremental_search(
-        &self,
-        editor: Entity<Editor>,
-        query: String,
-        mode: crate::core::search::SearchMode,
-        viewport_range: Range<usize>,
-        cx: &App,
-    ) -> (Task<()>, Task<()>) {
-        crate::service::search_service::SearchService.incremental_search(editor, query, mode, viewport_range, cx)
-    }
-
-    pub fn compute_diff(&self, left: Arc<RwLock<Document>>, right: Arc<RwLock<Document>>, cx: &App) -> Task<crate::core::diff::DiffResult> {
-        crate::service::diff_service::DiffService.compute_diff(left, right, cx)
     }
 }
 
@@ -366,5 +330,37 @@ mod tests {
         assert_eq!(b64_string.trim(), "SGVsbG8=");
         let parsed = crate::core::format::parse_base64(&b64_string).expect("parse exported base64");
         assert_eq!(parsed, b"Hello");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn open_file_opens_empty_file_successfully() {
+        let file = TestFile::create("empty", &[]);
+        let service = DocumentService::new();
+        let doc_arc = service.open_file(file.path().to_path_buf()).await.expect("open empty file");
+        let doc = doc_arc.read().unwrap();
+        assert!(doc.buffer.is_empty());
+        assert_eq!(doc.buffer.len(), 0);
+    }
+
+    #[test]
+    fn test_determine_export_format_extension_detection() {
+        assert_eq!(determine_export_format(Path::new("file.mot"), FileFormat::Binary), FileFormat::MotorolaSrec);
+        assert_eq!(determine_export_format(Path::new("file.hex"), FileFormat::Binary), FileFormat::IntelHex);
+        assert_eq!(determine_export_format(Path::new("file.b64"), FileFormat::Binary), FileFormat::Base64);
+        assert_eq!(determine_export_format(Path::new("file.bin"), FileFormat::Binary), FileFormat::Binary);
+    }
+
+    #[test]
+    fn test_export_document_bytes_binary_and_base64() {
+        let contents = b"Test binary data";
+        let map = AddressMap::default();
+
+        let raw = export_document_bytes(contents, &map, FileFormat::Binary);
+        assert_eq!(raw, contents);
+
+        let b64 = export_document_bytes(contents, &map, FileFormat::Base64);
+        let b64_str = String::from_utf8(b64).expect("valid utf-8 base64");
+        let decoded = crate::core::format::parse_base64(&b64_str).expect("decode base64");
+        assert_eq!(decoded, contents);
     }
 }
