@@ -160,6 +160,28 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+/// Category grouping for checksum and hash algorithms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChecksumCategory {
+    Sums,
+    Crc,
+    Crypto,
+}
+
+impl ChecksumCategory {
+    /// List of all supported categories in presentation order.
+    pub const ALL: &'static [ChecksumCategory] = &[ChecksumCategory::Sums, ChecksumCategory::Crc, ChecksumCategory::Crypto];
+
+    /// Returns the UI display label for this category.
+    pub const fn label(&self) -> &'static str {
+        match self {
+            Self::Sums => "Basic Sums",
+            Self::Crc => "CRCs & Adler",
+            Self::Crypto => "Cryptographic Hashes",
+        }
+    }
+}
+
 /// Supported checksum and cryptographic hash algorithms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChecksumAlgorithm {
@@ -189,6 +211,15 @@ impl ChecksumAlgorithm {
         ChecksumAlgorithm::Md5,
         ChecksumAlgorithm::Sha256,
     ];
+
+    /// Returns the category for this algorithm.
+    pub const fn category(&self) -> ChecksumCategory {
+        match self {
+            Self::Sum8 | Self::Sum16 | Self::Sum32 | Self::Sum64 => ChecksumCategory::Sums,
+            Self::Adler32 | Self::Crc16Ccitt | Self::Crc16Arc | Self::Crc32 => ChecksumCategory::Crc,
+            Self::Md5 | Self::Sha256 => ChecksumCategory::Crypto,
+        }
+    }
 
     /// Returns the UI display label for this algorithm.
     pub const fn label(&self) -> &'static str {
@@ -245,20 +276,9 @@ impl ChecksumResults {
         }
     }
 
-    /// Formats the result of a specific algorithm for UI display (including decimal representation where applicable).
+    /// Formats the result of a specific algorithm for UI display (hexadecimal representation).
     pub fn format_display(&self, algo: ChecksumAlgorithm) -> String {
-        match algo {
-            ChecksumAlgorithm::Sum8 => format!("0x{:02X} ({})", self.sum8, self.sum8),
-            ChecksumAlgorithm::Sum16 => format!("0x{:04X} ({})", self.sum16, self.sum16),
-            ChecksumAlgorithm::Sum32 => format!("0x{:08X} ({})", self.sum32, self.sum32),
-            ChecksumAlgorithm::Sum64 => format!("0x{:016X} ({})", self.sum64, self.sum64),
-            ChecksumAlgorithm::Adler32 => format!("0x{:08X}", self.adler32),
-            ChecksumAlgorithm::Crc16Ccitt => format!("0x{:04X}", self.crc16_ccitt),
-            ChecksumAlgorithm::Crc16Arc => format!("0x{:04X}", self.crc16_arc),
-            ChecksumAlgorithm::Crc32 => format!("0x{:08X}", self.crc32),
-            ChecksumAlgorithm::Md5 => self.format_hex(algo),
-            ChecksumAlgorithm::Sha256 => self.format_hex(algo),
-        }
+        self.format_hex(algo)
     }
 
     /// Formats the raw hex value of a specific algorithm (typically used for copying to clipboard).
@@ -379,5 +399,13 @@ mod tests {
         let all_str = results.format_all();
         assert!(all_str.contains("Sum 8-bit:"));
         assert!(all_str.contains("SHA-256:"));
+    }
+
+    #[test]
+    fn test_checksum_categories() {
+        assert_eq!(ChecksumCategory::ALL.len(), 3);
+        assert_eq!(ChecksumAlgorithm::Sum8.category(), ChecksumCategory::Sums);
+        assert_eq!(ChecksumAlgorithm::Crc32.category(), ChecksumCategory::Crc);
+        assert_eq!(ChecksumAlgorithm::Sha256.category(), ChecksumCategory::Crypto);
     }
 }
