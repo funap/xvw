@@ -1,6 +1,6 @@
-use super::layout::{build_ascii_char_map, calculate_scroll_top_for_range, centered_glyph_offset};
-use super::paint::highlight_color_for_range;
-use super::types::{AUTO_FIT_SCAN_BYTES, AsciiChar, HexViewLayout, HexViewLayoutState, HorizontalScrollTarget, LayoutInput, ScrollColumn};
+use super::layout::{build_ascii_char_map, calculate_scroll_top_for_range, centered_glyph_offset, cursor_in_row_offset, is_cursor_header_column};
+use super::paint::{highlight_color_for_range, is_cursor_row};
+use super::types::{AUTO_FIT_SCAN_BYTES, AsciiChar, HexGroupInfo, HexViewLayout, HexViewLayoutState, HorizontalScrollTarget, LayoutInput, ScrollColumn};
 use super::{
     HexView, ascii_byte_index_from_world_x, bounded_auto_fit_range, build_hex_text_source, can_chain_to_outer, hex_grid_width, hex_grid_x,
     make_hex_view_layout, weighted_text_width,
@@ -9,6 +9,7 @@ use crate::core::buffer::Buffer;
 use crate::core::document::Document;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
+use crate::core::layout::LineMap;
 use crate::core::radix::{ByteGroupSize, DisplayRadix};
 use crate::core::structure::types::{FieldValue, ParseResult, ParsedField};
 use gpui_kit::{hsla, px};
@@ -469,6 +470,102 @@ fn check_hex_editing_state() {
     assert_eq!(crate::core::radix::prev_visual_byte(3, 4, ByteGroupSize::Two, false), 0);
 }
 
+fn check_cursor_row_and_header_highlight() {
+    let line_starts = LineMap::Standard {
+        total_size: 32,
+        bytes_per_row: 16,
+    };
+
+    // 1. is_cursor_row for normal positions
+    // Cursor at offset 0 (Row 0)
+    assert!(is_cursor_row(0, 0, 0, 16, &line_starts, 32));
+    assert!(!is_cursor_row(0, 1, 16, 32, &line_starts, 32));
+
+    // Cursor at offset 15 (Row 0 end)
+    assert!(is_cursor_row(15, 0, 0, 16, &line_starts, 32));
+    assert!(!is_cursor_row(15, 1, 16, 32, &line_starts, 32));
+
+    // Cursor at offset 16 (Row 1 start)
+    assert!(!is_cursor_row(16, 0, 0, 16, &line_starts, 32));
+    assert!(is_cursor_row(16, 1, 16, 32, &line_starts, 32));
+
+    // Cursor at offset 25 (Row 1 middle)
+    assert!(!is_cursor_row(25, 0, 0, 16, &line_starts, 32));
+    assert!(is_cursor_row(25, 1, 16, 32, &line_starts, 32));
+
+    // 2. is_cursor_row for EOF with new line
+    // total_size 32: 32 bytes = 2 full rows (row 0, row 1). Cursor at 32 is on a new line (row 2).
+    assert!(!is_cursor_row(32, 0, 0, 16, &line_starts, 32));
+    assert!(!is_cursor_row(32, 1, 16, 32, &line_starts, 32));
+    assert!(is_cursor_row(32, 2, 32, 32, &line_starts, 32));
+
+    // 3. is_cursor_row for EOF without new line
+    let line_starts_20 = LineMap::Standard {
+        total_size: 20,
+        bytes_per_row: 16,
+    };
+    // total_size 20: row 0 [0, 16), row 1 [16, 20). Cursor at 20 is on row 1 (last line).
+    assert!(!is_cursor_row(20, 0, 0, 16, &line_starts_20, 20));
+    assert!(is_cursor_row(20, 1, 16, 20, &line_starts_20, 20));
+
+    // 4. is_cursor_row for empty file
+    let line_starts_empty = LineMap::Standard {
+        total_size: 0,
+        bytes_per_row: 16,
+    };
+    assert!(is_cursor_row(0, 0, 0, 0, &line_starts_empty, 0));
+
+    // 5. cursor_in_row_offset
+    assert_eq!(cursor_in_row_offset(0, 32, &line_starts), 0);
+    assert_eq!(cursor_in_row_offset(5, 32, &line_starts), 5);
+    assert_eq!(cursor_in_row_offset(15, 32, &line_starts), 15);
+    assert_eq!(cursor_in_row_offset(16, 32, &line_starts), 0);
+    assert_eq!(cursor_in_row_offset(21, 32, &line_starts), 5);
+    // EOF on new line -> offset is 0 on the new line
+    assert_eq!(cursor_in_row_offset(32, 32, &line_starts), 0);
+    // EOF not on new line -> offset is 4 on row 1
+    assert_eq!(cursor_in_row_offset(20, 20, &line_starts_20), 4);
+    // Empty buffer
+    assert_eq!(cursor_in_row_offset(0, 0, &line_starts_empty), 0);
+
+    // 6. is_cursor_header_column
+    // Group with 1-byte groups: 0..1, 1..2, ..., 15..16
+    let group_4 = HexGroupInfo {
+        chunk_start: 4,
+        chunk_end: 5,
+        start_slot: 0,
+        text_start: 0,
+        text_end: 2,
+    };
+    assert!(is_cursor_header_column(4, 4, group_4, 16));
+    assert!(!is_cursor_header_column(3, 4, group_4, 16));
+    assert!(!is_cursor_header_column(5, 4, group_4, 16));
+
+    // Group with 2-byte groups: e.g. 2..4 (+2)
+    let group_2 = HexGroupInfo {
+        chunk_start: 2,
+        chunk_end: 4,
+        start_slot: 0,
+        text_start: 0,
+        text_end: 4,
+    };
+    assert!(is_cursor_header_column(2, 1, group_2, 8));
+    assert!(is_cursor_header_column(3, 1, group_2, 8));
+    assert!(!is_cursor_header_column(1, 1, group_2, 8));
+    assert!(!is_cursor_header_column(4, 1, group_2, 8));
+
+    // Last column handling for position at/past end of line
+    let group_last = HexGroupInfo {
+        chunk_start: 15,
+        chunk_end: 16,
+        start_slot: 0,
+        text_start: 0,
+        text_end: 2,
+    };
+    assert!(is_cursor_header_column(15, 15, group_last, 16));
+    assert!(is_cursor_header_column(16, 15, group_last, 16));
+}
+
 #[test]
 fn test_hex_view_layout_suite() {
     check_layout_and_scrolling();
@@ -477,4 +574,5 @@ fn test_hex_view_layout_suite() {
     check_ascii_non_printable_mapping();
     check_calculate_scroll_top_for_range();
     check_hex_editing_state();
+    check_cursor_row_and_header_highlight();
 }

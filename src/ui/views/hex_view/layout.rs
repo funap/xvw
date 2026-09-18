@@ -268,3 +268,23 @@ pub fn calculate_scroll_top_for_range(current_scroll_top: usize, visible_rows: u
 
     if target_top != current_scroll_top { Some(target_top) } else { None }
 }
+
+/// Returns the byte offset of the cursor relative to the start of its containing row.
+pub fn cursor_in_row_offset(cursor_offset: usize, total_size: usize, line_starts: &crate::core::layout::LineMap) -> usize {
+    let last_line_idx = line_starts.len().saturating_sub(1);
+    let last_line_start = line_starts.get(last_line_idx).unwrap_or(0);
+    let bytes_per_row = line_starts.max_bytes_per_row();
+    let is_eof_on_new_line = total_size > last_line_start && (total_size - last_line_start) >= bytes_per_row;
+    let row = if is_eof_on_new_line && cursor_offset == total_size {
+        line_starts.len()
+    } else {
+        crate::core::editor::Editor::find_line_index(cursor_offset, line_starts)
+    };
+    let line_offset = line_starts.get(row).unwrap_or(total_size);
+    cursor_offset.saturating_sub(line_offset)
+}
+
+/// Returns whether the column group at `group_index` corresponds to the cursor's column position within the row.
+pub fn is_cursor_header_column(cursor_in_row: usize, group_index: usize, group: HexGroupInfo, total_groups: usize) -> bool {
+    group.chunk_start <= cursor_in_row && (cursor_in_row < group.chunk_end || (group_index + 1 == total_groups && cursor_in_row >= group.chunk_end))
+}

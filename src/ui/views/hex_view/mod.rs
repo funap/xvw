@@ -17,8 +17,8 @@ mod layout_tests;
 pub use actions::init;
 pub use actions::*;
 pub use layout::{
-    ascii_byte_index_from_world_x, bounded_auto_fit_range, build_hex_text_source, calculate_scroll_top_for_range, can_chain_to_outer, hex_grid_width,
-    hex_grid_x, hex_group_x, make_hex_view_layout, measure_hex_cell_width, weighted_text_width,
+    ascii_byte_index_from_world_x, bounded_auto_fit_range, build_hex_text_source, calculate_scroll_top_for_range, can_chain_to_outer, cursor_in_row_offset,
+    hex_grid_width, hex_grid_x, hex_group_x, is_cursor_header_column, make_hex_view_layout, measure_hex_cell_width, weighted_text_width,
 };
 pub use paint::{RowPaintParams, paint_hex_row, paint_scrollbar};
 pub use types::*;
@@ -2596,12 +2596,21 @@ impl Render for HexView {
             .unwrap_or(false);
 
         let header = if self.show_header {
+            let cursor_in_row = {
+                let editor = self.editor.read(cx);
+                let total_size = editor.total_size();
+                let line_starts = editor.line_starts();
+                cursor_in_row_offset(reveal_cursor_offset, total_size, &line_starts)
+            };
+            let total_groups = probe_source.groups.len();
             let mut hex_cols = Vec::with_capacity(items_in_row);
             for (i, group) in probe_source.groups.iter().enumerate() {
                 let byte_offset = i * group_bytes;
                 let label = SharedString::from(format!("+{:X}", byte_offset));
                 let group_start = f32::from(hex_grid_x(group.text_start, hex_cell_width));
                 let group_end = f32::from(hex_grid_x(group.text_end, hex_cell_width));
+                let is_cursor_col = is_cursor_header_column(cursor_in_row, i, *group, total_groups);
+                let col_color = if is_cursor_col { theme.foreground } else { theme.muted_foreground };
                 hex_cols.push(
                     div()
                         .absolute()
@@ -2614,7 +2623,7 @@ impl Render for HexView {
                         .justify_center()
                         .text_center()
                         .text_xs()
-                        .text_color(theme.muted_foreground)
+                        .text_color(col_color)
                         .child(label),
                 );
             }

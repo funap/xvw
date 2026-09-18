@@ -278,6 +278,18 @@ pub fn format_offset_08(offset: usize) -> SharedString {
     }
 }
 
+/// Returns whether the row at `row_idx` (with byte range `[offset, next_offset)`) contains the active cursor position.
+pub fn is_cursor_row(active_cursor_offset: usize, row_idx: usize, offset: usize, next_offset: usize, line_starts: &LineMap, total_size: usize) -> bool {
+    let is_eof = active_cursor_offset == total_size;
+    let last_line_idx = line_starts.len().saturating_sub(1);
+    let last_line_start = line_starts.get(last_line_idx).unwrap_or(0);
+    let bytes_per_row = line_starts.max_bytes_per_row();
+    let is_eof_on_new_line = total_size > last_line_start && (total_size - last_line_start) >= bytes_per_row;
+    let is_eof_on_this_row = is_eof && ((is_eof_on_new_line && row_idx == line_starts.len()) || (!is_eof_on_new_line && row_idx == last_line_idx));
+
+    (active_cursor_offset >= offset && active_cursor_offset < next_offset) || is_eof_on_this_row
+}
+
 pub struct RowPaintParams<'a> {
     pub row_idx: usize,
     pub bounds: Bounds<Pixels>,
@@ -342,7 +354,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let chunk = params.doc.buffer.get_range(offset, chunk_len);
 
     let total_size = params.doc.buffer.len();
-    let is_eof = params.cursor_offset == total_size;
+    let active_cursor_offset = if params.insert_mode {
+        params.insert_cursor_offset
+    } else {
+        params.cursor_offset
+    };
+    let is_cursor_row = is_cursor_row(active_cursor_offset, params.row_idx, offset, next_offset, params.line_starts, total_size);
+    let is_eof = active_cursor_offset == total_size;
     let last_line_idx = params.line_starts.len().saturating_sub(1);
     let last_line_start = params.line_starts.get(last_line_idx).unwrap_or(0);
     let bytes_per_row = params.line_starts.max_bytes_per_row();
@@ -392,11 +410,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         let fold_end_addr = params.doc.offset_to_address(fold_end);
 
         if is_struct_mode || params.show_offset {
+            let is_cursor_in_fold = active_cursor_offset >= offset && active_cursor_offset < fold_end;
+            let addr_color = if is_cursor_in_fold { fg_color } else { muted_color.opacity(0.8) };
             let addr_str = format_offset_08(fold_start_addr);
             let run = TextRun {
                 len: addr_str.len(),
                 font: font.clone(),
-                color: muted_color.opacity(0.8),
+                color: addr_color,
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -539,12 +559,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let physical_address = params.doc.offset_to_address(offset);
 
     // 1. Draw Left Columns (Address OR Offset)
+    let addr_color = if is_cursor_row { fg_color } else { muted_color };
     let (offset_w, gap) = if is_struct_mode {
         let addr_str = format_offset_08(physical_address);
         let run = TextRun {
             len: addr_str.len(),
             font: font.clone(),
-            color: muted_color,
+            color: addr_color,
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -559,7 +580,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             let run = TextRun {
                 len: offset_str.len(),
                 font: font.clone(),
-                color: muted_color,
+                color: addr_color,
                 background_color: None,
                 underline: None,
                 strikethrough: None,
