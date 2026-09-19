@@ -159,6 +159,7 @@ impl Render for StatusBar {
             .flex()
             .items_center()
             .justify_between()
+            .gap_2()
             .h_8()
             .border_t_1()
             .border_color(theme.border)
@@ -207,11 +208,13 @@ impl Render for StatusBar {
                 div()
                     .flex()
                     .items_center()
+                    .min_w_0()
                     .gap_2()
                     .text_xs()
                     .child(
                         div()
                             .id("status-position")
+                            .flex_shrink_0()
                             .font_medium()
                             .text_color(theme.foreground)
                             .cursor_pointer()
@@ -245,9 +248,12 @@ impl Render for StatusBar {
                     )
                     .when_some(current_byte_info, |el, val_str| {
                         let raw_copy = raw_byte_val.unwrap_or_default();
-                        el.child(div().w_px().h_3().bg(theme.border)).child(
+                        el.child(div().w_px().h_3().bg(theme.border).flex_shrink_0()).child(
                             div()
                                 .id("status-val-pill")
+                                .min_w_0()
+                                .truncate()
+                                .whitespace_nowrap()
                                 .text_color(theme.muted_foreground)
                                 .cursor_pointer()
                                 .hover(|s| s.text_color(theme.foreground))
@@ -266,6 +272,7 @@ impl Render for StatusBar {
                 div()
                     .flex()
                     .items_center()
+                    .flex_shrink_0()
                     .gap_2()
                     .text_xs()
                     .child(
