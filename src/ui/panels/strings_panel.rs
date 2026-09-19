@@ -5,7 +5,7 @@ use crate::ui::appearance::Appearance;
 use crate::ui::components::data_table::{self as table, TableColumn, TableSortDirection, VirtualTable, VirtualTableState};
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::{self, Input, InputState};
+use gpui_kit::component::input::{self, Input, InputState, NumberInput};
 use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{ActiveTheme as _, Disableable, Sizable, Size, h_flex, v_flex};
@@ -98,7 +98,7 @@ impl StringsPanel {
         let focus_handle = cx.focus_handle();
         let table_focus_handle = cx.focus_handle();
         let table_state = VirtualTableState::new("strings-table", default_strings_columns(), table_focus_handle);
-        let min_length_input = cx.new(|cx| InputState::new(window, cx));
+        let min_length_input = cx.new(|cx| InputState::new(window, cx).step(1.0).min(1.0));
         min_length_input.update(cx, |input, cx| {
             input.set_value(DEFAULT_MIN_STRING_LENGTH.to_string(), window, cx);
         });
@@ -401,21 +401,6 @@ impl StringsPanel {
         }
     }
 
-    fn adjust_minimum_length(&mut self, delta: i32, window: &mut Window, cx: &mut Context<Self>) {
-        let current = self.minimum_length(cx).unwrap_or(DEFAULT_MIN_STRING_LENGTH);
-        let next = if delta < 0 {
-            current.saturating_sub(delta.unsigned_abs() as usize).max(1)
-        } else {
-            current.saturating_add(delta as usize)
-        };
-
-        self.min_length_input.update(cx, |input, cx| {
-            input.set_value(next.to_string(), window, cx);
-        });
-        self.invalidate_scan();
-        cx.notify();
-    }
-
     pub fn select_item(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(item) = self.results.get(index) {
             self.selected_index = Some(index);
@@ -633,36 +618,19 @@ impl Render for StringsPanel {
         );
         let header = crate::ui::panels::panel_header("STRINGS", is_focused, theme, None, Some(actions.into_any_element()));
 
-        let minimum_length = self.minimum_length(cx).unwrap_or(DEFAULT_MIN_STRING_LENGTH);
         let scan_controls = h_flex()
             .p_2()
-            .gap_1()
+            .gap_2()
             .border_b_1()
             .border_color(theme.border)
             .items_center()
             .child(div().text_xs().text_color(theme.muted_foreground).child("Min chars"))
-            .child(div().w_16().child(Input::new(&self.min_length_input)))
             .child(
-                Button::new("strings-min-decrease")
-                    .ghost()
-                    .icon(IconName::Minus)
-                    .with_size(Size::XSmall)
-                    .tooltip("Decrease minimum length")
-                    .disabled(!has_editor || self.is_scanning || minimum_length <= 1)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.adjust_minimum_length(-1, window, cx);
-                    })),
-            )
-            .child(
-                Button::new("strings-min-increase")
-                    .ghost()
-                    .icon(IconName::Plus)
-                    .with_size(Size::XSmall)
-                    .tooltip("Increase minimum length")
-                    .disabled(!has_editor || self.is_scanning)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.adjust_minimum_length(1, window, cx);
-                    })),
+                div().w_24().child(
+                    NumberInput::new(&self.min_length_input)
+                        .with_size(Size::Small)
+                        .disabled(!has_editor || self.is_scanning),
+                ),
             )
             .child(
                 Button::new("scan-strings")
