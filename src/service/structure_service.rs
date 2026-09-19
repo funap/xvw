@@ -295,7 +295,7 @@ impl StructureService {
                                 && let Some(window) = window.downcast::<Root>()
                             {
                                 let _ = window.update(cx, |root, window, cx| {
-                                    let note = gpui_kit::component::notification::Notification::error(msg);
+                                    let note = crate::ui::notification::error(msg);
                                     root.notification.update(cx, |view, cx| view.push(note, window, cx));
                                     cx.notify();
                                 });

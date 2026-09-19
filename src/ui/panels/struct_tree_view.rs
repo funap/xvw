@@ -559,11 +559,8 @@ impl StructTreeView {
 
                 if applied {
                     match &result {
-                        Ok(path) => window.push_notification(
-                            gpui_kit::component::notification::Notification::success(format!("Structure YAML exported to {}", path.display())),
-                            cx,
-                        ),
-                        Err(error) => window.push_notification(gpui_kit::component::notification::Notification::error(error.clone()), cx),
+                        Ok(path) => window.push_notification(crate::ui::notification::success(format!("Structure YAML exported to {}", path.display())), cx),
+                        Err(error) => window.push_notification(crate::ui::notification::error(error.clone()), cx),
                     }
                 }
             });

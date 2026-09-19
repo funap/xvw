@@ -12,7 +12,7 @@ use crate::app_state::{AppState, InsertModeState};
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
-use gpui_kit::component::{Root, WindowExt, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Root, WindowExt, v_flex};
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -29,6 +29,26 @@ pub use activity_bar::{Activity, ActivityBar, ActivityBarEvent};
 pub use status_bar::{StatusBar, StatusBarEvent};
 pub use title_bar::{AppTitleBar, AppTitleBarEvent};
 
+pub(crate) struct NotificationItemState {
+    pub(crate) is_pinned: bool,
+    pub(crate) is_hovered: bool,
+    pub(crate) timer: Option<Task<()>>,
+}
+
+impl NotificationItemState {
+    pub(crate) fn new() -> Self {
+        Self {
+            is_pinned: false,
+            is_hovered: false,
+            timer: None,
+        }
+    }
+
+    pub(crate) fn should_run_timer(&self) -> bool {
+        !self.is_pinned && !self.is_hovered
+    }
+}
+
 pub struct Workspace {
     pub pane_tree: Entity<PaneTree>,
     pub title_bar: Entity<AppTitleBar>,
@@ -44,6 +64,7 @@ pub struct Workspace {
     pub(crate) force_close: bool,
     focus_handle: FocusHandle,
     last_active_editor_id: Cell<Option<EntityId>>,
+    pub(crate) notification_states: std::collections::HashMap<EntityId, NotificationItemState>,
 }
 
 pub fn init(cx: &mut App) {
@@ -396,6 +417,7 @@ impl Workspace {
             force_close: false,
             focus_handle: cx.focus_handle(),
             last_active_editor_id: Cell::new(None),
+            notification_states: std::collections::HashMap::new(),
         };
 
         workspace.left_panel.update(cx, |panel, cx| {
@@ -765,10 +787,7 @@ impl Workspace {
                                         Err(e) => {
                                             eprintln!("Failed to open file {:?}: {:?}", file_path, e);
                                             let _ = window.update(|window, cx| {
-                                                window.push_notification(
-                                                    gpui_kit::component::notification::Notification::error(format!("Failed to open file: {e}")),
-                                                    cx,
-                                                );
+                                                window.push_notification(crate::ui::notification::error(format!("Failed to open file: {e}")), cx);
                                             });
                                         }
                                     }
@@ -858,20 +877,157 @@ impl Workspace {
         });
     }
 
-    fn render_bottom_right_notifications(window: &mut Window, cx: &mut App) -> Option<impl IntoElement> {
+    fn start_notification_dismiss_timer(
+        &mut self,
+        id: EntityId,
+        item: Entity<gpui_kit::component::notification::Notification>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.notification_states.get_mut(&id) else {
+            return;
+        };
+
+        if !state.should_run_timer() {
+            return;
+        }
+
+        let view = cx.entity();
+        let timer = cx.spawn_in(window, async move |_, window| {
+            window.background_executor().timer(crate::ui::notification::NOTIFICATION_TIMEOUT).await;
+            window
+                .update(|window, cx| {
+                    view.update(cx, |workspace, cx| {
+                        if let Some(state) = workspace.notification_states.get(&id)
+                            && state.should_run_timer()
+                        {
+                            item.update(cx, |note, cx| {
+                                note.dismiss(window, cx);
+                            });
+                            workspace.notification_states.remove(&id);
+                            cx.notify();
+                        }
+                    });
+                })
+                .ok();
+        });
+        state.timer = Some(timer);
+    }
+
+    fn render_bottom_right_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let root = window.root::<Root>()??;
         let items = root.read(cx).notification.read(cx).notifications();
         if items.is_empty() {
+            self.notification_states.clear();
             return None;
         }
-        let items = items.into_iter().rev().take(10).rev();
+
+        let current_ids: std::collections::HashSet<_> = items.iter().map(|item| item.entity_id()).collect();
+        self.notification_states.retain(|id, _| current_ids.contains(id));
+
+        for item in &items {
+            let id = item.entity_id();
+            if let std::collections::hash_map::Entry::Vacant(entry) = self.notification_states.entry(id) {
+                entry.insert(NotificationItemState::new());
+                self.start_notification_dismiss_timer(id, item.clone(), window, cx);
+            }
+        }
+
+        let rendered_items = items.into_iter().rev().take(10).rev().map(|item| {
+            let id = item.entity_id();
+            let item_for_hover = item.clone();
+            let is_pinned = self.notification_states.get(&id).map(|s| s.is_pinned).unwrap_or(false);
+            let is_hovered = self.notification_states.get(&id).map(|s| s.is_hovered).unwrap_or(false);
+            let theme = cx.theme().clone();
+            let view = cx.entity();
+
+            let border_color = if is_pinned {
+                theme.primary.opacity(0.7)
+            } else if is_hovered {
+                theme.ring.opacity(0.35)
+            } else {
+                gpui::transparent_black()
+            };
+
+            div()
+                .id(ElementId::NamedInteger("notification-item".into(), id.as_u64()))
+                .w(px(382.0))
+                .relative()
+                .cursor_pointer()
+                .rounded(theme.radius_lg)
+                .border_1()
+                .border_color(border_color)
+                .when(is_hovered || is_pinned, |this| this.shadow_md())
+                .child(
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, cx| {
+                            let view = view.clone();
+                            let item_for_hover = item_for_hover.clone();
+
+                            let is_initially_hovered = bounds.contains(&window.mouse_position());
+                            if is_initially_hovered {
+                                let view = view.clone();
+                                cx.defer(move |cx| {
+                                    view.update(cx, |workspace, cx| {
+                                        if let Some(state) = workspace.notification_states.get_mut(&id)
+                                            && !state.is_hovered
+                                        {
+                                            state.is_hovered = true;
+                                            state.timer = None;
+                                            cx.notify();
+                                        }
+                                    });
+                                });
+                            }
+
+                            window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                                if !phase.capture() {
+                                    return;
+                                }
+                                let hovered = bounds.contains(&event.position);
+                                view.update(cx, |workspace, cx| {
+                                    if let Some(state) = workspace.notification_states.get_mut(&id)
+                                        && state.is_hovered != hovered
+                                    {
+                                        state.is_hovered = hovered;
+                                        if hovered {
+                                            state.timer = None;
+                                        } else if !state.is_pinned {
+                                            workspace.start_notification_dismiss_timer(id, item_for_hover.clone(), window, cx);
+                                        }
+                                        cx.notify();
+                                    }
+                                });
+                            });
+                        },
+                    )
+                    .absolute()
+                    .size_full(),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |workspace, _, _, cx| {
+                        if let Some(state) = workspace.notification_states.get_mut(&id) {
+                            state.is_pinned = true;
+                            state.timer = None;
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(item)
+        });
 
         Some(
             div()
                 .absolute()
                 .bottom(px(32.0))
                 .right(px(16.0))
-                .child(v_flex().id("notification-list-bottom-right").gap_3().children(items)),
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
+                .child(v_flex().id("notification-list-bottom-right").gap_3().children(rendered_items)),
         )
     }
 }
@@ -1068,7 +1224,7 @@ impl Render for Workspace {
             })
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_sheet_layer(window, cx))
-            .children(Self::render_bottom_right_notifications(window, cx))
+            .children(self.render_bottom_right_notifications(window, cx))
     }
 }
 

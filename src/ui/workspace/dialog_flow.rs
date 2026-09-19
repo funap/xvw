@@ -7,6 +7,7 @@ use super::Workspace;
 use crate::actions::*;
 use crate::app_state::AppState;
 use crate::core::editor::Editor;
+use crate::ui::notification;
 use crate::ui::pane::TabContent;
 use gpui_kit::component::WindowExt;
 
@@ -108,7 +109,7 @@ impl Workspace {
                     Err(e) => {
                         eprintln!("Failed to open file: {:?}", e);
                         let _ = window.update(|window, cx| {
-                            window.push_notification(gpui_kit::component::notification::Notification::error(format!("Failed to open file: {e}")), cx);
+                            window.push_notification(notification::error(format!("Failed to open file: {e}")), cx);
                         });
                     }
                 }
@@ -168,19 +169,13 @@ impl Workspace {
                     (Err(e), _) => {
                         eprintln!("Failed to open left diff file: {:?}", e);
                         let _ = window.update(|window, cx| {
-                            window.push_notification(
-                                gpui_kit::component::notification::Notification::error(format!("Failed to open diff file: {e}")),
-                                cx,
-                            );
+                            window.push_notification(notification::error(format!("Failed to open diff file: {e}")), cx);
                         });
                     }
                     (_, Err(e)) => {
                         eprintln!("Failed to open right diff file: {:?}", e);
                         let _ = window.update(|window, cx| {
-                            window.push_notification(
-                                gpui_kit::component::notification::Notification::error(format!("Failed to open diff file: {e}")),
-                                cx,
-                            );
+                            window.push_notification(notification::error(format!("Failed to open diff file: {e}")), cx);
                         });
                     }
                 }
@@ -415,17 +410,14 @@ impl Workspace {
                                             let doc = crate::core::document::Document::new_read_only(canonical_path, buffer).with_format(detected_format);
                                             let doc_arc = std::sync::Arc::new(std::sync::RwLock::new(doc));
                                             this.open_editor_view(doc_arc, window, cx);
-                                            window.push_notification(gpui_kit::component::notification::Notification::info("Imported Base64 successfully"), cx);
+                                            window.push_notification(notification::info("Imported Base64 successfully"), cx);
                                         });
                                     })
                                     .ok();
                             }
                             Err(e) => {
                                 let _ = window.update(|window, cx| {
-                                    window.push_notification(
-                                        gpui_kit::component::notification::Notification::error(format!("Failed to parse Base64 file: {}", e)),
-                                        cx,
-                                    );
+                                    window.push_notification(notification::error(format!("Failed to parse Base64 file: {}", e)), cx);
                                 });
                             }
                         }
@@ -460,11 +452,7 @@ impl Workspace {
                                             String::new()
                                         };
                                         window.push_notification(
-                                            gpui_kit::component::notification::Notification::info(format!(
-                                                "Imported {} successfully{}",
-                                                import_result.format.label(),
-                                                gap_msg
-                                            )),
+                                            notification::info(format!("Imported {} successfully{}", import_result.format.label(), gap_msg)),
                                             cx,
                                         );
                                     });
@@ -473,20 +461,14 @@ impl Workspace {
                         }
                         Err(e) => {
                             let _ = window.update(|window, cx| {
-                                window.push_notification(
-                                    gpui_kit::component::notification::Notification::error(format!("Failed to parse hex/mot file: {}", e)),
-                                    cx,
-                                );
+                                window.push_notification(notification::error(format!("Failed to parse hex/mot file: {}", e)), cx);
                             });
                         }
                     }
                 }
                 Err(e) => {
                     let _ = window.update(|window, cx| {
-                        window.push_notification(
-                            gpui_kit::component::notification::Notification::error(format!("Failed to read file: {}", e)),
-                            cx,
-                        );
+                        window.push_notification(notification::error(format!("Failed to read file: {}", e)), cx);
                     });
                 }
             }
@@ -594,7 +576,7 @@ impl Workspace {
                 Ok(()) => {
                     let _ = window.update(|window, cx| {
                         window.push_notification(
-                            gpui_kit::component::notification::Notification::info(format!(
+                            notification::info(format!(
                                 "Exported {} to {} successfully",
                                 format_label,
                                 path.file_name().and_then(|n| n.to_str()).unwrap_or("file")
@@ -605,10 +587,7 @@ impl Workspace {
                 }
                 Err(e) => {
                     let _ = window.update(|window, cx| {
-                        window.push_notification(
-                            gpui_kit::component::notification::Notification::error(format!("Failed to export {}: {}", format_label, e)),
-                            cx,
-                        );
+                        window.push_notification(notification::error(format!("Failed to export {}: {}", format_label, e)), cx);
                     });
                 }
             }
@@ -715,20 +694,14 @@ impl Workspace {
                 Err(e) => {
                     eprintln!("Failed to parse KSY definition: {}", e);
                     let _ = window.update(|window, cx| {
-                        window.push_notification(
-                            gpui_kit::component::notification::Notification::error(format!("Failed to parse structure definition: {e}")),
-                            cx,
-                        );
+                        window.push_notification(notification::error(format!("Failed to parse structure definition: {e}")), cx);
                     });
                 }
             },
             Err(e) => {
                 eprintln!("Failed to read KSY file at {:?}: {}", path, e);
                 let _ = window.update(|window, cx| {
-                    window.push_notification(
-                        gpui_kit::component::notification::Notification::error(format!("Failed to read structure file: {e}")),
-                        cx,
-                    );
+                    window.push_notification(notification::error(format!("Failed to read structure file: {e}")), cx);
                 });
             }
         })
@@ -827,7 +800,7 @@ impl Workspace {
         };
         if is_read_only {
             window.push_notification(
-                gpui_kit::component::notification::Notification::warning("Cannot save: document is in read-only mode. Toggle read-only mode or use Save As."),
+                notification::warning("Cannot save: document is in read-only mode. Toggle read-only mode or use Save As."),
                 cx,
             );
             return;
@@ -851,15 +824,12 @@ impl Workspace {
                                 document.write().expect("document write lock").mark_as_saved();
                             }
                             let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
-                            window.push_notification(gpui_kit::component::notification::Notification::info(format!("Saved {}", file_name)), cx);
+                            window.push_notification(notification::info(format!("Saved {}", file_name)), cx);
                             editor.update(cx, |_, cx| cx.notify());
                         }
                         Err(error) => {
                             eprintln!("Failed to save document: {error}");
-                            window.push_notification(
-                                gpui_kit::component::notification::Notification::error(format!("Failed to save document: {error}")),
-                                cx,
-                            );
+                            window.push_notification(notification::error(format!("Failed to save document: {error}")), cx);
                         }
                     }
                     cx.notify();
@@ -1127,10 +1097,7 @@ async fn save_single_dirty_document(
         if let Err(error) = save_task.await {
             eprintln!("Failed to save document before closing: {error}");
             let _ = window.update(|window, cx| {
-                window.push_notification(
-                    gpui_kit::component::notification::Notification::error(format!("Failed to save {title}: {error}")),
-                    cx,
-                );
+                window.push_notification(notification::error(format!("Failed to save {title}: {error}")), cx);
             });
             return Err(());
         }
@@ -1154,10 +1121,7 @@ async fn save_single_dirty_document(
         if let Err(error) = save_task.await {
             eprintln!("Failed to save document before closing: {error}");
             let _ = window.update(|window, cx| {
-                window.push_notification(
-                    gpui_kit::component::notification::Notification::error(format!("Failed to save {title}: {error}")),
-                    cx,
-                );
+                window.push_notification(notification::error(format!("Failed to save {title}: {error}")), cx);
             });
             return Err(());
         }

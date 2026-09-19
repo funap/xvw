@@ -4,6 +4,7 @@ pub mod components;
 pub mod dialogs;
 pub mod icon;
 pub mod menus;
+pub mod notification;
 pub mod pane;
 pub mod panels;
 pub mod views;

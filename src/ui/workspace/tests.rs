@@ -64,3 +64,37 @@ fn test_new_empty_file_document_properties() {
     assert!(!doc.is_dirty());
     assert!(!doc.is_read_only());
 }
+
+#[test]
+fn test_notification_item_state_timer_logic() {
+    use super::NotificationItemState;
+
+    let mut state = NotificationItemState::new();
+    assert!(!state.is_pinned);
+    assert!(!state.is_hovered);
+    assert!(state.timer.is_none());
+    assert!(state.should_run_timer(), "Initial notification should start dismiss timer");
+
+    // When user hovers over notification
+    state.is_hovered = true;
+    assert!(!state.should_run_timer(), "Hovered notification must not run dismiss timer");
+
+    // When cursor leaves notification
+    state.is_hovered = false;
+    assert!(state.should_run_timer(), "When cursor leaves, dismiss timer should run");
+
+    // When user clicks/pins the notification
+    state.is_pinned = true;
+    assert!(!state.should_run_timer(), "Pinned notification must not run dismiss timer");
+
+    // Hovering while pinned
+    state.is_hovered = true;
+    assert!(!state.should_run_timer());
+
+    // Cursor leaves pinned notification
+    state.is_hovered = false;
+    assert!(
+        !state.should_run_timer(),
+        "Pinned notification must never run dismiss timer even after cursor leaves"
+    );
+}
