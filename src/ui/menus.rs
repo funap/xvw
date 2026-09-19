@@ -10,6 +10,7 @@ pub struct MenuEditorState {
     pub can_undo: bool,
     pub can_redo: bool,
     pub has_selection: bool,
+    pub can_copy: bool,
     pub can_close_others: bool,
     pub can_close_right: bool,
     pub has_saved: bool,
@@ -181,7 +182,7 @@ fn build_edit_menu() -> MenuDef {
             MenuItemDef::action_with_condition("Redo", crate::actions::Redo, |s| s.can_redo),
             MenuItemDef::separator(),
             MenuItemDef::action_with_condition("Cut", crate::actions::Cut, |s| !s.is_read_only && s.has_doc && s.has_selection),
-            MenuItemDef::action_with_condition("Copy", crate::actions::Copy, |s| s.has_selection),
+            MenuItemDef::action_with_condition("Copy", crate::actions::Copy, |s| s.can_copy),
             MenuItemDef::action_with_condition("Paste", crate::actions::Paste, |s| !s.is_read_only && s.has_doc),
             MenuItemDef::action_with_condition("Fill Selection...", crate::actions::FillSelection, |s| {
                 !s.is_read_only && s.has_doc && s.has_selection
@@ -192,16 +193,16 @@ fn build_edit_menu() -> MenuDef {
             MenuItemDef::submenu(
                 "Copy As",
                 vec![
-                    MenuItemDef::action_with_condition("as Hex Dump", crate::actions::CopyAsHexDump, |s| s.has_selection),
-                    MenuItemDef::action_with_condition("as Hex with Spaces", crate::actions::CopyAsHexSpaces, |s| s.has_selection),
-                    MenuItemDef::action_with_condition("as Hex Stream", crate::actions::CopyAsHexStream, |s| s.has_selection),
-                    MenuItemDef::action_with_condition("as Printable Text", crate::actions::CopyAsPrintableText, |s| s.has_selection),
-                    MenuItemDef::action_with_condition("as Escaped String", crate::actions::CopyAsEscapedString, |s| s.has_selection),
-                    MenuItemDef::action_with_condition("as Base64", crate::actions::CopyAsBase64, |s| s.has_selection),
-                    MenuItemDef::action_with_condition("as Binary", crate::actions::CopyAsBinary, |s| s.has_selection),
-                    MenuItemDef::action_with_condition("as C++ Array", crate::actions::CopyAsCppArray, |s| s.has_selection),
-                    MenuItemDef::action_with_condition("as Rust Array", crate::actions::CopyAsRustArray, |s| s.has_selection),
-                    MenuItemDef::action_with_condition("as JSON Array", crate::actions::CopyAsJsonArray, |s| s.has_selection),
+                    MenuItemDef::action_with_condition("as Hex Dump", crate::actions::CopyAsHexDump, |s| s.can_copy),
+                    MenuItemDef::action_with_condition("as Hex with Spaces", crate::actions::CopyAsHexSpaces, |s| s.can_copy),
+                    MenuItemDef::action_with_condition("as Hex Stream", crate::actions::CopyAsHexStream, |s| s.can_copy),
+                    MenuItemDef::action_with_condition("as Printable Text", crate::actions::CopyAsPrintableText, |s| s.can_copy),
+                    MenuItemDef::action_with_condition("as Escaped String", crate::actions::CopyAsEscapedString, |s| s.can_copy),
+                    MenuItemDef::action_with_condition("as Base64", crate::actions::CopyAsBase64, |s| s.can_copy),
+                    MenuItemDef::action_with_condition("as Binary", crate::actions::CopyAsBinary, |s| s.can_copy),
+                    MenuItemDef::action_with_condition("as C++ Array", crate::actions::CopyAsCppArray, |s| s.can_copy),
+                    MenuItemDef::action_with_condition("as Rust Array", crate::actions::CopyAsRustArray, |s| s.can_copy),
+                    MenuItemDef::action_with_condition("as JSON Array", crate::actions::CopyAsJsonArray, |s| s.can_copy),
                 ],
             ),
             MenuItemDef::action_with_condition("Select All", crate::actions::SelectAll, |s| s.has_doc),
@@ -493,5 +494,56 @@ mod tests {
             category_labels,
             vec!["Japanese", "Chinese & Korean", "ISO-8859", "Windows Code Pages", "Legacy / DOS / Mac"]
         );
+    }
+
+    #[test]
+    fn test_edit_menu_copy_conditions() {
+        let menus = application_menus();
+        let edit_menu = menus.iter().find(|m| m.name == "Edit").expect("Edit menu found");
+
+        let copy_item = edit_menu
+            .items
+            .iter()
+            .find(|item| matches!(item, MenuItemDef::Action { label: "Copy", .. }))
+            .expect("Copy item found");
+
+        let is_enabled = match copy_item {
+            MenuItemDef::Action { is_enabled: Some(f), .. } => *f,
+            _ => panic!("Expected action with is_enabled"),
+        };
+
+        let state_can_copy_no_sel = MenuEditorState {
+            can_copy: true,
+            has_selection: false,
+            ..Default::default()
+        };
+        assert!(is_enabled(&state_can_copy_no_sel));
+
+        let state_cannot_copy = MenuEditorState {
+            can_copy: false,
+            has_selection: false,
+            ..Default::default()
+        };
+        assert!(!is_enabled(&state_cannot_copy));
+
+        let copy_as_submenu = edit_menu
+            .items
+            .iter()
+            .find_map(|item| match item {
+                MenuItemDef::Submenu { label, items } if *label == "Copy As" => Some(items),
+                _ => None,
+            })
+            .expect("Copy As submenu found");
+
+        assert_eq!(copy_as_submenu.len(), 10);
+        for item in copy_as_submenu {
+            match item {
+                MenuItemDef::Action { is_enabled: Some(f), .. } => {
+                    assert!(f(&state_can_copy_no_sel));
+                    assert!(!f(&state_cannot_copy));
+                }
+                _ => panic!("Expected action item with is_enabled in Copy As"),
+            }
+        }
     }
 }

@@ -6,7 +6,7 @@ pub mod paint;
 pub mod scroll_controller;
 pub mod types;
 
-pub use clipboard_handler::ClipboardHandler;
+pub use clipboard_handler::{ClipboardHandler, effective_copy_range};
 pub use input_controller::InputController;
 use input_controller::{HexCommit, HexInputResult};
 pub use scroll_controller::ScrollController;
@@ -1947,12 +1947,32 @@ impl HexView {
         self.notify_document_changed(cx);
     }
 
+    pub fn copy_range(&self, cx: &App) -> Option<std::ops::Range<usize>> {
+        let editor = self.editor.read(cx);
+        let doc = editor.document.read().ok()?;
+        let selection = editor.selection_range();
+        let insert_mode = InsertModeState::is_enabled(cx);
+        effective_copy_range(
+            selection,
+            insert_mode,
+            editor.cursor.offset,
+            doc.buffer.len(),
+            self.input.active_column(),
+            self.radix,
+            self.group_size,
+            self.encoding,
+            doc.buffer.data(),
+        )
+    }
+
     fn copy_formatted(&self, format: CopyFormat, window: &mut Window, cx: &mut Context<Self>) {
-        ClipboardHandler::copy_formatted(&self.editor, &self.focus_handle, format, window, cx);
+        let range = self.copy_range(cx);
+        ClipboardHandler::copy_formatted_range(&self.editor, &self.focus_handle, range, format, window, cx);
     }
 
     pub fn copy(&mut self, _: &Copy, window: &mut Window, cx: &mut Context<Self>) {
-        ClipboardHandler::copy(&self.editor, &self.focus_handle, window, cx);
+        let range = self.copy_range(cx);
+        ClipboardHandler::copy_range(&self.editor, &self.focus_handle, range, window, cx);
     }
 
     pub fn copy_as_hexdump(&mut self, _: &CopyAsHexDump, window: &mut Window, cx: &mut Context<Self>) {
@@ -3645,27 +3665,29 @@ impl Render for HexView {
             .context_menu({
                 let focus_handle = self.focus_handle.clone();
                 let editor = self.editor.clone();
+                let view = view.clone();
                 move |menu, window, cx| {
-                    let (is_read_only, can_undo, can_redo, has_selection) = {
+                    let (is_read_only, can_undo, can_redo, has_selection, can_copy) = {
                         let ed = editor.read(cx);
-                        (ed.is_read_only(), ed.can_undo(), ed.can_redo(), ed.has_selection())
+                        let can_copy = view.read(cx).copy_range(cx).is_some();
+                        (ed.is_read_only(), ed.can_undo(), ed.can_redo(), ed.has_selection(), can_copy)
                     };
                     menu.action_context(focus_handle.clone())
                         .menu_with_disabled("Undo", Box::new(Undo), is_read_only || !can_undo)
                         .menu_with_disabled("Redo", Box::new(Redo), is_read_only || !can_redo)
                         .menu_with_disabled("Cut", Box::new(Cut), is_read_only || !has_selection)
-                        .menu_with_disabled("Copy", Box::new(Copy), !has_selection)
+                        .menu_with_disabled("Copy", Box::new(Copy), !can_copy)
                         .submenu("Copy As", window, cx, move |menu, _window, _cx| {
-                            menu.menu_with_disabled("as Hex Dump", Box::new(CopyAsHexDump), !has_selection)
-                                .menu_with_disabled("as C++ Array", Box::new(CopyAsCppArray), !has_selection)
-                                .menu_with_disabled("as Hex Stream", Box::new(CopyAsHexStream), !has_selection)
-                                .menu_with_disabled("as Hex with Spaces", Box::new(CopyAsHexSpaces), !has_selection)
-                                .menu_with_disabled("as Printable Text", Box::new(CopyAsPrintableText), !has_selection)
-                                .menu_with_disabled("as Base64", Box::new(CopyAsBase64), !has_selection)
-                                .menu_with_disabled("as Escaped String", Box::new(CopyAsEscapedString), !has_selection)
-                                .menu_with_disabled("as Binary", Box::new(CopyAsBinary), !has_selection)
-                                .menu_with_disabled("as Rust Array", Box::new(CopyAsRustArray), !has_selection)
-                                .menu_with_disabled("as JSON Array", Box::new(CopyAsJsonArray), !has_selection)
+                            menu.menu_with_disabled("as Hex Dump", Box::new(CopyAsHexDump), !can_copy)
+                                .menu_with_disabled("as C++ Array", Box::new(CopyAsCppArray), !can_copy)
+                                .menu_with_disabled("as Hex Stream", Box::new(CopyAsHexStream), !can_copy)
+                                .menu_with_disabled("as Hex with Spaces", Box::new(CopyAsHexSpaces), !can_copy)
+                                .menu_with_disabled("as Printable Text", Box::new(CopyAsPrintableText), !can_copy)
+                                .menu_with_disabled("as Base64", Box::new(CopyAsBase64), !can_copy)
+                                .menu_with_disabled("as Escaped String", Box::new(CopyAsEscapedString), !can_copy)
+                                .menu_with_disabled("as Binary", Box::new(CopyAsBinary), !can_copy)
+                                .menu_with_disabled("as Rust Array", Box::new(CopyAsRustArray), !can_copy)
+                                .menu_with_disabled("as JSON Array", Box::new(CopyAsJsonArray), !can_copy)
                         })
                         .menu_with_disabled("Paste", Box::new(Paste), is_read_only)
                         .menu_with_disabled("Fill Selection...", Box::new(FillSelection), is_read_only || !has_selection)

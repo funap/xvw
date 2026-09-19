@@ -208,12 +208,18 @@ impl AppMenu {
                 } else {
                     (false, false, false)
                 };
+                let can_copy = if let Some(editor_view) = ws.active_editor_view(cx) {
+                    editor_view.read(cx).hex_view().read(cx).copy_range(cx).is_some()
+                } else {
+                    has_sel
+                };
                 MenuEditorState {
                     has_doc: true,
                     is_read_only: is_ro,
                     can_undo: can_u,
                     can_redo: can_r,
                     has_selection: has_sel,
+                    can_copy,
                     can_close_others: can_o,
                     can_close_right: can_r_tab,
                     has_saved: has_s,
