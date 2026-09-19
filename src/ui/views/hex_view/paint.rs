@@ -169,6 +169,20 @@ pub fn darken_cursor_color(color: Hsla) -> Hsla {
     }
 }
 
+/// Computes the selection background color with appropriate alpha for focused/unfocused
+/// states and dark/light theme modes.
+#[inline]
+pub fn selection_background_color(selection_color: Hsla, is_focused: bool, is_dark: bool) -> Hsla {
+    let alpha = if is_focused {
+        if is_dark { 0.55 } else { 0.40 }
+    } else if is_dark {
+        0.28
+    } else {
+        0.20
+    };
+    selection_color.alpha(alpha)
+}
+
 /// Paint every glyph centered in its fixed Hex cell while reusing the line
 /// shaped for the row. This keeps shaping batched and avoids a per-row glyph
 /// position allocation.
@@ -374,11 +388,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let (selection_bg, caret_color, muted_color, fg_color, accent_fg_color, border_color, _sidebar_bg, bg_color_theme) = {
         let theme = cx.theme();
         (
-            if params.is_focused {
-                theme.selection.opacity(0.70)
-            } else {
-                theme.selection.opacity(0.45)
-            },
+            selection_background_color(theme.selection, params.is_focused, theme.mode.is_dark()),
             theme.caret,
             theme.muted_foreground,
             theme.foreground,
@@ -1582,8 +1592,8 @@ pub fn paint_scrollbar(
 
 #[cfg(test)]
 mod tests {
-    use super::{ByteGroupSize, DisplayRadix, HexGroupInfo, HexInsertCursorParams, hex_insert_cursor_geometry};
-    use gpui_kit::px;
+    use super::{ByteGroupSize, DisplayRadix, HexGroupInfo, HexInsertCursorParams, hex_insert_cursor_geometry, selection_background_color};
+    use gpui_kit::{hsla, px};
 
     #[test]
     fn insert_cursor_advances_through_four_byte_group() {
@@ -1633,5 +1643,29 @@ mod tests {
         )
         .expect("cursor is inside the group");
         assert_eq!(f32::from(x_nibble1), 1.0);
+    }
+
+    #[test]
+    fn test_selection_background_color() {
+        let base = hsla(0.6, 0.8, 0.5, 0.3);
+
+        // Dark mode focused
+        let dark_focused = selection_background_color(base, true, true);
+        assert_eq!(dark_focused.h, base.h);
+        assert_eq!(dark_focused.s, base.s);
+        assert_eq!(dark_focused.l, base.l);
+        assert_eq!(dark_focused.a, 0.55);
+
+        // Dark mode unfocused
+        let dark_unfocused = selection_background_color(base, false, true);
+        assert_eq!(dark_unfocused.a, 0.28);
+
+        // Light mode focused
+        let light_focused = selection_background_color(base, true, false);
+        assert_eq!(light_focused.a, 0.40);
+
+        // Light mode unfocused
+        let light_unfocused = selection_background_color(base, false, false);
+        assert_eq!(light_unfocused.a, 0.20);
     }
 }
