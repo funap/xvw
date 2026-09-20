@@ -4,6 +4,10 @@
 
 ### **A fast, GPU-accelerated binary & hex editor written in Rust.**
 
+[English](README.md) | [日本語](README.ja.md)
+
+<br />
+
 Built on **[GPUI](https://gpui.rs/)** (the high-performance GPU UI framework powering [Zed](https://zed.dev/)).  
 Engineered to be snappy, intuitive, and versatile for reverse engineering, firmware inspection, and binary format debugging.
 
