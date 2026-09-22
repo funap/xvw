@@ -2,7 +2,7 @@
 
 # ⚡ xvw
 
-### **A fast, GPU-accelerated binary & hex editor written in Rust.**
+### **The modern, cross-platform hex editor powered by Zed's GPUI.**
 
 [English](README.md) | [日本語](README.ja.md)
 
