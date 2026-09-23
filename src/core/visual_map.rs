@@ -21,10 +21,14 @@ pub enum VisualMapColorMode {
     Rgba,
     Argb,
     Bgra,
+    Mono1bpp,
+    Indexed2bpp,
+    Indexed4bpp,
+    Vga256,
 }
 
 impl VisualMapColorMode {
-    /// Number of bytes consumed per displayed pixel.
+    /// Number of bytes consumed per displayed pixel (for modes with >= 1 byte per pixel).
     #[inline]
     pub fn bytes_per_pixel(self) -> usize {
         match self {
@@ -33,6 +37,52 @@ impl VisualMapColorMode {
             Self::Rgba | Self::Argb | Self::Bgra => 4,
             _ => 1,
         }
+    }
+
+    /// Number of pixels packed into a single byte (for sub-byte modes).
+    #[inline]
+    pub fn pixels_per_byte(self) -> usize {
+        match self {
+            Self::Mono1bpp => 8,
+            Self::Indexed2bpp => 4,
+            Self::Indexed4bpp => 2,
+            _ => 1,
+        }
+    }
+
+    /// Whether this mode has multiple pixels packed into a single byte.
+    #[inline]
+    pub fn is_sub_byte(self) -> bool {
+        self.pixels_per_byte() > 1
+    }
+
+    /// Calculates total displayable pixels for a buffer of length `buffer_len`.
+    #[inline]
+    pub fn total_pixels(self, buffer_len: usize) -> usize {
+        let ppb = self.pixels_per_byte();
+        if ppb > 1 {
+            buffer_len.saturating_mul(ppb)
+        } else {
+            buffer_len.div_ceil(self.bytes_per_pixel())
+        }
+    }
+
+    /// Converts a byte offset to the corresponding pixel index.
+    #[inline]
+    pub fn byte_offset_to_pixel(self, offset: usize) -> usize {
+        let ppb = self.pixels_per_byte();
+        if ppb > 1 {
+            offset.saturating_mul(ppb)
+        } else {
+            offset / self.bytes_per_pixel()
+        }
+    }
+
+    /// Converts a pixel index to the corresponding byte offset in the buffer.
+    #[inline]
+    pub fn pixel_to_byte_offset(self, pixel_idx: usize) -> usize {
+        let ppb = self.pixels_per_byte();
+        if ppb > 1 { pixel_idx / ppb } else { pixel_idx * self.bytes_per_pixel() }
     }
 
     /// Whether this mode interprets data as direct color RGB/RGBA pixels.
@@ -145,6 +195,77 @@ pub fn category_bgra_lut(palette: &CategoryPalette) -> [[u8; 4]; 256] {
     lut
 }
 
+/// Generates a 16-entry BGRA lookup table for the classic CGA / EGA 16-color palette.
+pub fn cga_16_bgra_lut() -> [[u8; 4]; 16] {
+    [
+        [0, 0, 0, 255],       // 0: Black
+        [170, 0, 0, 255],     // 1: Dark Blue
+        [0, 170, 0, 255],     // 2: Dark Green
+        [170, 170, 0, 255],   // 3: Dark Cyan
+        [0, 0, 170, 255],     // 4: Dark Red
+        [170, 0, 170, 255],   // 5: Dark Magenta
+        [0, 85, 170, 255],    // 6: Brown
+        [170, 170, 170, 255], // 7: Light Gray
+        [85, 85, 85, 255],    // 8: Dark Gray
+        [255, 85, 85, 255],   // 9: Bright Blue
+        [85, 255, 85, 255],   // 10: Bright Green
+        [255, 255, 85, 255],  // 11: Bright Cyan
+        [85, 85, 255, 255],   // 12: Bright Red
+        [255, 85, 255, 255],  // 13: Bright Magenta
+        [85, 255, 255, 255],  // 14: Yellow
+        [255, 255, 255, 255], // 15: White
+    ]
+}
+
+/// Returns the standard CGA color name for an index 0..=15.
+pub fn cga_color_name(idx: u8) -> &'static str {
+    match idx & 0x0F {
+        0 => "Black",
+        1 => "Blue",
+        2 => "Green",
+        3 => "Cyan",
+        4 => "Red",
+        5 => "Magenta",
+        6 => "Brown",
+        7 => "Light Gray",
+        8 => "Dark Gray",
+        9 => "Light Blue",
+        10 => "Light Green",
+        11 => "Light Cyan",
+        12 => "Light Red",
+        13 => "Light Magenta",
+        14 => "Yellow",
+        15 => "Bright White",
+        _ => "Unknown",
+    }
+}
+
+/// Generates a 256-entry BGRA lookup table for `VisualMapColorMode::Vga256`.
+pub fn vga256_bgra_lut() -> [[u8; 4]; 256] {
+    let mut lut = [[0u8; 4]; 256];
+    let cga = cga_16_bgra_lut();
+    lut[..16].copy_from_slice(&cga);
+
+    // 16..231: 6x6x6 color cube
+    let steps = [0u8, 95, 135, 175, 215, 255];
+    for r in 0..6 {
+        for g in 0..6 {
+            for b in 0..6 {
+                let idx = 16 + 36 * r + 6 * g + b;
+                lut[idx] = [steps[b], steps[g], steps[r], 255];
+            }
+        }
+    }
+
+    // 232..255: 24 grayscale steps
+    for i in 0..24 {
+        let gray = (8 + 10 * i) as u8;
+        lut[232 + i] = [gray, gray, gray, 255];
+    }
+
+    lut
+}
+
 /// Converts a 16-bit RGB 565 value into 8-bit RGB components `(r, g, b)`.
 ///
 /// Bit layout (MSB to LSB):
@@ -221,8 +342,8 @@ pub fn render_visual_map_bgra(buffer: &[u8], params: &VisualMapRenderParams) -> 
         return Vec::new();
     }
 
+    let total_pixels = params.color_mode.total_pixels(buffer_len);
     let bpp = params.color_mode.bytes_per_pixel();
-    let total_pixels = buffer_len.div_ceil(bpp);
     let total_rows = total_pixels.div_ceil(params.cols);
     let start_row = params.start_row;
     let end_row = (start_row + params.visible_rows).min(total_rows);
@@ -333,6 +454,47 @@ pub fn render_visual_map_bgra(buffer: &[u8], params: &VisualMapRenderParams) -> 
                 blit_cell(&mut pixels, row_y, c, params, color);
             }
         }
+    } else if params.color_mode.is_sub_byte() {
+        let cga_lut = cga_16_bgra_lut();
+        let ppb = params.color_mode.pixels_per_byte();
+
+        for r in start_row..end_row {
+            let row_y = r - start_row;
+            let row_pixel_start = r * params.cols;
+            let chunk_len = cmp::min(params.cols, total_pixels.saturating_sub(row_pixel_start));
+            let chunk_len = cmp::min(chunk_len, params.max_visible_cols);
+            if chunk_len == 0 {
+                break;
+            }
+
+            for c in 0..chunk_len {
+                let pixel_idx = row_pixel_start + c;
+                let byte_offset = pixel_idx / ppb;
+                let sub_idx = pixel_idx % ppb;
+                let byte = if byte_offset < buffer_len { buffer[byte_offset] } else { 0 };
+
+                let color = match params.color_mode {
+                    VisualMapColorMode::Mono1bpp => {
+                        let bit = (byte >> (7 - sub_idx)) & 1;
+                        if bit == 1 { [255, 255, 255, 255] } else { [0, 0, 0, 255] }
+                    }
+                    VisualMapColorMode::Indexed2bpp => {
+                        let shift = 6 - sub_idx * 2;
+                        let val = (byte >> shift) & 0x03;
+                        let lum = val * 85;
+                        [lum, lum, lum, 255]
+                    }
+                    VisualMapColorMode::Indexed4bpp => {
+                        let shift = 4 - sub_idx * 4;
+                        let val = ((byte >> shift) & 0x0F) as usize;
+                        cga_lut[val]
+                    }
+                    _ => unreachable!(),
+                };
+
+                blit_cell(&mut pixels, row_y, c, params, color);
+            }
+        }
     } else {
         let bgra_lut = if let Some(custom) = params.custom_lut {
             custom
@@ -341,6 +503,7 @@ pub fn render_visual_map_bgra(buffer: &[u8], params: &VisualMapRenderParams) -> 
                 VisualMapColorMode::Grayscale => grayscale_bgra_lut(),
                 VisualMapColorMode::Rainbow => rainbow_bgra_lut(),
                 VisualMapColorMode::DataCategory => category_bgra_lut(&CategoryPalette::default()),
+                VisualMapColorMode::Vga256 => vga256_bgra_lut(),
                 _ => unreachable!(),
             }
         };
@@ -668,5 +831,129 @@ mod tests {
         params.color_mode = VisualMapColorMode::Bgra;
         let pixels = render_visual_map_bgra(&data_bgra, &params);
         assert_eq!(&pixels[0..4], &[64, 128, 255, 200]);
+    }
+
+    #[test]
+    fn test_render_visual_map_sub_byte_and_vga256() {
+        // Mono 1bpp: 1 byte 0b10100000 = 8 pixels
+        let data_1bpp = vec![0b10100000];
+        let mut params = VisualMapRenderParams {
+            cols: 8,
+            start_row: 0,
+            visible_rows: 1,
+            max_visible_cols: 8,
+            cell_width: 1,
+            cell_height: 1,
+            physical_width: 8,
+            physical_height: 1,
+            color_mode: VisualMapColorMode::Mono1bpp,
+            entropy_window: 64,
+            custom_lut: None,
+            is_big_endian: false,
+        };
+        let pixels = render_visual_map_bgra(&data_1bpp, &params);
+        assert_eq!(pixels.len(), 32);
+        // Pixel 0 is 1 -> White
+        assert_eq!(&pixels[0..4], &[255, 255, 255, 255]);
+        // Pixel 1 is 0 -> Black
+        assert_eq!(&pixels[4..8], &[0, 0, 0, 255]);
+        // Pixel 2 is 1 -> White
+        assert_eq!(&pixels[8..12], &[255, 255, 255, 255]);
+        // Pixel 3 is 0 -> Black
+        assert_eq!(&pixels[12..16], &[0, 0, 0, 255]);
+
+        // Indexed 2bpp: 1 byte 0b11100100 -> values: 3, 2, 1, 0
+        let data_2bpp = vec![0b11100100];
+        params.cols = 4;
+        params.max_visible_cols = 4;
+        params.physical_width = 4;
+        params.color_mode = VisualMapColorMode::Indexed2bpp;
+        let pixels = render_visual_map_bgra(&data_2bpp, &params);
+        assert_eq!(pixels.len(), 16);
+        assert_eq!(&pixels[0..4], &[255, 255, 255, 255]); // 3 * 85 = 255
+        assert_eq!(&pixels[4..8], &[170, 170, 170, 255]); // 2 * 85 = 170
+        assert_eq!(&pixels[8..12], &[85, 85, 85, 255]); // 1 * 85 = 85
+        assert_eq!(&pixels[12..16], &[0, 0, 0, 255]); // 0 * 85 = 0
+
+        // Indexed 4bpp: 1 byte 0x1F -> high=1 (Dark Blue), low=15 (White)
+        let data_4bpp = vec![0x1F];
+        params.cols = 2;
+        params.max_visible_cols = 2;
+        params.physical_width = 2;
+        params.color_mode = VisualMapColorMode::Indexed4bpp;
+        let pixels = render_visual_map_bgra(&data_4bpp, &params);
+        assert_eq!(pixels.len(), 8);
+        assert_eq!(&pixels[0..4], &[170, 0, 0, 255]); // CGA 1: Dark Blue
+        assert_eq!(&pixels[4..8], &[255, 255, 255, 255]); // CGA 15: White
+
+        // VGA 256
+        let data_vga = vec![0, 15];
+        params.cols = 2;
+        params.max_visible_cols = 2;
+        params.physical_width = 2;
+        params.color_mode = VisualMapColorMode::Vga256;
+        let pixels = render_visual_map_bgra(&data_vga, &params);
+        assert_eq!(pixels.len(), 8);
+        assert_eq!(&pixels[0..4], &[0, 0, 0, 255]); // 0: Black
+        assert_eq!(&pixels[4..8], &[255, 255, 255, 255]); // 15: White
+    }
+
+    #[test]
+    fn test_cga_color_name() {
+        assert_eq!(cga_color_name(0), "Black");
+        assert_eq!(cga_color_name(1), "Blue");
+        assert_eq!(cga_color_name(2), "Green");
+        assert_eq!(cga_color_name(4), "Red");
+        assert_eq!(cga_color_name(14), "Yellow");
+        assert_eq!(cga_color_name(15), "Bright White");
+        assert_eq!(cga_color_name(16), "Black"); // wraps 0x0F
+    }
+
+    #[test]
+    fn test_pixel_offset_conversions() {
+        // Mono1bpp: 8 px/B
+        let m1 = VisualMapColorMode::Mono1bpp;
+        assert!(m1.is_sub_byte());
+        assert_eq!(m1.pixels_per_byte(), 8);
+        assert_eq!(m1.total_pixels(10), 80);
+        assert_eq!(m1.byte_offset_to_pixel(5), 40);
+        assert_eq!(m1.pixel_to_byte_offset(40), 5);
+        assert_eq!(m1.pixel_to_byte_offset(47), 5);
+        assert_eq!(m1.pixel_to_byte_offset(48), 6);
+
+        // Indexed2bpp: 4 px/B
+        let m2 = VisualMapColorMode::Indexed2bpp;
+        assert!(m2.is_sub_byte());
+        assert_eq!(m2.pixels_per_byte(), 4);
+        assert_eq!(m2.total_pixels(10), 40);
+        assert_eq!(m2.byte_offset_to_pixel(3), 12);
+        assert_eq!(m2.pixel_to_byte_offset(15), 3);
+        assert_eq!(m2.pixel_to_byte_offset(16), 4);
+
+        // Indexed4bpp: 2 px/B
+        let m4 = VisualMapColorMode::Indexed4bpp;
+        assert!(m4.is_sub_byte());
+        assert_eq!(m4.pixels_per_byte(), 2);
+        assert_eq!(m4.total_pixels(10), 20);
+        assert_eq!(m4.byte_offset_to_pixel(3), 6);
+        assert_eq!(m4.pixel_to_byte_offset(7), 3);
+        assert_eq!(m4.pixel_to_byte_offset(8), 4);
+
+        // Vga256: 1 B/px
+        let vga = VisualMapColorMode::Vga256;
+        assert!(!vga.is_sub_byte());
+        assert_eq!(vga.pixels_per_byte(), 1);
+        assert_eq!(vga.bytes_per_pixel(), 1);
+        assert_eq!(vga.total_pixels(10), 10);
+        assert_eq!(vga.byte_offset_to_pixel(7), 7);
+        assert_eq!(vga.pixel_to_byte_offset(7), 7);
+
+        // Rgb565: 2 B/px
+        let rgb565 = VisualMapColorMode::Rgb565;
+        assert!(!rgb565.is_sub_byte());
+        assert_eq!(rgb565.bytes_per_pixel(), 2);
+        assert_eq!(rgb565.total_pixels(10), 5);
+        assert_eq!(rgb565.byte_offset_to_pixel(6), 3);
+        assert_eq!(rgb565.pixel_to_byte_offset(3), 6);
     }
 }

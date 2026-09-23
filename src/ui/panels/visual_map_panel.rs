@@ -63,6 +63,12 @@ pub type CachedImage = (Arc<RenderImage>, CachedImageKey);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HoveredPixel {
     Byte(usize, u8),
+    SubByte {
+        offset: usize,
+        sub_idx: usize,
+        bit_val: u8,
+        mode: ColorMode,
+    },
     Rgb16 {
         offset: usize,
         raw_val: u16,
@@ -91,6 +97,7 @@ impl HoveredPixel {
     pub fn offset(&self) -> usize {
         match *self {
             Self::Byte(off, _) => off,
+            Self::SubByte { offset, .. } => offset,
             Self::Rgb16 { offset, .. } | Self::Rgb24 { offset, .. } | Self::Rgb32 { offset, .. } => offset,
         }
     }
@@ -194,10 +201,9 @@ impl VisualMapPanel {
             cx.notify();
             return;
         }
-        let bpp = self.color_mode.bytes_per_pixel();
-        let total_pixels = buffer_len.div_ceil(bpp);
+        let total_pixels = self.color_mode.total_pixels(buffer_len);
         let total_rows = total_pixels.div_ceil(self.cols);
-        let cursor_row = (cursor_offset / bpp) / self.cols;
+        let cursor_row = self.color_mode.byte_offset_to_pixel(cursor_offset) / self.cols;
         let visible_rows = if let Some(bounds) = self.last_bounds.get() {
             (bounds.size.height.as_f32() / self.pixel_size as f32).floor() as usize
         } else {
@@ -211,8 +217,7 @@ impl VisualMapPanel {
 
     fn update_scrollbar(&mut self, cx: &App) {
         let buffer_len = self.buffer_len(cx);
-        let bpp = self.color_mode.bytes_per_pixel();
-        let total_pixels = buffer_len.div_ceil(bpp);
+        let total_pixels = self.color_mode.total_pixels(buffer_len);
         let total_rows = total_pixels.div_ceil(self.cols);
         let max_offset = if let Some(bounds) = self.last_bounds.get() {
             let visible_rows = (bounds.size.height.as_f32() / self.pixel_size as f32).floor() as usize;
@@ -233,8 +238,7 @@ impl VisualMapPanel {
         if buffer_len == 0 {
             return;
         }
-        let bpp = self.color_mode.bytes_per_pixel();
-        let total_pixels = buffer_len.div_ceil(bpp);
+        let total_pixels = self.color_mode.total_pixels(buffer_len);
         let total_rows = total_pixels.div_ceil(self.cols);
         let row_height = self.pixel_size as f32;
         let list_h = self.last_bounds.get().map(|b| f32::from(b.size.height)).unwrap_or(600.0);
@@ -288,8 +292,7 @@ impl VisualMapPanel {
         if buffer_len == 0 {
             return;
         }
-        let bpp = self.color_mode.bytes_per_pixel();
-        let total_pixels = buffer_len.div_ceil(bpp);
+        let total_pixels = self.color_mode.total_pixels(buffer_len);
         let total_rows = total_pixels.div_ceil(self.cols);
         let visible_rows = if let Some(bounds) = self.last_bounds.get() {
             (bounds.size.height.as_f32() / pixel_size_px.as_f32()).floor() as usize
@@ -317,9 +320,8 @@ impl VisualMapPanel {
         let col = (rel_x.as_f32() / self.pixel_size as f32) as usize;
         let col = col.min(self.cols.saturating_sub(1));
         let row = (rel_y.as_f32() / self.pixel_size as f32) as usize + self.scroll_offset;
-        let bpp = self.color_mode.bytes_per_pixel();
         let pixel_idx = row * self.cols + col;
-        let offset = pixel_idx * bpp;
+        let offset = self.color_mode.pixel_to_byte_offset(pixel_idx);
 
         let buffer_len = self.buffer_len(cx);
         if buffer_len == 0 {
@@ -339,8 +341,7 @@ impl VisualMapPanel {
             if click_x >= bar_x && click_x <= f32::from(bounds.right()) && event.position.y >= bounds.top() && event.position.y <= bounds.bottom() {
                 let buffer_len = self.buffer_len(cx);
                 if buffer_len > 0 {
-                    let bpp = self.color_mode.bytes_per_pixel();
-                    let total_pixels = buffer_len.div_ceil(bpp);
+                    let total_pixels = self.color_mode.total_pixels(buffer_len);
                     let total_rows = total_pixels.div_ceil(self.cols);
                     let row_height = self.pixel_size as f32;
                     let list_h = f32::from(bounds.size.height);
@@ -437,15 +438,31 @@ impl VisualMapPanel {
             let col = (rel_x.as_f32() / self.pixel_size as f32) as usize;
             if col < self.cols {
                 let row = (rel_y.as_f32() / self.pixel_size as f32) as usize + self.scroll_offset;
-                let bpp = self.color_mode.bytes_per_pixel();
                 let pixel_idx = row * self.cols + col;
-                let offset = pixel_idx * bpp;
+                let offset = self.color_mode.pixel_to_byte_offset(pixel_idx);
+                let bpp = self.color_mode.bytes_per_pixel();
 
                 if offset < buffer_len
                     && let Some(editor) = &self.editor
                 {
                     let doc = editor.read(cx).document.read().expect("document read lock");
-                    if bpp == 2 {
+                    if self.color_mode.is_sub_byte() {
+                        let byte = doc.buffer.get_range(offset, 1).first().copied().unwrap_or(0);
+                        let ppb = self.color_mode.pixels_per_byte();
+                        let sub_idx = pixel_idx % ppb;
+                        let bit_val = match self.color_mode {
+                            ColorMode::Mono1bpp => (byte >> (7 - sub_idx)) & 1,
+                            ColorMode::Indexed2bpp => (byte >> (6 - sub_idx * 2)) & 0x03,
+                            ColorMode::Indexed4bpp => (byte >> (4 - sub_idx * 4)) & 0x0F,
+                            _ => 0,
+                        };
+                        hovered = Some(HoveredPixel::SubByte {
+                            offset,
+                            sub_idx,
+                            bit_val,
+                            mode: self.color_mode,
+                        });
+                    } else if bpp == 2 {
                         let b0 = doc.buffer.get_range(offset, 1)[0];
                         let b1 = doc.buffer.get_range(offset + 1, 1).first().copied().unwrap_or(0);
                         let raw_val = if self.is_big_endian {
@@ -569,7 +586,7 @@ impl VisualMapPanel {
         self._width_repeat_task = None;
     }
 
-    fn render_width_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_width_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let muted_color = theme.muted_foreground;
         let font_family = cx.global::<Appearance>().font_family.clone();
         h_flex()
@@ -625,6 +642,9 @@ impl VisualMapPanel {
                             .child(if self.color_mode.is_rgb() {
                                 let bpp = self.color_mode.bytes_per_pixel();
                                 format!("{} px ({} B)", self.cols, self.cols * bpp)
+                            } else if self.color_mode.is_sub_byte() {
+                                let ppb = self.color_mode.pixels_per_byte();
+                                format!("{} px ({} B)", self.cols, self.cols.div_ceil(ppb))
                             } else {
                                 format!("{} B", self.cols)
                             }),
@@ -655,9 +675,10 @@ impl VisualMapPanel {
                             ),
                     ),
             )
+            .into_any_element()
     }
 
-    fn render_scale_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_scale_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let muted_color = theme.muted_foreground;
         let pixel_button = |preset: usize, label: &'static str, cx: &mut Context<Self>| {
             let is_selected = self.pixel_size == preset;
@@ -694,9 +715,10 @@ impl VisualMapPanel {
                     .child(pixel_button(4, "x4", cx))
                     .child(pixel_button(8, "x8", cx)),
             )
+            .into_any_element()
     }
 
-    fn render_palette_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_palette_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let muted_color = theme.muted_foreground;
         let color_button = |mode: ColorMode, label: &'static str, id_str: &'static str, cx: &mut Context<Self>| {
             let is_selected = self.color_mode == mode;
@@ -739,6 +761,10 @@ impl VisualMapPanel {
                     .child(color_button(ColorMode::DataCategory, "Type", "c_type", cx))
                     .child(color_button(ColorMode::Rainbow, "Rainbow", "c_rainbow", cx))
                     .child(color_button(ColorMode::Entropy, "Entropy", "c_entropy", cx))
+                    .child(color_button(ColorMode::Mono1bpp, "1-bit", "c_1bpp", cx))
+                    .child(color_button(ColorMode::Indexed2bpp, "2-bit", "c_2bpp", cx))
+                    .child(color_button(ColorMode::Indexed4bpp, "4-bit", "c_4bpp", cx))
+                    .child(color_button(ColorMode::Vga256, "VGA 256", "c_vga256", cx))
                     .child(color_button(ColorMode::Rgb565, "RGB 565", "c_rgb565", cx))
                     .child(color_button(ColorMode::Rgb555, "RGB 555", "c_rgb555", cx))
                     .child(color_button(ColorMode::Rgb888, "RGB 888", "c_rgb888", cx))
@@ -747,9 +773,10 @@ impl VisualMapPanel {
                     .child(color_button(ColorMode::Argb, "ARGB", "c_argb", cx))
                     .child(color_button(ColorMode::Bgra, "BGRA", "c_bgra", cx)),
             )
+            .into_any_element()
     }
 
-    fn render_entropy_window_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_entropy_window_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let muted_color = theme.muted_foreground;
         let window_button = |preset: usize, label: &'static str, cx: &mut Context<Self>| {
             let is_selected = self.entropy_window == preset;
@@ -786,9 +813,10 @@ impl VisualMapPanel {
                     .child(window_button(512, "512B", cx))
                     .child(window_button(1024, "1K", cx)),
             )
+            .into_any_element()
     }
 
-    fn render_endian_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_endian_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let muted_color = theme.muted_foreground;
         let is_big_endian = self.is_big_endian;
         let endian_button = |be: bool, label: &'static str, id_str: &'static str, cx: &mut Context<Self>| {
@@ -825,9 +853,10 @@ impl VisualMapPanel {
                     .child(endian_button(false, "LE", "vm_endian_le", cx))
                     .child(endian_button(true, "BE", "vm_endian_be", cx)),
             )
+            .into_any_element()
     }
 
-    fn render_toolbar(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn render_toolbar(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let mut toolbar = v_flex()
             .p_2()
             .gap_2()
@@ -843,382 +872,256 @@ impl VisualMapPanel {
             toolbar = toolbar.child(self.render_endian_section(theme, cx));
         }
 
-        toolbar
+        toolbar.into_any_element()
     }
 
-    fn render_legend(&self, theme: &gpui_kit::component::Theme) -> Option<impl IntoElement + use<>> {
+    fn render_legend(&self, theme: &gpui_kit::component::Theme) -> Option<AnyElement> {
+        fn legend_chip(color: Hsla, label: &'static str, border: bool, theme: &gpui_kit::component::Theme) -> AnyElement {
+            let mut swatch = div().w_2().h_2().rounded_sm().bg(color);
+            if border {
+                swatch = swatch.border_1().border_color(theme.border);
+            }
+            h_flex()
+                .gap_1()
+                .items_center()
+                .child(swatch)
+                .child(div().text_color(theme.muted_foreground).child(label))
+                .into_any_element()
+        }
+
         let muted_color = theme.muted_foreground;
+        let mut row = h_flex()
+            .flex_wrap()
+            .gap_2()
+            .px_3()
+            .py_1()
+            .border_t_1()
+            .border_color(theme.border)
+            .bg(theme.muted.opacity(0.15))
+            .text_xs()
+            .items_center();
+
         match self.color_mode {
-            ColorMode::DataCategory => Some(
-                h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .px_3()
-                    .py_1()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .bg(theme.muted.opacity(0.15))
-                    .text_xs()
-                    .items_center()
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(ByteCategory::Null.color(theme)))
-                            .child(div().text_color(muted_color).child("Null")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(ByteCategory::Control.color(theme)))
-                            .child(div().text_color(muted_color).child("Control")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(ByteCategory::Space.color(theme)))
-                            .child(div().text_color(muted_color).child("Space")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(ByteCategory::Ascii.color(theme)))
-                            .child(div().text_color(muted_color).child("ASCII")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(ByteCategory::Extended.color(theme)))
-                            .child(div().text_color(muted_color).child("Extended")),
-                    ),
-            ),
+            ColorMode::DataCategory => {
+                row = row
+                    .child(legend_chip(ByteCategory::Null.color(theme), "Null", false, theme))
+                    .child(legend_chip(ByteCategory::Control.color(theme), "Control", false, theme))
+                    .child(legend_chip(ByteCategory::Space.color(theme), "Space", false, theme))
+                    .child(legend_chip(ByteCategory::Ascii.color(theme), "ASCII", false, theme))
+                    .child(legend_chip(ByteCategory::Extended.color(theme), "Extended", false, theme));
+            }
             ColorMode::Entropy => {
                 let color_chip = |norm: f32| {
                     let idx = crate::core::entropy::normalized_to_lut_index(norm);
                     let [r, g, b, _] = crate::core::entropy::entropy_lut()[idx];
-                    div().w_2().h_2().rounded_sm().bg(rgb(u32::from_be_bytes([0, r, g, b])))
+                    rgb(u32::from_be_bytes([0, r, g, b]))
                 };
-                Some(
-                    h_flex()
-                        .flex_wrap()
-                        .gap_2()
-                        .px_3()
-                        .py_1()
-                        .border_t_1()
-                        .border_color(theme.border)
-                        .bg(theme.muted.opacity(0.15))
-                        .text_xs()
-                        .items_center()
-                        .child(
-                            h_flex()
-                                .gap_1()
-                                .items_center()
-                                .child(color_chip(0.0))
-                                .child(div().text_color(muted_color).child("0.0 Uniform")),
-                        )
-                        .child(
-                            h_flex()
-                                .gap_1()
-                                .items_center()
-                                .child(color_chip(0.35))
-                                .child(div().text_color(muted_color).child("Low")),
-                        )
-                        .child(
-                            h_flex()
-                                .gap_1()
-                                .items_center()
-                                .child(color_chip(0.60))
-                                .child(div().text_color(muted_color).child("4.8 Text/Code")),
-                        )
-                        .child(
-                            h_flex()
-                                .gap_1()
-                                .items_center()
-                                .child(color_chip(0.80))
-                                .child(div().text_color(muted_color).child("High")),
-                        )
-                        .child(
-                            h_flex()
-                                .gap_1()
-                                .items_center()
-                                .child(color_chip(1.0))
-                                .child(div().text_color(muted_color).child("8.0 Packed")),
-                        ),
-                )
+                row = row
+                    .child(legend_chip(color_chip(0.0).into(), "0.0 Uniform", false, theme))
+                    .child(legend_chip(color_chip(0.35).into(), "Low", false, theme))
+                    .child(legend_chip(color_chip(0.60).into(), "4.8 Text/Code", false, theme))
+                    .child(legend_chip(color_chip(0.80).into(), "High", false, theme))
+                    .child(legend_chip(color_chip(1.0).into(), "8.0 Packed", false, theme));
             }
-            ColorMode::Rgb565 => Some(
-                h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .px_3()
-                    .py_1()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .bg(theme.muted.opacity(0.15))
-                    .text_xs()
-                    .items_center()
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0xFF0000)))
-                            .child(div().text_color(muted_color).child("R: 5b [11..15]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0x00FF00)))
-                            .child(div().text_color(muted_color).child("G: 6b [5..10]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0x0000FF)))
-                            .child(div().text_color(muted_color).child("B: 5b [0..4]")),
-                    ),
-            ),
-            ColorMode::Rgb555 => Some(
-                h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .px_3()
-                    .py_1()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .bg(theme.muted.opacity(0.15))
-                    .text_xs()
-                    .items_center()
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(theme.muted_foreground.opacity(0.4)))
-                            .child(div().text_color(muted_color).child("X: 1b [15]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0xFF0000)))
-                            .child(div().text_color(muted_color).child("R: 5b [10..14]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0x00FF00)))
-                            .child(div().text_color(muted_color).child("G: 5b [5..9]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0x0000FF)))
-                            .child(div().text_color(muted_color).child("B: 5b [0..4]")),
-                    ),
-            ),
-            ColorMode::Rgb888 => Some(
-                h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .px_3()
-                    .py_1()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .bg(theme.muted.opacity(0.15))
-                    .text_xs()
-                    .items_center()
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0xFF0000)))
-                            .child(div().text_color(muted_color).child("R: 8b [0]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0x00FF00)))
-                            .child(div().text_color(muted_color).child("G: 8b [1]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0x0000FF)))
-                            .child(div().text_color(muted_color).child("B: 8b [2]")),
-                    ),
-            ),
-            ColorMode::Bgr888 => Some(
-                h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .px_3()
-                    .py_1()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .bg(theme.muted.opacity(0.15))
-                    .text_xs()
-                    .items_center()
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0x0000FF)))
-                            .child(div().text_color(muted_color).child("B: 8b [0]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0x00FF00)))
-                            .child(div().text_color(muted_color).child("G: 8b [1]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0xFF0000)))
-                            .child(div().text_color(muted_color).child("R: 8b [2]")),
-                    ),
-            ),
-            ColorMode::Rgba => Some(
-                h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .px_3()
-                    .py_1()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .bg(theme.muted.opacity(0.15))
-                    .text_xs()
-                    .items_center()
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0xFF0000)))
-                            .child(div().text_color(muted_color).child("R: 8b [0]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0x00FF00)))
-                            .child(div().text_color(muted_color).child("G: 8b [1]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0x0000FF)))
-                            .child(div().text_color(muted_color).child("B: 8b [2]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(theme.muted_foreground.opacity(0.6)))
-                            .child(div().text_color(muted_color).child("A: 8b [3]")),
-                    ),
-            ),
-            ColorMode::Argb => Some(
-                h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .px_3()
-                    .py_1()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .bg(theme.muted.opacity(0.15))
-                    .text_xs()
-                    .items_center()
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(theme.muted_foreground.opacity(0.6)))
-                            .child(div().text_color(muted_color).child("A: 8b [0]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0xFF0000)))
-                            .child(div().text_color(muted_color).child("R: 8b [1]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0x00FF00)))
-                            .child(div().text_color(muted_color).child("G: 8b [2]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0x0000FF)))
-                            .child(div().text_color(muted_color).child("B: 8b [3]")),
-                    ),
-            ),
-            ColorMode::Bgra => Some(
-                h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .px_3()
-                    .py_1()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .bg(theme.muted.opacity(0.15))
-                    .text_xs()
-                    .items_center()
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0x0000FF)))
-                            .child(div().text_color(muted_color).child("B: 8b [0]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0x00FF00)))
-                            .child(div().text_color(muted_color).child("G: 8b [1]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(rgb(0xFF0000)))
-                            .child(div().text_color(muted_color).child("R: 8b [2]")),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(div().w_2().h_2().rounded_sm().bg(theme.muted_foreground.opacity(0.6)))
-                            .child(div().text_color(muted_color).child("A: 8b [3]")),
-                    ),
-            ),
-            _ => None,
+            ColorMode::Mono1bpp => {
+                row = row
+                    .child(legend_chip(rgb(0x000000).into(), "0: Black", true, theme))
+                    .child(legend_chip(rgb(0xFFFFFF).into(), "1: White", true, theme))
+                    .child(div().text_color(muted_color).child("(8 px/B, MSB first)"));
+            }
+            ColorMode::Indexed2bpp => {
+                row = row
+                    .child(legend_chip(rgb(0x000000).into(), "00: Black", true, theme))
+                    .child(legend_chip(rgb(0x555555).into(), "01: Dark", true, theme))
+                    .child(legend_chip(rgb(0xAAAAAA).into(), "10: Light", true, theme))
+                    .child(legend_chip(rgb(0xFFFFFF).into(), "11: White", true, theme))
+                    .child(div().text_color(muted_color).child("(4 px/B, 2b shade)"));
+            }
+            ColorMode::Indexed4bpp => {
+                let lut = crate::core::visual_map::cga_16_bgra_lut();
+                let chips: Vec<AnyElement> = (0..16)
+                    .map(|i| {
+                        let [b, g, r, _] = lut[i];
+                        div()
+                            .w_2p5()
+                            .h_2p5()
+                            .rounded_sm()
+                            .bg(rgb(u32::from_be_bytes([0, r, g, b])))
+                            .border_1()
+                            .border_color(theme.border)
+                            .into_any_element()
+                    })
+                    .collect();
+                row = row
+                    .child(div().text_color(muted_color).font_medium().child("CGA 16-Color (2 px/B):"))
+                    .children(chips)
+                    .child(div().text_color(muted_color).child("[0: Black .. 15: Br.White]"));
+            }
+            ColorMode::Vga256 => {
+                row = row.child(div().text_color(muted_color).font_medium().child("VGA 256-Color (1 B/px):")).child(
+                    div()
+                        .text_color(muted_color)
+                        .child("0..15: Standard CGA | 16..231: 6×6×6 Color Cube | 232..255: Grayscale"),
+                );
+            }
+            ColorMode::Rgb565 => {
+                row = row
+                    .child(legend_chip(rgb(0xFF0000).into(), "R: 5b [11..15]", false, theme))
+                    .child(legend_chip(rgb(0x00FF00).into(), "G: 6b [5..10]", false, theme))
+                    .child(legend_chip(rgb(0x0000FF).into(), "B: 5b [0..4]", false, theme));
+            }
+            ColorMode::Rgb555 => {
+                let x_col = theme.muted_foreground.opacity(0.4);
+                row = row
+                    .child(legend_chip(x_col, "X: 1b [15]", false, theme))
+                    .child(legend_chip(rgb(0xFF0000).into(), "R: 5b [10..14]", false, theme))
+                    .child(legend_chip(rgb(0x00FF00).into(), "G: 5b [5..9]", false, theme))
+                    .child(legend_chip(rgb(0x0000FF).into(), "B: 5b [0..4]", false, theme));
+            }
+            ColorMode::Rgb888 => {
+                row = row
+                    .child(legend_chip(rgb(0xFF0000).into(), "R: 8b [0]", false, theme))
+                    .child(legend_chip(rgb(0x00FF00).into(), "G: 8b [1]", false, theme))
+                    .child(legend_chip(rgb(0x0000FF).into(), "B: 8b [2]", false, theme));
+            }
+            ColorMode::Bgr888 => {
+                row = row
+                    .child(legend_chip(rgb(0x0000FF).into(), "B: 8b [0]", false, theme))
+                    .child(legend_chip(rgb(0x00FF00).into(), "G: 8b [1]", false, theme))
+                    .child(legend_chip(rgb(0xFF0000).into(), "R: 8b [2]", false, theme));
+            }
+            ColorMode::Rgba => {
+                let a_col = theme.muted_foreground.opacity(0.6);
+                row = row
+                    .child(legend_chip(rgb(0xFF0000).into(), "R: 8b [0]", false, theme))
+                    .child(legend_chip(rgb(0x00FF00).into(), "G: 8b [1]", false, theme))
+                    .child(legend_chip(rgb(0x0000FF).into(), "B: 8b [2]", false, theme))
+                    .child(legend_chip(a_col, "A: 8b [3]", false, theme));
+            }
+            ColorMode::Argb => {
+                let a_col = theme.muted_foreground.opacity(0.6);
+                row = row
+                    .child(legend_chip(a_col, "A: 8b [0]", false, theme))
+                    .child(legend_chip(rgb(0xFF0000).into(), "R: 8b [1]", false, theme))
+                    .child(legend_chip(rgb(0x00FF00).into(), "G: 8b [2]", false, theme))
+                    .child(legend_chip(rgb(0x0000FF).into(), "B: 8b [3]", false, theme));
+            }
+            ColorMode::Bgra => {
+                let a_col = theme.muted_foreground.opacity(0.6);
+                row = row
+                    .child(legend_chip(rgb(0x0000FF).into(), "B: 8b [0]", false, theme))
+                    .child(legend_chip(rgb(0x00FF00).into(), "G: 8b [1]", false, theme))
+                    .child(legend_chip(rgb(0xFF0000).into(), "R: 8b [2]", false, theme))
+                    .child(legend_chip(a_col, "A: 8b [3]", false, theme));
+            }
+            _ => return None,
         }
+
+        Some(row.into_any_element())
     }
 
-    fn render_footer(&self, buffer_len: usize, total_rows: usize, theme: &gpui_kit::component::Theme, cx: &App) -> impl IntoElement + use<> {
+    fn render_footer(&self, buffer_len: usize, total_rows: usize, theme: &gpui_kit::component::Theme, cx: &App) -> AnyElement {
         let border_color = theme.border;
         let muted_color = theme.muted_foreground;
         let font_family = cx.global::<Appearance>().font_family.clone();
 
-        match self.hovered_info {
+        let (left, right): (AnyElement, AnyElement) = match self.hovered_info {
+            Some(HoveredPixel::SubByte {
+                offset,
+                sub_idx,
+                bit_val,
+                mode,
+            }) => {
+                let display_addr = self.editor.as_ref().map(|ed| ed.read(cx).offset_to_address(offset)).unwrap_or(offset);
+                let (swatch_color, val_desc, bit_pos_str, mode_name) = match mode {
+                    ColorMode::Mono1bpp => {
+                        let col = if bit_val == 1 { rgb(0xFFFFFF) } else { rgb(0x000000) };
+                        let name = if bit_val == 1 { "1 (White)" } else { "0 (Black)" };
+                        (col, name.to_string(), format!("bit {}", 7 - sub_idx), "1-bit Mono")
+                    }
+                    ColorMode::Indexed2bpp => {
+                        let shade = bit_val * 85;
+                        let col = rgb(u32::from_be_bytes([0, shade, shade, shade]));
+                        let shade_name = match bit_val {
+                            0 => "Black",
+                            1 => "Dark",
+                            2 => "Light",
+                            3 => "White",
+                            _ => "",
+                        };
+                        (
+                            col,
+                            format!("{}/3 ({})", bit_val, shade_name),
+                            format!("bits {}..{}", 6 - sub_idx * 2, 7 - sub_idx * 2),
+                            "2-bit Gray",
+                        )
+                    }
+                    ColorMode::Indexed4bpp => {
+                        let [b, g, r, _] = crate::core::visual_map::cga_16_bgra_lut()[(bit_val & 0x0F) as usize];
+                        let col = rgb(u32::from_be_bytes([0, r, g, b]));
+                        let name = crate::core::visual_map::cga_color_name(bit_val);
+                        let nibble = if sub_idx == 0 { "high nibble [4..7]" } else { "low nibble [0..3]" };
+                        (col, format!("{}/15 ({})", bit_val, name), nibble.to_string(), "4-bit CGA")
+                    }
+                    _ => (rgb(0x000000), String::new(), String::new(), ""),
+                };
+
+                let byte_val = self
+                    .editor
+                    .as_ref()
+                    .and_then(|ed| {
+                        let doc = ed.read(cx).document.read().ok()?;
+                        doc.buffer.get_range(offset, 1).first().copied()
+                    })
+                    .unwrap_or(0);
+
+                let left = h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("0x{:08X}", display_addr)),
+                    )
+                    .child(div().text_color(muted_color).child("|"))
+                    .child(
+                        div()
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("0x{:02X}", byte_val)),
+                    )
+                    .child(
+                        div()
+                            .px_1()
+                            .py_0p5()
+                            .rounded_sm()
+                            .bg(theme.muted.opacity(0.4))
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(bit_pos_str),
+                    )
+                    .into_any_element();
+
+                let right = h_flex()
+                    .gap_1p5()
+                    .items_center()
+                    .child(div().w_3().h_3().rounded_sm().bg(swatch_color).border_1().border_color(theme.border))
+                    .child(div().font_family(font_family).text_color(theme.foreground).child(val_desc))
+                    .child(
+                        div()
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded_sm()
+                            .bg(theme.accent.opacity(0.2))
+                            .text_color(theme.accent)
+                            .font_medium()
+                            .child(mode_name),
+                    )
+                    .into_any_element();
+
+                (left, right)
+            }
             Some(HoveredPixel::Rgb16 { offset, raw_val, b0, b1, mode }) => {
                 let display_addr = self.editor.as_ref().map(|ed| ed.read(cx).offset_to_address(offset)).unwrap_or(offset);
                 let (r, g, b, r_bits, g_bits, b_bits, mode_name) = match mode {
@@ -1240,73 +1143,66 @@ impl VisualMapPanel {
                 };
                 let swatch_color = rgb(u32::from_be_bytes([0, r, g, b]));
 
-                h_flex()
-                    .w_full()
-                    .justify_between()
+                let left = h_flex()
+                    .gap_2()
                     .items_center()
-                    .p_2()
-                    .border_t_1()
-                    .border_color(border_color)
-                    .text_xs()
                     .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                div()
-                                    .font_family(font_family.clone())
-                                    .text_color(theme.foreground)
-                                    .child(format!("0x{:08X}", display_addr)),
-                            )
-                            .child(div().text_color(muted_color).child("|"))
-                            .child(
-                                div()
-                                    .font_family(font_family.clone())
-                                    .text_color(theme.foreground)
-                                    .child(format!("0x{:04X}", raw_val)),
-                            )
-                            .child(
-                                div()
-                                    .px_1()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(theme.muted.opacity(0.4))
-                                    .font_family(font_family.clone())
-                                    .text_color(theme.foreground)
-                                    .child(format!("[{:02X} {:02X}]", b0, b1)),
-                            ),
+                        div()
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("0x{:08X}", display_addr)),
+                    )
+                    .child(div().text_color(muted_color).child("|"))
+                    .child(
+                        div()
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("0x{:04X}", raw_val)),
                     )
                     .child(
-                        h_flex()
-                            .gap_1p5()
-                            .items_center()
-                            .child(div().w_3().h_3().rounded_sm().bg(swatch_color).border_1().border_color(theme.border))
-                            .child(
-                                div()
-                                    .font_family(font_family.clone())
-                                    .text_color(theme.foreground)
-                                    .child(format!("RGB({}, {}, {})", r, g, b)),
-                            )
-                            .child(
-                                div()
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(theme.muted.opacity(0.3))
-                                    .text_color(muted_color)
-                                    .child(format!("R:{} G:{} B:{}", r_bits, g_bits, b_bits)),
-                            )
-                            .child(
-                                div()
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(theme.accent.opacity(0.2))
-                                    .text_color(theme.accent)
-                                    .font_medium()
-                                    .child(mode_name),
-                            ),
+                        div()
+                            .px_1()
+                            .py_0p5()
+                            .rounded_sm()
+                            .bg(theme.muted.opacity(0.4))
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("[{:02X} {:02X}]", b0, b1)),
                     )
+                    .into_any_element();
+
+                let right = h_flex()
+                    .gap_1p5()
+                    .items_center()
+                    .child(div().w_3().h_3().rounded_sm().bg(swatch_color).border_1().border_color(theme.border))
+                    .child(
+                        div()
+                            .font_family(font_family)
+                            .text_color(theme.foreground)
+                            .child(format!("RGB({}, {}, {})", r, g, b)),
+                    )
+                    .child(
+                        div()
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded_sm()
+                            .bg(theme.muted.opacity(0.3))
+                            .text_color(muted_color)
+                            .child(format!("R:{} G:{} B:{}", r_bits, g_bits, b_bits)),
+                    )
+                    .child(
+                        div()
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded_sm()
+                            .bg(theme.accent.opacity(0.2))
+                            .text_color(theme.accent)
+                            .font_medium()
+                            .child(mode_name),
+                    )
+                    .into_any_element();
+
+                (left, right)
             }
             Some(HoveredPixel::Rgb24 { offset, b0, b1, b2, mode }) => {
                 let display_addr = self.editor.as_ref().map(|ed| ed.read(cx).offset_to_address(offset)).unwrap_or(offset);
@@ -1318,64 +1214,57 @@ impl VisualMapPanel {
                 let swatch_color = rgb(u32::from_be_bytes([0, r, g, b]));
                 let raw_val = u32::from_be_bytes([0, b0, b1, b2]);
 
-                h_flex()
-                    .w_full()
-                    .justify_between()
+                let left = h_flex()
+                    .gap_2()
                     .items_center()
-                    .p_2()
-                    .border_t_1()
-                    .border_color(border_color)
-                    .text_xs()
                     .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                div()
-                                    .font_family(font_family.clone())
-                                    .text_color(theme.foreground)
-                                    .child(format!("0x{:08X}", display_addr)),
-                            )
-                            .child(div().text_color(muted_color).child("|"))
-                            .child(
-                                div()
-                                    .font_family(font_family.clone())
-                                    .text_color(theme.foreground)
-                                    .child(format!("0x{:06X}", raw_val)),
-                            )
-                            .child(
-                                div()
-                                    .px_1()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(theme.muted.opacity(0.4))
-                                    .font_family(font_family.clone())
-                                    .text_color(theme.foreground)
-                                    .child(format!("[{:02X} {:02X} {:02X}]", b0, b1, b2)),
-                            ),
+                        div()
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("0x{:08X}", display_addr)),
+                    )
+                    .child(div().text_color(muted_color).child("|"))
+                    .child(
+                        div()
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("0x{:06X}", raw_val)),
                     )
                     .child(
-                        h_flex()
-                            .gap_1p5()
-                            .items_center()
-                            .child(div().w_3().h_3().rounded_sm().bg(swatch_color).border_1().border_color(theme.border))
-                            .child(
-                                div()
-                                    .font_family(font_family.clone())
-                                    .text_color(theme.foreground)
-                                    .child(format!("RGB({}, {}, {})", r, g, b)),
-                            )
-                            .child(
-                                div()
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(theme.accent.opacity(0.2))
-                                    .text_color(theme.accent)
-                                    .font_medium()
-                                    .child(mode_name),
-                            ),
+                        div()
+                            .px_1()
+                            .py_0p5()
+                            .rounded_sm()
+                            .bg(theme.muted.opacity(0.4))
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("[{:02X} {:02X} {:02X}]", b0, b1, b2)),
                     )
+                    .into_any_element();
+
+                let right = h_flex()
+                    .gap_1p5()
+                    .items_center()
+                    .child(div().w_3().h_3().rounded_sm().bg(swatch_color).border_1().border_color(theme.border))
+                    .child(
+                        div()
+                            .font_family(font_family)
+                            .text_color(theme.foreground)
+                            .child(format!("RGB({}, {}, {})", r, g, b)),
+                    )
+                    .child(
+                        div()
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded_sm()
+                            .bg(theme.accent.opacity(0.2))
+                            .text_color(theme.accent)
+                            .font_medium()
+                            .child(mode_name),
+                    )
+                    .into_any_element();
+
+                (left, right)
             }
             Some(HoveredPixel::Rgb32 { offset, b0, b1, b2, b3, mode }) => {
                 let display_addr = self.editor.as_ref().map(|ed| ed.read(cx).offset_to_address(offset)).unwrap_or(offset);
@@ -1388,149 +1277,161 @@ impl VisualMapPanel {
                 let swatch_color = rgba(u32::from_be_bytes([r, g, b, a]));
                 let raw_val = u32::from_be_bytes([b0, b1, b2, b3]);
 
-                h_flex()
-                    .w_full()
-                    .justify_between()
+                let left = h_flex()
+                    .gap_2()
                     .items_center()
-                    .p_2()
-                    .border_t_1()
-                    .border_color(border_color)
-                    .text_xs()
                     .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                div()
-                                    .font_family(font_family.clone())
-                                    .text_color(theme.foreground)
-                                    .child(format!("0x{:08X}", display_addr)),
-                            )
-                            .child(div().text_color(muted_color).child("|"))
-                            .child(
-                                div()
-                                    .font_family(font_family.clone())
-                                    .text_color(theme.foreground)
-                                    .child(format!("0x{:08X}", raw_val)),
-                            )
-                            .child(
-                                div()
-                                    .px_1()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(theme.muted.opacity(0.4))
-                                    .font_family(font_family.clone())
-                                    .text_color(theme.foreground)
-                                    .child(format!("[{:02X} {:02X} {:02X} {:02X}]", b0, b1, b2, b3)),
-                            ),
+                        div()
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("0x{:08X}", display_addr)),
+                    )
+                    .child(div().text_color(muted_color).child("|"))
+                    .child(
+                        div()
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("0x{:08X}", raw_val)),
                     )
                     .child(
-                        h_flex()
-                            .gap_1p5()
-                            .items_center()
-                            .child(div().w_3().h_3().rounded_sm().bg(swatch_color).border_1().border_color(theme.border))
-                            .child(
-                                div()
-                                    .font_family(font_family.clone())
-                                    .text_color(theme.foreground)
-                                    .child(format!("RGBA({}, {}, {}, {})", r, g, b, a)),
-                            )
-                            .child(
-                                div()
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(theme.accent.opacity(0.2))
-                                    .text_color(theme.accent)
-                                    .font_medium()
-                                    .child(mode_name),
-                            ),
+                        div()
+                            .px_1()
+                            .py_0p5()
+                            .rounded_sm()
+                            .bg(theme.muted.opacity(0.4))
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("[{:02X} {:02X} {:02X} {:02X}]", b0, b1, b2, b3)),
                     )
+                    .into_any_element();
+
+                let right = h_flex()
+                    .gap_1p5()
+                    .items_center()
+                    .child(div().w_3().h_3().rounded_sm().bg(swatch_color).border_1().border_color(theme.border))
+                    .child(
+                        div()
+                            .font_family(font_family)
+                            .text_color(theme.foreground)
+                            .child(format!("RGBA({}, {}, {}, {})", r, g, b, a)),
+                    )
+                    .child(
+                        div()
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded_sm()
+                            .bg(theme.accent.opacity(0.2))
+                            .text_color(theme.accent)
+                            .font_medium()
+                            .child(mode_name),
+                    )
+                    .into_any_element();
+
+                (left, right)
             }
             Some(HoveredPixel::Byte(offset, byte)) => {
-                let cat = ByteCategory::of(byte);
-                let char_repr = if (32..=126).contains(&byte) {
-                    format!("'{}'", byte as char)
-                } else if byte == 0 {
-                    "NUL".to_string()
-                } else {
-                    format!("0x{:02X}", byte)
-                };
-
                 let display_addr = self.editor.as_ref().map(|ed| ed.read(cx).offset_to_address(offset)).unwrap_or(offset);
 
-                let entropy_info = self.editor.as_ref().and_then(|ed| {
-                    let doc = ed.read(cx).document.read().ok()?;
-                    let h = crate::core::entropy::shannon_entropy_at(doc.buffer.data(), offset, self.entropy_window);
-                    let norm = (h / 8.0) as f32;
-                    let idx = crate::core::entropy::normalized_to_lut_index(norm);
-                    let [r, g, b, _] = crate::core::entropy::entropy_lut()[idx];
-                    let color: Hsla = rgb(u32::from_be_bytes([0, r, g, b])).into();
-                    Some((h, norm, color))
-                });
-
-                h_flex()
-                    .w_full()
-                    .justify_between()
+                let left = h_flex()
+                    .gap_2()
                     .items_center()
-                    .p_2()
-                    .border_t_1()
-                    .border_color(border_color)
-                    .text_xs()
                     .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                div()
-                                    .font_family(font_family.clone())
-                                    .text_color(theme.foreground)
-                                    .child(format!("0x{:08X}", display_addr)),
-                            )
-                            .child(div().text_color(muted_color).child("|"))
-                            .child(
-                                div()
-                                    .font_family(font_family.clone())
-                                    .text_color(theme.foreground)
-                                    .child(format!("0x{:02X} ({})", byte, byte)),
-                            )
-                            .child(
-                                div()
-                                    .px_1()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(theme.muted.opacity(0.4))
-                                    .font_family(font_family.clone())
-                                    .text_color(theme.foreground)
-                                    .child(char_repr),
-                            ),
+                        div()
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("0x{:08X}", display_addr)),
+                    )
+                    .child(div().text_color(muted_color).child("|"))
+                    .child(
+                        div()
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("0x{:02X} ({})", byte, byte)),
                     )
                     .child(
-                        h_flex()
-                            .gap_1p5()
-                            .items_center()
-                            .children(entropy_info.map(|(h, norm, color)| {
-                                let label = crate::core::entropy::entropy_level_label(h);
-                                div()
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(color.opacity(0.2))
-                                    .text_color(color)
-                                    .font_medium()
-                                    .child(format!("H: {:.2} ({:.0}%) {}", h, norm * 100.0, label))
-                            }))
-                            .child(
-                                div()
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(cat.color(theme).opacity(0.2))
-                                    .text_color(cat.color(theme))
-                                    .font_medium()
-                                    .child(cat.label()),
-                            ),
+                        div()
+                            .px_1()
+                            .py_0p5()
+                            .rounded_sm()
+                            .bg(theme.muted.opacity(0.4))
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(if self.color_mode == ColorMode::Vga256 {
+                                format!("Color #{}", byte)
+                            } else if (32..=126).contains(&byte) {
+                                format!("'{}'", byte as char)
+                            } else if byte == 0 {
+                                "NUL".to_string()
+                            } else {
+                                format!("0x{:02X}", byte)
+                            }),
                     )
+                    .into_any_element();
+
+                let right = if self.color_mode == ColorMode::Vga256 {
+                    let [b, g, r, _] = crate::core::visual_map::vga256_bgra_lut()[byte as usize];
+                    let swatch_color = rgb(u32::from_be_bytes([0, r, g, b]));
+                    h_flex()
+                        .gap_1p5()
+                        .items_center()
+                        .child(div().w_3().h_3().rounded_sm().bg(swatch_color).border_1().border_color(theme.border))
+                        .child(
+                            div()
+                                .font_family(font_family)
+                                .text_color(theme.foreground)
+                                .child(format!("RGB({}, {}, {})", r, g, b)),
+                        )
+                        .child(
+                            div()
+                                .px_1p5()
+                                .py_0p5()
+                                .rounded_sm()
+                                .bg(theme.accent.opacity(0.2))
+                                .text_color(theme.accent)
+                                .font_medium()
+                                .child("VGA 256"),
+                        )
+                        .into_any_element()
+                } else {
+                    let cat = ByteCategory::of(byte);
+                    let entropy_info = self.editor.as_ref().and_then(|ed| {
+                        let doc = ed.read(cx).document.read().ok()?;
+                        let h = crate::core::entropy::shannon_entropy_at(doc.buffer.data(), offset, self.entropy_window);
+                        let norm = (h / 8.0) as f32;
+                        let idx = crate::core::entropy::normalized_to_lut_index(norm);
+                        let [r, g, b, _] = crate::core::entropy::entropy_lut()[idx];
+                        let color: Hsla = rgb(u32::from_be_bytes([0, r, g, b])).into();
+                        Some((h, norm, color))
+                    });
+
+                    h_flex()
+                        .gap_1p5()
+                        .items_center()
+                        .children(entropy_info.map(|(h, norm, color)| {
+                            let label = crate::core::entropy::entropy_level_label(h);
+                            div()
+                                .px_1p5()
+                                .py_0p5()
+                                .rounded_sm()
+                                .bg(color.opacity(0.2))
+                                .text_color(color)
+                                .font_medium()
+                                .child(format!("H: {:.2} ({:.0}%) {}", h, norm * 100.0, label))
+                        }))
+                        .child(
+                            div()
+                                .px_1p5()
+                                .py_0p5()
+                                .rounded_sm()
+                                .bg(cat.color(theme).opacity(0.2))
+                                .text_color(cat.color(theme))
+                                .font_medium()
+                                .child(cat.label()),
+                        )
+                        .into_any_element()
+                };
+
+                (left, right)
             }
             None => {
                 let cursor_str = self.editor.as_ref().map(|ed| {
@@ -1546,33 +1447,42 @@ impl VisualMapPanel {
                     String::new()
                 };
 
-                h_flex()
-                    .w_full()
-                    .justify_between()
+                let left = h_flex()
+                    .gap_2()
                     .items_center()
-                    .p_2()
-                    .border_t_1()
-                    .border_color(border_color)
-                    .text_xs()
                     .text_color(muted_color)
-                    .child(
+                    .child(div().child(crate::core::format::format_size_friendly(buffer_len)))
+                    .child(div().child("|"))
+                    .child(div().child(format!("{} rows", crate::core::format::format_with_commas(total_rows))))
+                    .children(cursor_str.map(|c| {
                         h_flex()
                             .gap_2()
                             .items_center()
-                            .child(div().child(crate::core::format::format_size_friendly(buffer_len)))
                             .child(div().child("|"))
-                            .child(div().child(format!("{} rows", crate::core::format::format_with_commas(total_rows))))
-                            .children(cursor_str.map(|c| {
-                                h_flex()
-                                    .gap_2()
-                                    .items_center()
-                                    .child(div().child("|"))
-                                    .child(div().font_family(font_family.clone()).child(c))
-                            })),
-                    )
-                    .child(div().child(format!("{} cols @ x{}{}", self.cols, self.pixel_size, extra_spec)))
+                            .child(div().font_family(font_family.clone()).child(c))
+                    }))
+                    .into_any_element();
+
+                let right = div()
+                    .text_color(muted_color)
+                    .child(format!("{} cols @ x{}{}", self.cols, self.pixel_size, extra_spec))
+                    .into_any_element();
+
+                (left, right)
             }
-        }
+        };
+
+        h_flex()
+            .w_full()
+            .justify_between()
+            .items_center()
+            .p_2()
+            .border_t_1()
+            .border_color(border_color)
+            .text_xs()
+            .child(left)
+            .child(right)
+            .into_any_element()
     }
 }
 
@@ -1723,8 +1633,7 @@ impl Render for VisualMapPanel {
 
         let buffer_len = self.buffer_len(cx);
         let state_id = self.state_id(cx);
-        let bpp = self.color_mode.bytes_per_pixel();
-        let total_pixels = buffer_len.div_ceil(bpp);
+        let total_pixels = self.color_mode.total_pixels(buffer_len);
         let total_rows = total_pixels.div_ceil(self.cols);
 
         let toolbar = self.render_toolbar(&theme, cx);
@@ -1734,7 +1643,10 @@ impl Render for VisualMapPanel {
         let ed_ref = editor.read(cx);
         let cursor_offset = Some(ed_ref.cursor.offset);
         let selection_range = ed_ref.selection_range();
-        let hovered_offset = self.hovered_info.map(|hov| hov.offset());
+        let hovered_pixel = self.hovered_info.map(|hov| match hov {
+            HoveredPixel::SubByte { offset, sub_idx, mode, .. } => offset.saturating_mul(mode.pixels_per_byte()) + sub_idx,
+            _ => self.color_mode.byte_offset_to_pixel(hov.offset()),
+        });
 
         let canvas = div()
             .flex_1()
@@ -1755,7 +1667,7 @@ impl Render for VisualMapPanel {
                 state_id,
                 cursor_offset,
                 selection_range,
-                hovered_offset,
+                hovered_pixel,
                 is_dragging_scrollbar: self.is_dragging_scrollbar,
                 scrollbar_hovered: self.scrollbar_hovered,
             });
@@ -1809,7 +1721,7 @@ struct VisualMapElement {
     state_id: usize,
     cursor_offset: Option<usize>,
     selection_range: Option<Range<usize>>,
-    hovered_offset: Option<usize>,
+    hovered_pixel: Option<usize>,
     is_dragging_scrollbar: bool,
     scrollbar_hovered: bool,
 }
@@ -1877,8 +1789,7 @@ impl Element for VisualMapElement {
         let pixel_size = self.pixel_size as f32;
         let cols = self.cols;
 
-        let bpp = self.color_mode.bytes_per_pixel();
-        let total_pixels = buffer_len.div_ceil(bpp);
+        let total_pixels = self.color_mode.total_pixels(buffer_len);
         let total_rows = total_pixels.div_ceil(cols);
         let visible_rows = (bounds.size.height.as_f32() / pixel_size).ceil() as usize + 1;
         let max_visible_cols = (bounds.size.width.as_f32() / pixel_size).ceil() as usize + 1;
@@ -1962,8 +1873,13 @@ impl Element for VisualMapElement {
         if let Some(sel) = &self.selection_range
             && sel.start < sel.end
         {
-            let sel_pix_start = sel.start / bpp;
-            let sel_pix_end = sel.end.div_ceil(bpp);
+            let sel_pix_start = self.color_mode.byte_offset_to_pixel(sel.start);
+            let sel_pix_end = if self.color_mode.is_sub_byte() {
+                self.color_mode.byte_offset_to_pixel(sel.end)
+            } else {
+                sel.end.div_ceil(self.color_mode.bytes_per_pixel())
+            };
+            let sel_pix_end = sel_pix_end.min(total_pixels);
             for r in start_row..end_row {
                 let row_pix_start = r * cols;
                 let row_pix_end = (r + 1) * cols;
@@ -1982,11 +1898,10 @@ impl Element for VisualMapElement {
         }
 
         // Hover Highlight
-        if let Some(hov) = self.hovered_offset {
-            let hov_pix = hov / bpp;
+        if let Some(hov_pix) = self.hovered_pixel {
             let hov_row = hov_pix / cols;
             let hov_col = hov_pix % cols;
-            if hov_row >= start_row && hov_row < end_row && hov < buffer_len {
+            if hov_row >= start_row && hov_row < end_row && hov_pix < total_pixels {
                 let cell_x = bounds.origin.x + px(hov_col as f32 * pixel_size);
                 let cell_y = bounds.origin.y + px((hov_row - start_row) as f32 * pixel_size);
                 let cell_w = px(pixel_size);
@@ -2001,7 +1916,7 @@ impl Element for VisualMapElement {
 
         // Cursor Highlight
         if let Some(cursor) = self.cursor_offset {
-            let cur_pix = cursor / bpp;
+            let cur_pix = self.color_mode.byte_offset_to_pixel(cursor);
             let cur_row = cur_pix / cols;
             let cur_col = cur_pix % cols;
             if cur_row >= start_row && cur_row < end_row && cursor <= buffer_len {
