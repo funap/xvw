@@ -4,7 +4,7 @@ use crate::ui::components::scrollbar::{CanvasScrollbar, SCROLLBAR_WIDTH, calcula
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{Panel, PanelEvent};
-use gpui_kit::component::{ActiveTheme, Icon, Sizable, Size, StyledExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, Size, StyledExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use std::cell::RefCell;
@@ -56,7 +56,7 @@ fn category_palette_from_theme(theme: &gpui_kit::component::Theme) -> CategoryPa
     }
 }
 
-pub type CachedImageKey = (usize, usize, usize, ColorMode, usize, usize, usize, f32, f32, u32, bool);
+pub type CachedImageKey = (usize, usize, usize, ColorMode, usize, usize, usize, f32, f32, u32, bool, usize);
 pub type CachedImage = (Arc<RenderImage>, CachedImageKey);
 
 /// Hover information for a visual map cell.
@@ -108,6 +108,7 @@ pub struct VisualMapPanel {
     focus_handle: FocusHandle,
     cols: usize,
     pixel_size: usize,
+    pub header_offset: usize,
     scroll_offset: usize,
     scroll_remainder: f32,
     is_dragging_scrollbar: bool,
@@ -123,6 +124,7 @@ pub struct VisualMapPanel {
     is_dragging: bool,
     _editor_subscription: Option<Subscription>,
     _width_repeat_task: Option<Task<()>>,
+    _offset_repeat_task: Option<Task<()>>,
 }
 
 impl EventEmitter<PanelEvent> for VisualMapPanel {}
@@ -142,6 +144,7 @@ impl VisualMapPanel {
             focus_handle: cx.focus_handle(),
             cols: 64,
             pixel_size: 2,
+            header_offset: 0,
             scroll_offset: 0,
             scroll_remainder: 0.0,
             is_dragging_scrollbar: false,
@@ -157,6 +160,7 @@ impl VisualMapPanel {
             is_dragging: false,
             _editor_subscription,
             _width_repeat_task: None,
+            _offset_repeat_task: None,
         }
     }
 
@@ -185,6 +189,14 @@ impl VisualMapPanel {
             .unwrap_or(0)
     }
 
+    pub fn active_buffer_len(&self, cx: &App) -> usize {
+        self.buffer_len(cx).saturating_sub(self.header_offset)
+    }
+
+    pub fn max_header_offset(&self) -> usize {
+        self.cols.saturating_sub(1)
+    }
+
     fn state_id(&self, cx: &App) -> usize {
         self.editor
             .as_ref()
@@ -195,15 +207,16 @@ impl VisualMapPanel {
     pub fn scroll_to_cursor(&mut self, cx: &mut Context<Self>) {
         let Some(editor) = &self.editor else { return };
         let cursor_offset = editor.read(cx).cursor.offset;
-        let buffer_len = self.buffer_len(cx);
-        if buffer_len == 0 {
+        let active_len = self.active_buffer_len(cx);
+        if active_len == 0 {
             self.scroll_offset = 0;
             cx.notify();
             return;
         }
-        let total_pixels = self.color_mode.total_pixels(buffer_len);
+        let total_pixels = self.color_mode.total_pixels(active_len);
         let total_rows = total_pixels.div_ceil(self.cols);
-        let cursor_row = self.color_mode.byte_offset_to_pixel(cursor_offset) / self.cols;
+        let rel_cursor = cursor_offset.saturating_sub(self.header_offset);
+        let cursor_row = self.color_mode.byte_offset_to_pixel(rel_cursor) / self.cols;
         let visible_rows = if let Some(bounds) = self.last_bounds.get() {
             (bounds.size.height.as_f32() / self.pixel_size as f32).floor() as usize
         } else {
@@ -216,8 +229,8 @@ impl VisualMapPanel {
     }
 
     fn update_scrollbar(&mut self, cx: &App) {
-        let buffer_len = self.buffer_len(cx);
-        let total_pixels = self.color_mode.total_pixels(buffer_len);
+        let active_len = self.active_buffer_len(cx);
+        let total_pixels = self.color_mode.total_pixels(active_len);
         let total_rows = total_pixels.div_ceil(self.cols);
         let max_offset = if let Some(bounds) = self.last_bounds.get() {
             let visible_rows = (bounds.size.height.as_f32() / self.pixel_size as f32).floor() as usize;
@@ -234,11 +247,11 @@ impl VisualMapPanel {
         }
 
         let delta_y = current_y - self.scrollbar_drag_start_y;
-        let buffer_len = self.buffer_len(cx);
-        if buffer_len == 0 {
+        let active_len = self.active_buffer_len(cx);
+        if active_len == 0 {
             return;
         }
-        let total_pixels = self.color_mode.total_pixels(buffer_len);
+        let total_pixels = self.color_mode.total_pixels(active_len);
         let total_rows = total_pixels.div_ceil(self.cols);
         let row_height = self.pixel_size as f32;
         let list_h = self.last_bounds.get().map(|b| f32::from(b.size.height)).unwrap_or(600.0);
@@ -288,11 +301,11 @@ impl VisualMapPanel {
         }
 
         let pixel_size_px = px(self.pixel_size as f32);
-        let buffer_len = self.buffer_len(cx);
-        if buffer_len == 0 {
+        let active_len = self.active_buffer_len(cx);
+        if active_len == 0 {
             return;
         }
-        let total_pixels = self.color_mode.total_pixels(buffer_len);
+        let total_pixels = self.color_mode.total_pixels(active_len);
         let total_rows = total_pixels.div_ceil(self.cols);
         let visible_rows = if let Some(bounds) = self.last_bounds.get() {
             (bounds.size.height.as_f32() / pixel_size_px.as_f32()).floor() as usize
@@ -321,7 +334,7 @@ impl VisualMapPanel {
         let col = col.min(self.cols.saturating_sub(1));
         let row = (rel_y.as_f32() / self.pixel_size as f32) as usize + self.scroll_offset;
         let pixel_idx = row * self.cols + col;
-        let offset = self.color_mode.pixel_to_byte_offset(pixel_idx);
+        let offset = self.header_offset + self.color_mode.pixel_to_byte_offset(pixel_idx);
 
         let buffer_len = self.buffer_len(cx);
         if buffer_len == 0 {
@@ -339,9 +352,9 @@ impl VisualMapPanel {
             let bar_w = f32::from(SCROLLBAR_WIDTH);
             let bar_x = f32::from(bounds.right()) - bar_w;
             if click_x >= bar_x && click_x <= f32::from(bounds.right()) && event.position.y >= bounds.top() && event.position.y <= bounds.bottom() {
-                let buffer_len = self.buffer_len(cx);
-                if buffer_len > 0 {
-                    let total_pixels = self.color_mode.total_pixels(buffer_len);
+                let active_len = self.active_buffer_len(cx);
+                if active_len > 0 {
+                    let total_pixels = self.color_mode.total_pixels(active_len);
                     let total_rows = total_pixels.div_ceil(self.cols);
                     let row_height = self.pixel_size as f32;
                     let list_h = f32::from(bounds.size.height);
@@ -439,7 +452,7 @@ impl VisualMapPanel {
             if col < self.cols {
                 let row = (rel_y.as_f32() / self.pixel_size as f32) as usize + self.scroll_offset;
                 let pixel_idx = row * self.cols + col;
-                let offset = self.color_mode.pixel_to_byte_offset(pixel_idx);
+                let offset = self.header_offset + self.color_mode.pixel_to_byte_offset(pixel_idx);
                 let bpp = self.color_mode.bytes_per_pixel();
 
                 if offset < buffer_len
@@ -531,6 +544,10 @@ impl VisualMapPanel {
     fn decrement_width(&mut self, cx: &mut Context<Self>) {
         if self.cols > 1 {
             self.cols = cmp::max(1, self.cols.saturating_sub(1));
+            let max_offset = self.max_header_offset();
+            if self.header_offset > max_offset {
+                self.header_offset = max_offset;
+            }
             self.cached_image.borrow_mut().take();
             if self.editor.is_some() {
                 self.scroll_to_cursor(cx);
@@ -539,6 +556,199 @@ impl VisualMapPanel {
             }
             cx.notify();
         }
+    }
+
+    fn increment_header_offset(&mut self, cx: &mut Context<Self>) {
+        let max = self.max_header_offset();
+        if self.header_offset < max {
+            self.header_offset = self.header_offset.saturating_add(1).min(max);
+            self.cached_image.borrow_mut().take();
+            self.update_scrollbar(cx);
+            cx.notify();
+        }
+    }
+
+    fn decrement_header_offset(&mut self, cx: &mut Context<Self>) {
+        if self.header_offset > 0 {
+            self.header_offset = self.header_offset.saturating_sub(1);
+            self.cached_image.borrow_mut().take();
+            self.update_scrollbar(cx);
+            cx.notify();
+        }
+    }
+
+    pub fn set_header_offset(&mut self, offset: usize, cx: &mut Context<Self>) {
+        let clamped = offset.min(self.max_header_offset());
+        if self.header_offset != clamped {
+            self.header_offset = clamped;
+            self.cached_image.borrow_mut().take();
+            self.update_scrollbar(cx);
+            cx.notify();
+        }
+    }
+
+    fn start_offset_repeat(&mut self, is_increment: bool, cx: &mut Context<Self>) {
+        if is_increment {
+            self.increment_header_offset(cx);
+        } else {
+            self.decrement_header_offset(cx);
+        }
+
+        self._offset_repeat_task = Some(cx.spawn(async move |this, cx| {
+            tokio::time::sleep(WIDTH_REPEAT_INITIAL_DELAY).await;
+            let mut count = 0;
+            loop {
+                let interval = if count < 10 {
+                    WIDTH_REPEAT_BASE_INTERVAL
+                } else if count < 30 {
+                    WIDTH_REPEAT_MED_INTERVAL
+                } else {
+                    WIDTH_REPEAT_MIN_INTERVAL
+                };
+
+                let should_continue = this
+                    .update(cx, |this, cx| {
+                        let max = this.max_header_offset();
+                        if is_increment {
+                            if this.header_offset < max {
+                                this.increment_header_offset(cx);
+                                this.header_offset < max
+                            } else {
+                                false
+                            }
+                        } else if this.header_offset > 0 {
+                            this.decrement_header_offset(cx);
+                            this.header_offset > 0
+                        } else {
+                            false
+                        }
+                    })
+                    .unwrap_or(false);
+
+                if !should_continue {
+                    break;
+                }
+
+                count += 1;
+                tokio::time::sleep(interval).await;
+            }
+        }));
+    }
+
+    fn stop_offset_repeat(&mut self) {
+        self._offset_repeat_task = None;
+    }
+
+    fn render_offset_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> AnyElement {
+        let muted_color = theme.muted_foreground;
+        let font_family = cx.global::<Appearance>().font_family.clone();
+        let max_offset = self.max_header_offset();
+        let is_at_min = self.header_offset == 0;
+        let is_at_max = self.header_offset >= max_offset;
+
+        let mut dec_btn = Button::new("dec_offset")
+            .label("-")
+            .ghost()
+            .with_size(Size::XSmall)
+            .tooltip("Decrease header offset (-1 B)");
+        if is_at_min {
+            dec_btn = dec_btn.disabled(true);
+        } else {
+            dec_btn = dec_btn
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.start_offset_repeat(false, cx);
+                    }),
+                )
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.stop_offset_repeat();
+                    }),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.stop_offset_repeat();
+                    }),
+                );
+        }
+
+        let mut inc_btn = Button::new("inc_offset")
+            .label("+")
+            .ghost()
+            .with_size(Size::XSmall)
+            .tooltip("Increase header offset (+1 B)");
+        if is_at_max {
+            inc_btn = inc_btn.disabled(true);
+        } else {
+            inc_btn = inc_btn
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.start_offset_repeat(true, cx);
+                    }),
+                )
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.stop_offset_repeat();
+                    }),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.stop_offset_repeat();
+                    }),
+                );
+        }
+
+        let mut reset_btn = Button::new("reset_offset")
+            .label("0")
+            .ghost()
+            .with_size(Size::XSmall)
+            .tooltip("Reset offset to 0");
+        if is_at_min {
+            reset_btn = reset_btn.disabled(true);
+        } else {
+            reset_btn = reset_btn.on_click(cx.listener(|this, _, _, cx| {
+                this.set_header_offset(0, cx);
+            }));
+        }
+
+        let right_flex = h_flex()
+            .items_center()
+            .gap_1()
+            .child(reset_btn)
+            .child(dec_btn)
+            .child(
+                div()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_sm()
+                    .bg(theme.muted.opacity(0.4))
+                    .font_family(font_family)
+                    .text_xs()
+                    .font_semibold()
+                    .text_color(theme.foreground)
+                    .child(format!("+{} B", self.header_offset)),
+            )
+            .child(inc_btn);
+
+        h_flex()
+            .justify_between()
+            .items_center()
+            .gap_2()
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_1p5()
+                    .child(Icon::new(IconName::SlidersHorizontal).size(px(13.0)).text_color(muted_color))
+                    .child(div().text_xs().font_medium().text_color(muted_color).child("Offset")),
+            )
+            .child(right_flex)
+            .into_any_element()
     }
 
     fn start_width_repeat(&mut self, is_increment: bool, cx: &mut Context<Self>) {
@@ -720,9 +930,9 @@ impl VisualMapPanel {
 
     fn render_palette_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let muted_color = theme.muted_foreground;
-        let color_button = |mode: ColorMode, label: &'static str, id_str: &'static str, cx: &mut Context<Self>| {
+        let color_button = |mode: ColorMode, id_str: &'static str, cx: &mut Context<Self>| {
             let is_selected = self.color_mode == mode;
-            let mut btn = Button::new(id_str).label(label).with_size(Size::XSmall);
+            let mut btn = Button::new(id_str).label(mode.label()).with_size(Size::XSmall);
             if is_selected {
                 btn = btn.primary();
             } else {
@@ -757,21 +967,21 @@ impl VisualMapPanel {
                     .flex_wrap()
                     .justify_end()
                     .gap_1()
-                    .child(color_button(ColorMode::Grayscale, "Gray", "c_gray", cx))
-                    .child(color_button(ColorMode::DataCategory, "Type", "c_type", cx))
-                    .child(color_button(ColorMode::Rainbow, "Rainbow", "c_rainbow", cx))
-                    .child(color_button(ColorMode::Entropy, "Entropy", "c_entropy", cx))
-                    .child(color_button(ColorMode::Mono1bpp, "1-bit", "c_1bpp", cx))
-                    .child(color_button(ColorMode::Indexed2bpp, "2-bit", "c_2bpp", cx))
-                    .child(color_button(ColorMode::Indexed4bpp, "4-bit", "c_4bpp", cx))
-                    .child(color_button(ColorMode::Vga256, "VGA 256", "c_vga256", cx))
-                    .child(color_button(ColorMode::Rgb565, "RGB 565", "c_rgb565", cx))
-                    .child(color_button(ColorMode::Rgb555, "RGB 555", "c_rgb555", cx))
-                    .child(color_button(ColorMode::Rgb888, "RGB 888", "c_rgb888", cx))
-                    .child(color_button(ColorMode::Bgr888, "BGR 888", "c_bgr888", cx))
-                    .child(color_button(ColorMode::Rgba, "RGBA", "c_rgba", cx))
-                    .child(color_button(ColorMode::Argb, "ARGB", "c_argb", cx))
-                    .child(color_button(ColorMode::Bgra, "BGRA", "c_bgra", cx)),
+                    .child(color_button(ColorMode::Grayscale, "c_gray", cx))
+                    .child(color_button(ColorMode::DataCategory, "c_type", cx))
+                    .child(color_button(ColorMode::Rainbow, "c_rainbow", cx))
+                    .child(color_button(ColorMode::Entropy, "c_entropy", cx))
+                    .child(color_button(ColorMode::Mono1bpp, "c_1bpp", cx))
+                    .child(color_button(ColorMode::Indexed2bpp, "c_2bpp", cx))
+                    .child(color_button(ColorMode::Indexed4bpp, "c_4bpp", cx))
+                    .child(color_button(ColorMode::Vga256, "c_8bpp", cx))
+                    .child(color_button(ColorMode::Rgb565, "c_rgb565", cx))
+                    .child(color_button(ColorMode::Rgb555, "c_rgb555", cx))
+                    .child(color_button(ColorMode::Rgb888, "c_rgb888", cx))
+                    .child(color_button(ColorMode::Bgr888, "c_bgr888", cx))
+                    .child(color_button(ColorMode::Rgba, "c_rgba", cx))
+                    .child(color_button(ColorMode::Argb, "c_argb", cx))
+                    .child(color_button(ColorMode::Bgra, "c_bgra", cx)),
             )
             .into_any_element()
     }
@@ -863,6 +1073,7 @@ impl VisualMapPanel {
             .border_b_1()
             .border_color(theme.border)
             .child(self.render_width_section(theme, cx))
+            .child(self.render_offset_section(theme, cx))
             .child(self.render_scale_section(theme, cx))
             .child(self.render_palette_section(theme, cx));
 
@@ -927,7 +1138,7 @@ impl VisualMapPanel {
                 row = row
                     .child(legend_chip(rgb(0x000000).into(), "0: Black", true, theme))
                     .child(legend_chip(rgb(0xFFFFFF).into(), "1: White", true, theme))
-                    .child(div().text_color(muted_color).child("(8 px/B, MSB first)"));
+                    .child(div().text_color(muted_color).child("(1BPP, 8 px/B, MSB first)"));
             }
             ColorMode::Indexed2bpp => {
                 row = row
@@ -935,7 +1146,7 @@ impl VisualMapPanel {
                     .child(legend_chip(rgb(0x555555).into(), "01: Dark", true, theme))
                     .child(legend_chip(rgb(0xAAAAAA).into(), "10: Light", true, theme))
                     .child(legend_chip(rgb(0xFFFFFF).into(), "11: White", true, theme))
-                    .child(div().text_color(muted_color).child("(4 px/B, 2b shade)"));
+                    .child(div().text_color(muted_color).child("(2BPP, 4 px/B, 2b shade)"));
             }
             ColorMode::Indexed4bpp => {
                 let lut = crate::core::visual_map::cga_16_bgra_lut();
@@ -953,16 +1164,18 @@ impl VisualMapPanel {
                     })
                     .collect();
                 row = row
-                    .child(div().text_color(muted_color).font_medium().child("CGA 16-Color (2 px/B):"))
+                    .child(div().text_color(muted_color).font_medium().child("4BPP (CGA 16-Color, 2 px/B):"))
                     .children(chips)
                     .child(div().text_color(muted_color).child("[0: Black .. 15: Br.White]"));
             }
             ColorMode::Vga256 => {
-                row = row.child(div().text_color(muted_color).font_medium().child("VGA 256-Color (1 B/px):")).child(
-                    div()
-                        .text_color(muted_color)
-                        .child("0..15: Standard CGA | 16..231: 6×6×6 Color Cube | 232..255: Grayscale"),
-                );
+                row = row
+                    .child(div().text_color(muted_color).font_medium().child("8BPP (VGA 256-Color, 1 B/px):"))
+                    .child(
+                        div()
+                            .text_color(muted_color)
+                            .child("0..15: Standard CGA | 16..231: 6×6×6 Color Cube | 232..255: Grayscale"),
+                    );
             }
             ColorMode::Rgb565 => {
                 row = row
@@ -1037,7 +1250,7 @@ impl VisualMapPanel {
                     ColorMode::Mono1bpp => {
                         let col = if bit_val == 1 { rgb(0xFFFFFF) } else { rgb(0x000000) };
                         let name = if bit_val == 1 { "1 (White)" } else { "0 (Black)" };
-                        (col, name.to_string(), format!("bit {}", 7 - sub_idx), "1-bit Mono")
+                        (col, name.to_string(), format!("bit {}", 7 - sub_idx), "1BPP Mono")
                     }
                     ColorMode::Indexed2bpp => {
                         let shade = bit_val * 85;
@@ -1053,7 +1266,7 @@ impl VisualMapPanel {
                             col,
                             format!("{}/3 ({})", bit_val, shade_name),
                             format!("bits {}..{}", 6 - sub_idx * 2, 7 - sub_idx * 2),
-                            "2-bit Gray",
+                            "2BPP Gray",
                         )
                     }
                     ColorMode::Indexed4bpp => {
@@ -1061,7 +1274,7 @@ impl VisualMapPanel {
                         let col = rgb(u32::from_be_bytes([0, r, g, b]));
                         let name = crate::core::visual_map::cga_color_name(bit_val);
                         let nibble = if sub_idx == 0 { "high nibble [4..7]" } else { "low nibble [0..3]" };
-                        (col, format!("{}/15 ({})", bit_val, name), nibble.to_string(), "4-bit CGA")
+                        (col, format!("{}/15 ({})", bit_val, name), nibble.to_string(), "4BPP CGA")
                     }
                     _ => (rgb(0x000000), String::new(), String::new(), ""),
                 };
@@ -1389,7 +1602,7 @@ impl VisualMapPanel {
                                 .bg(theme.accent.opacity(0.2))
                                 .text_color(theme.accent)
                                 .font_medium()
-                                .child("VGA 256"),
+                                .child("8BPP VGA"),
                         )
                         .into_any_element()
                 } else {
@@ -1463,9 +1676,15 @@ impl VisualMapPanel {
                     }))
                     .into_any_element();
 
+                let offset_spec = if self.header_offset > 0 {
+                    format!(" | +{}B", self.header_offset)
+                } else {
+                    String::new()
+                };
+
                 let right = div()
                     .text_color(muted_color)
-                    .child(format!("{} cols @ x{}{}", self.cols, self.pixel_size, extra_spec))
+                    .child(format!("{} cols @ x{}{}{}", self.cols, self.pixel_size, extra_spec, offset_spec))
                     .into_any_element();
 
                 (left, right)
@@ -1632,8 +1851,9 @@ impl Render for VisualMapPanel {
         };
 
         let buffer_len = self.buffer_len(cx);
+        let active_len = self.active_buffer_len(cx);
         let state_id = self.state_id(cx);
-        let total_pixels = self.color_mode.total_pixels(buffer_len);
+        let total_pixels = self.color_mode.total_pixels(active_len);
         let total_rows = total_pixels.div_ceil(self.cols);
 
         let toolbar = self.render_toolbar(&theme, cx);
@@ -1641,11 +1861,26 @@ impl Render for VisualMapPanel {
         let footer = self.render_footer(buffer_len, total_rows, &theme, cx);
 
         let ed_ref = editor.read(cx);
-        let cursor_offset = Some(ed_ref.cursor.offset);
-        let selection_range = ed_ref.selection_range();
-        let hovered_pixel = self.hovered_info.map(|hov| match hov {
-            HoveredPixel::SubByte { offset, sub_idx, mode, .. } => offset.saturating_mul(mode.pixels_per_byte()) + sub_idx,
-            _ => self.color_mode.byte_offset_to_pixel(hov.offset()),
+        let cursor_offset = ed_ref.cursor.offset.checked_sub(self.header_offset);
+        let selection_range = ed_ref.selection_range().and_then(|sel| {
+            if sel.end > self.header_offset {
+                let start = sel.start.saturating_sub(self.header_offset);
+                let end = sel.end - self.header_offset;
+                Some(start..end)
+            } else {
+                None
+            }
+        });
+        let hovered_pixel = self.hovered_info.and_then(|hov| {
+            let hov_offset = hov.offset();
+            if hov_offset < self.header_offset {
+                return None;
+            }
+            let rel_offset = hov_offset - self.header_offset;
+            Some(match hov {
+                HoveredPixel::SubByte { sub_idx, mode, .. } => rel_offset.saturating_mul(mode.pixels_per_byte()) + sub_idx,
+                _ => self.color_mode.byte_offset_to_pixel(rel_offset),
+            })
         });
 
         let canvas = div()
@@ -1664,6 +1899,7 @@ impl Render for VisualMapPanel {
                 color_mode: self.color_mode,
                 entropy_window: self.entropy_window,
                 is_big_endian: self.is_big_endian,
+                header_offset: self.header_offset,
                 state_id,
                 cursor_offset,
                 selection_range,
@@ -1718,6 +1954,7 @@ struct VisualMapElement {
     color_mode: ColorMode,
     entropy_window: usize,
     is_big_endian: bool,
+    header_offset: usize,
     state_id: usize,
     cursor_offset: Option<usize>,
     selection_range: Option<Range<usize>>,
@@ -1779,17 +2016,18 @@ impl Element for VisualMapElement {
         let doc = self.document.read().expect("document read lock");
         let buffer = &doc.buffer;
         let buffer_len = buffer.len();
+        let active_len = buffer_len.saturating_sub(self.header_offset);
 
         let theme = cx.theme();
 
-        if buffer_len == 0 {
+        if active_len == 0 {
             return;
         }
 
         let pixel_size = self.pixel_size as f32;
         let cols = self.cols;
 
-        let total_pixels = self.color_mode.total_pixels(buffer_len);
+        let total_pixels = self.color_mode.total_pixels(active_len);
         let total_rows = total_pixels.div_ceil(cols);
         let visible_rows = (bounds.size.height.as_f32() / pixel_size).ceil() as usize + 1;
         let max_visible_cols = (bounds.size.width.as_f32() / pixel_size).ceil() as usize + 1;
@@ -1813,12 +2051,13 @@ impl Element for VisualMapElement {
                 self.scroll_offset,
                 self.color_mode,
                 self.entropy_window,
-                buffer_len,
+                active_len,
                 self.state_id,
                 bounds.size.width.as_f32(),
                 bounds.size.height.as_f32(),
                 scale_factor.to_bits(),
                 self.is_big_endian,
+                self.header_offset,
             );
 
             let mut cache = panel_ref.cached_image.borrow_mut();
@@ -1851,7 +2090,8 @@ impl Element for VisualMapElement {
                     is_big_endian: self.is_big_endian,
                 };
 
-                let pixels = render_visual_map_bgra(buffer.data(), &params);
+                let active_data = &buffer.data()[self.header_offset.min(buffer.data().len())..];
+                let pixels = render_visual_map_bgra(active_data, &params);
 
                 if let Some(rgba_img) = image::RgbaImage::from_raw(physical_width as u32, physical_height as u32, pixels) {
                     let frame = image::Frame::new(rgba_img);
@@ -1919,7 +2159,7 @@ impl Element for VisualMapElement {
             let cur_pix = self.color_mode.byte_offset_to_pixel(cursor);
             let cur_row = cur_pix / cols;
             let cur_col = cur_pix % cols;
-            if cur_row >= start_row && cur_row < end_row && cursor <= buffer_len {
+            if cur_row >= start_row && cur_row < end_row && cursor <= active_len {
                 let cell_x = bounds.origin.x + px(cur_col as f32 * pixel_size);
                 let cell_y = bounds.origin.y + px((cur_row - start_row) as f32 * pixel_size);
 
@@ -2008,8 +2248,28 @@ impl crate::ui::pane::WorkspaceTab for Entity<VisualMapPanel> {
     }
 
     fn create_split(&self, _window: &mut Window, cx: &mut App) -> Option<crate::ui::pane::TabContent> {
-        let ed = self.read(cx).editor.clone();
-        let new_vm = cx.new(|cx| VisualMapPanel::new(ed, cx));
+        let (ed, cols, pixel_size, header_offset, color_mode, is_big_endian, entropy_window) = {
+            let panel = self.read(cx);
+            (
+                panel.editor.clone(),
+                panel.cols,
+                panel.pixel_size,
+                panel.header_offset,
+                panel.color_mode,
+                panel.is_big_endian,
+                panel.entropy_window,
+            )
+        };
+        let new_vm = cx.new(|cx| {
+            let mut panel = VisualMapPanel::new(ed, cx);
+            panel.cols = cols;
+            panel.pixel_size = pixel_size;
+            panel.header_offset = header_offset;
+            panel.color_mode = color_mode;
+            panel.is_big_endian = is_big_endian;
+            panel.entropy_window = entropy_window;
+            panel
+        });
         Some(crate::ui::pane::TabContent::new(new_vm))
     }
 }

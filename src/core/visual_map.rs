@@ -21,13 +21,38 @@ pub enum VisualMapColorMode {
     Rgba,
     Argb,
     Bgra,
+    /// 1 bit per pixel (monochrome, 8 pixels per byte).
     Mono1bpp,
+    /// 2 bits per pixel (4 indexed shades, 4 pixels per byte).
     Indexed2bpp,
+    /// 4 bits per pixel (16 indexed CGA colors, 2 pixels per byte).
     Indexed4bpp,
+    /// 8 bits per pixel (256 indexed VGA colors, 1 byte per pixel).
     Vga256,
 }
 
 impl VisualMapColorMode {
+    /// Returns the short UI display label for this color mode.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Grayscale => "Gray",
+            Self::DataCategory => "Type",
+            Self::Rainbow => "Rainbow",
+            Self::Entropy => "Entropy",
+            Self::Mono1bpp => "1BPP",
+            Self::Indexed2bpp => "2BPP",
+            Self::Indexed4bpp => "4BPP",
+            Self::Vga256 => "8BPP",
+            Self::Rgb565 => "RGB 565",
+            Self::Rgb555 => "RGB 555",
+            Self::Rgb888 => "RGB 888",
+            Self::Bgr888 => "BGR 888",
+            Self::Rgba => "RGBA",
+            Self::Argb => "ARGB",
+            Self::Bgra => "BGRA",
+        }
+    }
+
     /// Number of bytes consumed per displayed pixel (for modes with >= 1 byte per pixel).
     #[inline]
     pub fn bytes_per_pixel(self) -> usize {
@@ -913,6 +938,7 @@ mod tests {
     fn test_pixel_offset_conversions() {
         // Mono1bpp: 8 px/B
         let m1 = VisualMapColorMode::Mono1bpp;
+        assert_eq!(m1.label(), "1BPP");
         assert!(m1.is_sub_byte());
         assert_eq!(m1.pixels_per_byte(), 8);
         assert_eq!(m1.total_pixels(10), 80);
@@ -923,6 +949,7 @@ mod tests {
 
         // Indexed2bpp: 4 px/B
         let m2 = VisualMapColorMode::Indexed2bpp;
+        assert_eq!(m2.label(), "2BPP");
         assert!(m2.is_sub_byte());
         assert_eq!(m2.pixels_per_byte(), 4);
         assert_eq!(m2.total_pixels(10), 40);
@@ -932,6 +959,7 @@ mod tests {
 
         // Indexed4bpp: 2 px/B
         let m4 = VisualMapColorMode::Indexed4bpp;
+        assert_eq!(m4.label(), "4BPP");
         assert!(m4.is_sub_byte());
         assert_eq!(m4.pixels_per_byte(), 2);
         assert_eq!(m4.total_pixels(10), 20);
@@ -941,6 +969,7 @@ mod tests {
 
         // Vga256: 1 B/px
         let vga = VisualMapColorMode::Vga256;
+        assert_eq!(vga.label(), "8BPP");
         assert!(!vga.is_sub_byte());
         assert_eq!(vga.pixels_per_byte(), 1);
         assert_eq!(vga.bytes_per_pixel(), 1);
@@ -955,5 +984,31 @@ mod tests {
         assert_eq!(rgb565.total_pixels(10), 5);
         assert_eq!(rgb565.byte_offset_to_pixel(6), 3);
         assert_eq!(rgb565.pixel_to_byte_offset(3), 6);
+    }
+
+    #[test]
+    fn test_render_visual_map_with_header_offset() {
+        let full_data: Vec<u8> = (0..64).collect();
+        let header_offset = 8;
+        let active_data = &full_data[header_offset..];
+
+        let params = VisualMapRenderParams {
+            cols: 8,
+            start_row: 0,
+            visible_rows: 2,
+            max_visible_cols: 8,
+            cell_width: 1,
+            cell_height: 1,
+            physical_width: 8,
+            physical_height: 2,
+            color_mode: VisualMapColorMode::Grayscale,
+            entropy_window: 256,
+            custom_lut: None,
+            is_big_endian: false,
+        };
+
+        let pixels = render_visual_map_bgra(active_data, &params);
+        let expected = grayscale_bgra_lut()[8];
+        assert_eq!(&pixels[0..4], &expected);
     }
 }
