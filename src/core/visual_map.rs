@@ -29,6 +29,8 @@ pub enum VisualMapColorMode {
     Indexed4bpp,
     /// 8 bits per pixel (256 indexed VGA colors, 1 byte per pixel).
     Vga256,
+    /// 4 bits per pixel planar 8x8 tiled bitplane format (16 indexed colors, 32 bytes per tile).
+    Planar4bpp,
 }
 
 impl VisualMapColorMode {
@@ -42,6 +44,7 @@ impl VisualMapColorMode {
             Self::Mono1bpp => "1BPP",
             Self::Indexed2bpp => "2BPP",
             Self::Indexed4bpp => "4BPP",
+            Self::Planar4bpp => "4BPP Planar",
             Self::Vga256 => "8BPP",
             Self::Rgb565 => "RGB 565",
             Self::Rgb555 => "RGB 555",
@@ -70,15 +73,21 @@ impl VisualMapColorMode {
         match self {
             Self::Mono1bpp => 8,
             Self::Indexed2bpp => 4,
-            Self::Indexed4bpp => 2,
+            Self::Indexed4bpp | Self::Planar4bpp => 2,
             _ => 1,
         }
     }
 
-    /// Whether this mode has multiple pixels packed into a single byte.
+    /// Whether this mode organizes pixels into 8x8 planar bitplane tiles.
+    #[inline]
+    pub fn is_planar_tile(self) -> bool {
+        matches!(self, Self::Planar4bpp)
+    }
+
+    /// Whether this mode has multiple linear pixels packed into a single byte.
     #[inline]
     pub fn is_sub_byte(self) -> bool {
-        self.pixels_per_byte() > 1
+        self.pixels_per_byte() > 1 && !self.is_planar_tile()
     }
 
     /// Calculates total displayable pixels for a buffer of length `buffer_len`.
@@ -263,6 +272,26 @@ pub fn cga_color_name(idx: u8) -> &'static str {
         15 => "Bright White",
         _ => "Unknown",
     }
+}
+
+/// Decodes a single pixel from an 8x8 4BPP planar bitplane tile (32 bytes).
+///
+/// Returns `(color_index, bp0, bp1, bp2, bp3)` where `color_index` is 0..=15.
+#[inline]
+pub fn decode_planar_4bpp_pixel(tile_data: &[u8], in_tile_x: usize, in_tile_y: usize) -> (u8, u8, u8, u8, u8) {
+    let in_tile_x = in_tile_x.min(7);
+    let in_tile_y = in_tile_y.min(7);
+    let bp0 = tile_data.get(2 * in_tile_y).copied().unwrap_or(0);
+    let bp1 = tile_data.get(2 * in_tile_y + 1).copied().unwrap_or(0);
+    let bp2 = tile_data.get(16 + 2 * in_tile_y).copied().unwrap_or(0);
+    let bp3 = tile_data.get(16 + 2 * in_tile_y + 1).copied().unwrap_or(0);
+    let bit = 7 - in_tile_x;
+    let b0 = (bp0 >> bit) & 1;
+    let b1 = (bp1 >> bit) & 1;
+    let b2 = (bp2 >> bit) & 1;
+    let b3 = (bp3 >> bit) & 1;
+    let color_idx = (b3 << 3) | (b2 << 2) | (b1 << 1) | b0;
+    (color_idx, bp0, bp1, bp2, bp3)
 }
 
 /// Generates a 256-entry BGRA lookup table for `VisualMapColorMode::Vga256`.
@@ -515,6 +544,34 @@ pub fn render_visual_map_bgra(buffer: &[u8], params: &VisualMapRenderParams) -> 
                         cga_lut[val]
                     }
                     _ => unreachable!(),
+                };
+
+                blit_cell(&mut pixels, row_y, c, params, color);
+            }
+        }
+    } else if params.color_mode == VisualMapColorMode::Planar4bpp {
+        let cga_lut = cga_16_bgra_lut();
+        let tiles_per_row = (params.cols / 8).max(1);
+        let actual_cols = tiles_per_row * 8;
+
+        for r in start_row..end_row {
+            let row_y = r - start_row;
+            let tile_row_idx = r / 8;
+            let in_tile_y = r % 8;
+            let row_tile_start = tile_row_idx * tiles_per_row;
+
+            for c in 0..cmp::min(actual_cols, params.max_visible_cols) {
+                let tile_col_idx = c / 8;
+                let in_tile_x = c % 8;
+                let tile_idx = row_tile_start + tile_col_idx;
+                let tile_byte_offset = tile_idx * 32;
+
+                let color = if tile_byte_offset < buffer_len {
+                    let tile_slice = &buffer[tile_byte_offset..cmp::min(tile_byte_offset + 32, buffer_len)];
+                    let (color_idx, _, _, _, _) = decode_planar_4bpp_pixel(tile_slice, in_tile_x, in_tile_y);
+                    cga_lut[color_idx as usize]
+                } else {
+                    [0, 0, 0, 255]
                 };
 
                 blit_cell(&mut pixels, row_y, c, params, color);
@@ -1010,5 +1067,59 @@ mod tests {
         let pixels = render_visual_map_bgra(active_data, &params);
         let expected = grayscale_bgra_lut()[8];
         assert_eq!(&pixels[0..4], &expected);
+    }
+
+    #[test]
+    fn test_decode_planar_4bpp_pixel() {
+        let mut tile = [0u8; 32];
+        // Row 0: bp0=0x80, bp1=0x80, bp2=0x80, bp3=0x80 => pixel 0 has all 4 bits = 15
+        tile[0] = 0x80;
+        tile[1] = 0x80;
+        tile[16] = 0x80;
+        tile[17] = 0x80;
+        let (color0, bp0, bp1, bp2, bp3) = decode_planar_4bpp_pixel(&tile, 0, 0);
+        assert_eq!(color0, 15);
+        assert_eq!(bp0, 0x80);
+        assert_eq!(bp1, 0x80);
+        assert_eq!(bp2, 0x80);
+        assert_eq!(bp3, 0x80);
+
+        let (color1, _, _, _, _) = decode_planar_4bpp_pixel(&tile, 1, 0);
+        assert_eq!(color1, 0);
+
+        // Row 2: bp0=0x40, bp2=0x40 => pixel 1 (bit 6) has b0=1, b2=1 => color 5
+        tile[4] = 0x40; // bp0 for row 2
+        tile[20] = 0x40; // bp2 for row 2
+        let (color_r2_p1, _, _, _, _) = decode_planar_4bpp_pixel(&tile, 1, 2);
+        assert_eq!(color_r2_p1, 5);
+    }
+
+    #[test]
+    fn test_render_visual_map_planar_4bpp() {
+        let mut tile = [0u8; 32];
+        tile[0] = 0x80;
+        tile[1] = 0x80;
+        tile[16] = 0x80;
+        tile[17] = 0x80;
+
+        let params = VisualMapRenderParams {
+            cols: 8,
+            start_row: 0,
+            visible_rows: 8,
+            max_visible_cols: 8,
+            cell_width: 1,
+            cell_height: 1,
+            physical_width: 8,
+            physical_height: 8,
+            color_mode: VisualMapColorMode::Planar4bpp,
+            entropy_window: 256,
+            custom_lut: None,
+            is_big_endian: false,
+        };
+
+        let pixels = render_visual_map_bgra(&tile, &params);
+        let cga_lut = cga_16_bgra_lut();
+        assert_eq!(&pixels[0..4], &cga_lut[15]);
+        assert_eq!(&pixels[4..8], &cga_lut[0]);
     }
 }

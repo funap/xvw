@@ -91,6 +91,17 @@ pub enum HoveredPixel {
         b3: u8,
         mode: ColorMode,
     },
+    PlanarTile {
+        offset: usize,
+        tile_idx: usize,
+        in_tile_x: usize,
+        in_tile_y: usize,
+        color_idx: u8,
+        bp0: u8,
+        bp1: u8,
+        bp2: u8,
+        bp3: u8,
+    },
 }
 
 impl HoveredPixel {
@@ -98,6 +109,7 @@ impl HoveredPixel {
         match *self {
             Self::Byte(off, _) => off,
             Self::SubByte { offset, .. } => offset,
+            Self::PlanarTile { offset, .. } => offset,
             Self::Rgb16 { offset, .. } | Self::Rgb24 { offset, .. } | Self::Rgb32 { offset, .. } => offset,
         }
     }
@@ -216,7 +228,16 @@ impl VisualMapPanel {
         let total_pixels = self.color_mode.total_pixels(active_len);
         let total_rows = total_pixels.div_ceil(self.cols);
         let rel_cursor = cursor_offset.saturating_sub(self.header_offset);
-        let cursor_row = self.color_mode.byte_offset_to_pixel(rel_cursor) / self.cols;
+        let cursor_row = if self.color_mode == ColorMode::Planar4bpp {
+            let tiles_per_row = (self.cols / 8).max(1);
+            let tile_idx = rel_cursor / 32;
+            let in_tile_byte = rel_cursor % 32;
+            let in_tile_y = if in_tile_byte < 16 { in_tile_byte / 2 } else { (in_tile_byte - 16) / 2 };
+            let tile_row = tile_idx / tiles_per_row;
+            tile_row * 8 + in_tile_y
+        } else {
+            self.color_mode.byte_offset_to_pixel(rel_cursor) / self.cols
+        };
         let visible_rows = if let Some(bounds) = self.last_bounds.get() {
             (bounds.size.height.as_f32() / self.pixel_size as f32).floor() as usize
         } else {
@@ -333,8 +354,17 @@ impl VisualMapPanel {
         let col = (rel_x.as_f32() / self.pixel_size as f32) as usize;
         let col = col.min(self.cols.saturating_sub(1));
         let row = (rel_y.as_f32() / self.pixel_size as f32) as usize + self.scroll_offset;
-        let pixel_idx = row * self.cols + col;
-        let offset = self.header_offset + self.color_mode.pixel_to_byte_offset(pixel_idx);
+        let offset = if self.color_mode == ColorMode::Planar4bpp {
+            let tiles_per_row = (self.cols / 8).max(1);
+            let tile_col = (col / 8).min(tiles_per_row - 1);
+            let tile_row = row / 8;
+            let in_tile_y = row % 8;
+            let tile_idx = tile_row * tiles_per_row + tile_col;
+            self.header_offset + tile_idx * 32 + 2 * in_tile_y
+        } else {
+            let pixel_idx = row * self.cols + col;
+            self.header_offset + self.color_mode.pixel_to_byte_offset(pixel_idx)
+        };
 
         let buffer_len = self.buffer_len(cx);
         if buffer_len == 0 {
@@ -451,72 +481,103 @@ impl VisualMapPanel {
             let col = (rel_x.as_f32() / self.pixel_size as f32) as usize;
             if col < self.cols {
                 let row = (rel_y.as_f32() / self.pixel_size as f32) as usize + self.scroll_offset;
-                let pixel_idx = row * self.cols + col;
-                let offset = self.header_offset + self.color_mode.pixel_to_byte_offset(pixel_idx);
-                let bpp = self.color_mode.bytes_per_pixel();
 
-                if offset < buffer_len
-                    && let Some(editor) = &self.editor
-                {
-                    let doc = editor.read(cx).document.read().expect("document read lock");
-                    if self.color_mode.is_sub_byte() {
-                        let byte = doc.buffer.get_range(offset, 1).first().copied().unwrap_or(0);
-                        let ppb = self.color_mode.pixels_per_byte();
-                        let sub_idx = pixel_idx % ppb;
-                        let bit_val = match self.color_mode {
-                            ColorMode::Mono1bpp => (byte >> (7 - sub_idx)) & 1,
-                            ColorMode::Indexed2bpp => (byte >> (6 - sub_idx * 2)) & 0x03,
-                            ColorMode::Indexed4bpp => (byte >> (4 - sub_idx * 4)) & 0x0F,
-                            _ => 0,
-                        };
-                        hovered = Some(HoveredPixel::SubByte {
+                if self.color_mode == ColorMode::Planar4bpp {
+                    let tiles_per_row = (self.cols / 8).max(1);
+                    let tile_col = col / 8;
+                    let tile_row = row / 8;
+                    let in_tile_x = col % 8;
+                    let in_tile_y = row % 8;
+                    let tile_idx = tile_row * tiles_per_row + tile_col;
+                    let tile_byte_offset = self.header_offset + tile_idx * 32;
+                    let offset = tile_byte_offset + 2 * in_tile_y;
+
+                    if offset < buffer_len
+                        && let Some(editor) = &self.editor
+                    {
+                        let doc = editor.read(cx).document.read().expect("document read lock");
+                        let tile_slice = doc.buffer.get_range(tile_byte_offset, 32);
+                        let (color_idx, bp0, bp1, bp2, bp3) = crate::core::visual_map::decode_planar_4bpp_pixel(tile_slice, in_tile_x, in_tile_y);
+                        hovered = Some(HoveredPixel::PlanarTile {
                             offset,
-                            sub_idx,
-                            bit_val,
-                            mode: self.color_mode,
+                            tile_idx,
+                            in_tile_x,
+                            in_tile_y,
+                            color_idx,
+                            bp0,
+                            bp1,
+                            bp2,
+                            bp3,
                         });
-                    } else if bpp == 2 {
-                        let b0 = doc.buffer.get_range(offset, 1)[0];
-                        let b1 = doc.buffer.get_range(offset + 1, 1).first().copied().unwrap_or(0);
-                        let raw_val = if self.is_big_endian {
-                            u16::from_be_bytes([b0, b1])
+                    }
+                } else {
+                    let pixel_idx = row * self.cols + col;
+                    let offset = self.header_offset + self.color_mode.pixel_to_byte_offset(pixel_idx);
+                    let bpp = self.color_mode.bytes_per_pixel();
+
+                    if offset < buffer_len
+                        && let Some(editor) = &self.editor
+                    {
+                        let doc = editor.read(cx).document.read().expect("document read lock");
+                        if self.color_mode.is_sub_byte() {
+                            let byte = doc.buffer.get_range(offset, 1).first().copied().unwrap_or(0);
+                            let ppb = self.color_mode.pixels_per_byte();
+                            let sub_idx = pixel_idx % ppb;
+                            let bit_val = match self.color_mode {
+                                ColorMode::Mono1bpp => (byte >> (7 - sub_idx)) & 1,
+                                ColorMode::Indexed2bpp => (byte >> (6 - sub_idx * 2)) & 0x03,
+                                ColorMode::Indexed4bpp => (byte >> (4 - sub_idx * 4)) & 0x0F,
+                                _ => 0,
+                            };
+                            hovered = Some(HoveredPixel::SubByte {
+                                offset,
+                                sub_idx,
+                                bit_val,
+                                mode: self.color_mode,
+                            });
+                        } else if bpp == 2 {
+                            let b0 = doc.buffer.get_range(offset, 1)[0];
+                            let b1 = doc.buffer.get_range(offset + 1, 1).first().copied().unwrap_or(0);
+                            let raw_val = if self.is_big_endian {
+                                u16::from_be_bytes([b0, b1])
+                            } else {
+                                u16::from_le_bytes([b0, b1])
+                            };
+                            hovered = Some(HoveredPixel::Rgb16 {
+                                offset,
+                                raw_val,
+                                b0,
+                                b1,
+                                mode: self.color_mode,
+                            });
+                        } else if bpp == 3 {
+                            let b0 = doc.buffer.get_range(offset, 1)[0];
+                            let b1 = doc.buffer.get_range(offset + 1, 1).first().copied().unwrap_or(0);
+                            let b2 = doc.buffer.get_range(offset + 2, 1).first().copied().unwrap_or(0);
+                            hovered = Some(HoveredPixel::Rgb24 {
+                                offset,
+                                b0,
+                                b1,
+                                b2,
+                                mode: self.color_mode,
+                            });
+                        } else if bpp == 4 {
+                            let b0 = doc.buffer.get_range(offset, 1)[0];
+                            let b1 = doc.buffer.get_range(offset + 1, 1).first().copied().unwrap_or(0);
+                            let b2 = doc.buffer.get_range(offset + 2, 1).first().copied().unwrap_or(0);
+                            let b3 = doc.buffer.get_range(offset + 3, 1).first().copied().unwrap_or(0);
+                            hovered = Some(HoveredPixel::Rgb32 {
+                                offset,
+                                b0,
+                                b1,
+                                b2,
+                                b3,
+                                mode: self.color_mode,
+                            });
                         } else {
-                            u16::from_le_bytes([b0, b1])
-                        };
-                        hovered = Some(HoveredPixel::Rgb16 {
-                            offset,
-                            raw_val,
-                            b0,
-                            b1,
-                            mode: self.color_mode,
-                        });
-                    } else if bpp == 3 {
-                        let b0 = doc.buffer.get_range(offset, 1)[0];
-                        let b1 = doc.buffer.get_range(offset + 1, 1).first().copied().unwrap_or(0);
-                        let b2 = doc.buffer.get_range(offset + 2, 1).first().copied().unwrap_or(0);
-                        hovered = Some(HoveredPixel::Rgb24 {
-                            offset,
-                            b0,
-                            b1,
-                            b2,
-                            mode: self.color_mode,
-                        });
-                    } else if bpp == 4 {
-                        let b0 = doc.buffer.get_range(offset, 1)[0];
-                        let b1 = doc.buffer.get_range(offset + 1, 1).first().copied().unwrap_or(0);
-                        let b2 = doc.buffer.get_range(offset + 2, 1).first().copied().unwrap_or(0);
-                        let b3 = doc.buffer.get_range(offset + 3, 1).first().copied().unwrap_or(0);
-                        hovered = Some(HoveredPixel::Rgb32 {
-                            offset,
-                            b0,
-                            b1,
-                            b2,
-                            b3,
-                            mode: self.color_mode,
-                        });
-                    } else {
-                        let byte = doc.buffer.get_range(offset, 1)[0];
-                        hovered = Some(HoveredPixel::Byte(offset, byte));
+                            let byte = doc.buffer.get_range(offset, 1)[0];
+                            hovered = Some(HoveredPixel::Byte(offset, byte));
+                        }
                     }
                 }
             }
@@ -529,8 +590,9 @@ impl VisualMapPanel {
     }
 
     fn increment_width(&mut self, cx: &mut Context<Self>) {
+        let step = if self.color_mode == ColorMode::Planar4bpp { 8 } else { 1 };
         if self.cols < 4096 {
-            self.cols = cmp::min(4096, self.cols.saturating_add(1));
+            self.cols = cmp::min(4096, self.cols.saturating_add(step));
             self.cached_image.borrow_mut().take();
             if self.editor.is_some() {
                 self.scroll_to_cursor(cx);
@@ -542,8 +604,10 @@ impl VisualMapPanel {
     }
 
     fn decrement_width(&mut self, cx: &mut Context<Self>) {
-        if self.cols > 1 {
-            self.cols = cmp::max(1, self.cols.saturating_sub(1));
+        let min_cols = if self.color_mode == ColorMode::Planar4bpp { 8 } else { 1 };
+        let step = if self.color_mode == ColorMode::Planar4bpp { 8 } else { 1 };
+        if self.cols > min_cols {
+            self.cols = cmp::max(min_cols, self.cols.saturating_sub(step));
             let max_offset = self.max_header_offset();
             if self.header_offset > max_offset {
                 self.header_offset = max_offset;
@@ -849,7 +913,10 @@ impl VisualMapPanel {
                             .text_xs()
                             .font_semibold()
                             .text_color(theme.foreground)
-                            .child(if self.color_mode.is_rgb() {
+                            .child(if self.color_mode == ColorMode::Planar4bpp {
+                                let tiles = (self.cols / 8).max(1);
+                                format!("{} px ({} tiles, {} B)", self.cols, tiles, tiles * 32)
+                            } else if self.color_mode.is_rgb() {
                                 let bpp = self.color_mode.bytes_per_pixel();
                                 format!("{} px ({} B)", self.cols, self.cols * bpp)
                             } else if self.color_mode.is_sub_byte() {
@@ -940,6 +1007,9 @@ impl VisualMapPanel {
             }
             btn.on_click(cx.listener(move |this, _, _, cx| {
                 this.color_mode = mode;
+                if mode == ColorMode::Planar4bpp && this.cols % 8 != 0 {
+                    this.cols = (this.cols / 8).max(1) * 8;
+                }
                 if this.editor.is_some() {
                     this.scroll_to_cursor(cx);
                 } else {
@@ -974,6 +1044,7 @@ impl VisualMapPanel {
                     .child(color_button(ColorMode::Mono1bpp, "c_1bpp", cx))
                     .child(color_button(ColorMode::Indexed2bpp, "c_2bpp", cx))
                     .child(color_button(ColorMode::Indexed4bpp, "c_4bpp", cx))
+                    .child(color_button(ColorMode::Planar4bpp, "c_4bpp_planar", cx))
                     .child(color_button(ColorMode::Vga256, "c_8bpp", cx))
                     .child(color_button(ColorMode::Rgb565, "c_rgb565", cx))
                     .child(color_button(ColorMode::Rgb555, "c_rgb555", cx))
@@ -1168,6 +1239,31 @@ impl VisualMapPanel {
                     .children(chips)
                     .child(div().text_color(muted_color).child("[0: Black .. 15: Br.White]"));
             }
+            ColorMode::Planar4bpp => {
+                let lut = crate::core::visual_map::cga_16_bgra_lut();
+                let chips: Vec<AnyElement> = (0..16)
+                    .map(|i| {
+                        let [b, g, r, _] = lut[i];
+                        div()
+                            .w_2p5()
+                            .h_2p5()
+                            .rounded_sm()
+                            .bg(rgb(u32::from_be_bytes([0, r, g, b])))
+                            .border_1()
+                            .border_color(theme.border)
+                            .into_any_element()
+                    })
+                    .collect();
+                row = row
+                    .child(
+                        div()
+                            .text_color(muted_color)
+                            .font_medium()
+                            .child("4BPP Planar (16-Color 8×8 Tiles, 32 B/tile):"),
+                    )
+                    .children(chips)
+                    .child(div().text_color(muted_color).child("[0: Black .. 15: Br.White]"));
+            }
             ColorMode::Vga256 => {
                 row = row
                     .child(div().text_color(muted_color).font_medium().child("8BPP (VGA 256-Color, 1 B/px):"))
@@ -1330,6 +1426,74 @@ impl VisualMapPanel {
                             .text_color(theme.accent)
                             .font_medium()
                             .child(mode_name),
+                    )
+                    .into_any_element();
+
+                (left, right)
+            }
+            Some(HoveredPixel::PlanarTile {
+                offset,
+                tile_idx,
+                in_tile_x,
+                in_tile_y,
+                color_idx,
+                bp0,
+                bp1,
+                bp2,
+                bp3,
+            }) => {
+                let display_addr = self.editor.as_ref().map(|ed| ed.read(cx).offset_to_address(offset)).unwrap_or(offset);
+                let [b, g, r, _] = crate::core::visual_map::cga_16_bgra_lut()[(color_idx & 0x0F) as usize];
+                let swatch_color = rgb(u32::from_be_bytes([0, r, g, b]));
+                let name = crate::core::visual_map::cga_color_name(color_idx);
+
+                let left = h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("0x{:08X}", display_addr)),
+                    )
+                    .child(div().text_color(muted_color).child("|"))
+                    .child(
+                        div()
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("Tile #{tile_idx} ({in_tile_x},{in_tile_y})")),
+                    )
+                    .child(
+                        div()
+                            .px_1()
+                            .py_0p5()
+                            .rounded_sm()
+                            .bg(theme.muted.opacity(0.4))
+                            .font_family(font_family.clone())
+                            .text_color(theme.foreground)
+                            .child(format!("BP:[{bp0:02X} {bp1:02X} {bp2:02X} {bp3:02X}]")),
+                    )
+                    .into_any_element();
+
+                let right = h_flex()
+                    .gap_1p5()
+                    .items_center()
+                    .child(div().w_3().h_3().rounded_sm().bg(swatch_color).border_1().border_color(theme.border))
+                    .child(
+                        div()
+                            .font_family(font_family)
+                            .text_color(theme.foreground)
+                            .child(format!("{color_idx}/15 ({name})")),
+                    )
+                    .child(
+                        div()
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded_sm()
+                            .bg(theme.accent.opacity(0.2))
+                            .text_color(theme.accent)
+                            .font_medium()
+                            .child("4BPP Planar"),
                     )
                     .into_any_element();
 
@@ -1878,6 +2042,19 @@ impl Render for VisualMapPanel {
             }
             let rel_offset = hov_offset - self.header_offset;
             Some(match hov {
+                HoveredPixel::PlanarTile {
+                    tile_idx,
+                    in_tile_x,
+                    in_tile_y,
+                    ..
+                } => {
+                    let tiles_per_row = (self.cols / 8).max(1);
+                    let tile_col = tile_idx % tiles_per_row;
+                    let tile_row = tile_idx / tiles_per_row;
+                    let px_x = tile_col * 8 + in_tile_x;
+                    let px_y = tile_row * 8 + in_tile_y;
+                    px_y * self.cols + px_x
+                }
                 HoveredPixel::SubByte { sub_idx, mode, .. } => rel_offset.saturating_mul(mode.pixels_per_byte()) + sub_idx,
                 _ => self.color_mode.byte_offset_to_pixel(rel_offset),
             })
@@ -2114,7 +2291,7 @@ impl Element for VisualMapElement {
             && sel.start < sel.end
         {
             let sel_pix_start = self.color_mode.byte_offset_to_pixel(sel.start);
-            let sel_pix_end = if self.color_mode.is_sub_byte() {
+            let sel_pix_end = if self.color_mode.pixels_per_byte() > 1 {
                 self.color_mode.byte_offset_to_pixel(sel.end)
             } else {
                 sel.end.div_ceil(self.color_mode.bytes_per_pixel())
@@ -2156,14 +2333,25 @@ impl Element for VisualMapElement {
 
         // Cursor Highlight
         if let Some(cursor) = self.cursor_offset {
-            let cur_pix = self.color_mode.byte_offset_to_pixel(cursor);
-            let cur_row = cur_pix / cols;
-            let cur_col = cur_pix % cols;
+            let (cur_row, cur_col, cell_width_multiplier) = if self.color_mode == ColorMode::Planar4bpp {
+                let tiles_per_row = (cols / 8).max(1);
+                let tile_idx = cursor / 32;
+                let tile_byte = cursor % 32;
+                let in_tile_y = if tile_byte < 16 { tile_byte / 2 } else { (tile_byte - 16) / 2 };
+                let tile_row = tile_idx / tiles_per_row;
+                let tile_col = tile_idx % tiles_per_row;
+                (tile_row * 8 + in_tile_y, tile_col * 8, 8.0)
+            } else {
+                let cur_pix = self.color_mode.byte_offset_to_pixel(cursor);
+                (cur_pix / cols, cur_pix % cols, 1.0)
+            };
             if cur_row >= start_row && cur_row < end_row && cursor <= active_len {
                 let cell_x = bounds.origin.x + px(cur_col as f32 * pixel_size);
                 let cell_y = bounds.origin.y + px((cur_row - start_row) as f32 * pixel_size);
+                let w = px(pixel_size * cell_width_multiplier);
+                let h = px(pixel_size);
 
-                if pixel_size <= 2.0 {
+                if pixel_size <= 2.0 && cell_width_multiplier == 1.0 {
                     let indicator_size = px(6.0);
                     let center_x = cell_x + px(pixel_size * 0.5);
                     let center_y = cell_y + px(pixel_size * 0.5);
@@ -2174,7 +2362,7 @@ impl Element for VisualMapElement {
                     window.paint_quad(outline(cur_bounds, theme.accent, BorderStyle::Solid).border_widths(px(1.5)));
                     window.paint_quad(fill(Bounds::new(point(cell_x, cell_y), size(px(pixel_size), px(pixel_size))), theme.foreground));
                 } else {
-                    let cur_bounds = Bounds::new(point(cell_x, cell_y), size(px(pixel_size), px(pixel_size)));
+                    let cur_bounds = Bounds::new(point(cell_x, cell_y), size(w, h));
                     window.paint_quad(outline(cur_bounds, theme.accent, BorderStyle::Solid).border_widths(px(1.5)));
                     window.paint_quad(fill(cur_bounds, theme.accent.opacity(0.3)));
                 }
