@@ -166,6 +166,8 @@ impl VisualMapPanel {
         let cursor_offset = editor.read(cx).cursor.offset;
         let buffer_len = self.buffer_len(cx);
         if buffer_len == 0 {
+            self.scroll_offset = 0;
+            cx.notify();
             return;
         }
         let bpp = self.color_mode.bytes_per_pixel();
@@ -451,8 +453,12 @@ impl VisualMapPanel {
     fn increment_width(&mut self, cx: &mut Context<Self>) {
         if self.cols < 4096 {
             self.cols = cmp::min(4096, self.cols.saturating_add(1));
-            self.update_scrollbar(cx);
             self.cached_image.borrow_mut().take();
+            if self.editor.is_some() {
+                self.scroll_to_cursor(cx);
+            } else {
+                self.update_scrollbar(cx);
+            }
             cx.notify();
         }
     }
@@ -460,8 +466,12 @@ impl VisualMapPanel {
     fn decrement_width(&mut self, cx: &mut Context<Self>) {
         if self.cols > 1 {
             self.cols = cmp::max(1, self.cols.saturating_sub(1));
-            self.update_scrollbar(cx);
             self.cached_image.borrow_mut().take();
+            if self.editor.is_some() {
+                self.scroll_to_cursor(cx);
+            } else {
+                self.update_scrollbar(cx);
+            }
             cx.notify();
         }
     }
