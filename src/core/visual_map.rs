@@ -7,13 +7,32 @@ use crate::core::color::RgbaColor;
 use serde::{Deserialize, Serialize};
 use std::cmp;
 
-/// Visual display color modes for byte map rendering.
+/// Visual display color modes for byte / word map rendering.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum VisualMapColorMode {
     Grayscale,
     DataCategory,
     Rainbow,
     Entropy,
+    Rgb565,
+    Rgb555,
+}
+
+impl VisualMapColorMode {
+    /// Number of bytes consumed per displayed pixel.
+    #[inline]
+    pub fn bytes_per_pixel(self) -> usize {
+        match self {
+            Self::Rgb565 | Self::Rgb555 => 2,
+            _ => 1,
+        }
+    }
+
+    /// Whether this mode interprets data as 16-bit RGB pixels.
+    #[inline]
+    pub fn is_rgb(self) -> bool {
+        matches!(self, Self::Rgb565 | Self::Rgb555)
+    }
 }
 
 /// Categorization of byte values into semantic character and data groups.
@@ -110,6 +129,55 @@ pub fn category_bgra_lut(palette: &CategoryPalette) -> [[u8; 4]; 256] {
     lut
 }
 
+/// Converts a 16-bit RGB 565 value into 8-bit RGB components `(r, g, b)`.
+///
+/// Bit layout (MSB to LSB):
+/// - Bits 15..=11: Red (5 bits)
+/// - Bits 10..=5:  Green (6 bits)
+/// - Bits 4..=0:   Blue (5 bits)
+#[inline]
+pub fn rgb565_to_rgb888(val: u16) -> (u8, u8, u8) {
+    let r5 = ((val >> 11) & 0x1F) as u8;
+    let g6 = ((val >> 5) & 0x3F) as u8;
+    let b5 = (val & 0x1F) as u8;
+    let r8 = (r5 << 3) | (r5 >> 2);
+    let g8 = (g6 << 2) | (g6 >> 4);
+    let b8 = (b5 << 3) | (b5 >> 2);
+    (r8, g8, b8)
+}
+
+/// Converts a 16-bit RGB 565 value into BGRA format `[b, g, r, a]` with full opacity (255).
+#[inline]
+pub fn rgb565_to_bgra(val: u16) -> [u8; 4] {
+    let (r, g, b) = rgb565_to_rgb888(val);
+    [b, g, r, 255]
+}
+
+/// Converts a 16-bit RGB 555 value into 8-bit RGB components `(r, g, b)`.
+///
+/// Bit layout (MSB to LSB):
+/// - Bit 15:       Unused / ignored
+/// - Bits 14..=10: Red (5 bits)
+/// - Bits 9..=5:   Green (5 bits)
+/// - Bits 4..=0:   Blue (5 bits)
+#[inline]
+pub fn rgb555_to_rgb888(val: u16) -> (u8, u8, u8) {
+    let r5 = ((val >> 10) & 0x1F) as u8;
+    let g5 = ((val >> 5) & 0x1F) as u8;
+    let b5 = (val & 0x1F) as u8;
+    let r8 = (r5 << 3) | (r5 >> 2);
+    let g8 = (g5 << 3) | (g5 >> 2);
+    let b8 = (b5 << 3) | (b5 >> 2);
+    (r8, g8, b8)
+}
+
+/// Converts a 16-bit RGB 555 value into BGRA format `[b, g, r, a]` with full opacity (255).
+#[inline]
+pub fn rgb555_to_bgra(val: u16) -> [u8; 4] {
+    let (r, g, b) = rgb555_to_rgb888(val);
+    [b, g, r, 255]
+}
+
 /// Parameters for rendering a visual map pixel buffer.
 #[derive(Clone, Debug)]
 pub struct VisualMapRenderParams {
@@ -124,6 +192,7 @@ pub struct VisualMapRenderParams {
     pub color_mode: VisualMapColorMode,
     pub entropy_window: usize,
     pub custom_lut: Option<[[u8; 4]; 256]>,
+    pub is_big_endian: bool,
 }
 
 /// Renders a raw BGRA pixel buffer (`Vec<u8>`) from binary data according to the given parameters.
@@ -132,16 +201,56 @@ pub fn render_visual_map_bgra(buffer: &[u8], params: &VisualMapRenderParams) -> 
     let physical_width = params.physical_width;
     let physical_height = params.physical_height;
 
-    if buffer_len == 0 || physical_width == 0 || physical_height == 0 {
+    if buffer_len == 0 || physical_width == 0 || physical_height == 0 || params.cols == 0 {
         return Vec::new();
     }
 
-    let mut pixels = vec![0u8; physical_width * physical_height * 4];
-    let total_rows = buffer_len.div_ceil(params.cols);
+    let bpp = params.color_mode.bytes_per_pixel();
+    let total_pixels = buffer_len.div_ceil(bpp);
+    let total_rows = total_pixels.div_ceil(params.cols);
     let start_row = params.start_row;
     let end_row = (start_row + params.visible_rows).min(total_rows);
 
-    if params.color_mode == VisualMapColorMode::Entropy {
+    let mut pixels = vec![0u8; physical_width * physical_height * 4];
+
+    if params.color_mode.is_rgb() {
+        for r in start_row..end_row {
+            let row_y = r - start_row;
+            let row_pixel_start = r * params.cols;
+            let chunk_len = cmp::min(params.cols, total_pixels.saturating_sub(row_pixel_start));
+            let chunk_len = cmp::min(chunk_len, params.max_visible_cols);
+            if chunk_len == 0 {
+                break;
+            }
+
+            for c in 0..chunk_len {
+                let pixel_idx = row_pixel_start + c;
+                let byte_offset = pixel_idx * 2;
+                let val = if byte_offset + 1 < buffer_len {
+                    let b0 = buffer[byte_offset];
+                    let b1 = buffer[byte_offset + 1];
+                    if params.is_big_endian {
+                        u16::from_be_bytes([b0, b1])
+                    } else {
+                        u16::from_le_bytes([b0, b1])
+                    }
+                } else if byte_offset < buffer_len {
+                    let b0 = buffer[byte_offset];
+                    if params.is_big_endian { (b0 as u16) << 8 } else { b0 as u16 }
+                } else {
+                    0
+                };
+
+                let color = match params.color_mode {
+                    VisualMapColorMode::Rgb565 => rgb565_to_bgra(val),
+                    VisualMapColorMode::Rgb555 => rgb555_to_bgra(val),
+                    _ => unreachable!(),
+                };
+
+                blit_cell(&mut pixels, row_y, c, params, color);
+            }
+        }
+    } else if params.color_mode == VisualMapColorMode::Entropy {
         let visible_start_offset = start_row * params.cols;
         let visible_end_offset = cmp::min(buffer_len, end_row * params.cols);
 
@@ -178,7 +287,7 @@ pub fn render_visual_map_bgra(buffer: &[u8], params: &VisualMapRenderParams) -> 
                 VisualMapColorMode::Grayscale => grayscale_bgra_lut(),
                 VisualMapColorMode::Rainbow => rainbow_bgra_lut(),
                 VisualMapColorMode::DataCategory => category_bgra_lut(&CategoryPalette::default()),
-                VisualMapColorMode::Entropy => unreachable!(),
+                _ => unreachable!(),
             }
         };
 
@@ -299,6 +408,7 @@ mod tests {
             color_mode: VisualMapColorMode::Grayscale,
             entropy_window: 64,
             custom_lut: None,
+            is_big_endian: false,
         };
         let pixels = render_visual_map_bgra(&[], &params);
         assert!(pixels.is_empty());
@@ -319,8 +429,119 @@ mod tests {
             color_mode: VisualMapColorMode::Grayscale,
             entropy_window: 64,
             custom_lut: None,
+            is_big_endian: false,
         };
         let pixels = render_visual_map_bgra(&data, &params);
         assert_eq!(pixels.len(), 2 * 2 * 4);
+    }
+
+    #[test]
+    fn test_rgb565_conversions() {
+        // Red: 0xF800 (bits 15..11 = 31)
+        assert_eq!(rgb565_to_rgb888(0xF800), (255, 0, 0));
+        assert_eq!(rgb565_to_bgra(0xF800), [0, 0, 255, 255]);
+
+        // Green: 0x07E0 (bits 10..5 = 63)
+        assert_eq!(rgb565_to_rgb888(0x07E0), (0, 255, 0));
+        assert_eq!(rgb565_to_bgra(0x07E0), [0, 255, 0, 255]);
+
+        // Blue: 0x001F (bits 4..0 = 31)
+        assert_eq!(rgb565_to_rgb888(0x001F), (0, 0, 255));
+        assert_eq!(rgb565_to_bgra(0x001F), [255, 0, 0, 255]);
+
+        // White: 0xFFFF
+        assert_eq!(rgb565_to_rgb888(0xFFFF), (255, 255, 255));
+        assert_eq!(rgb565_to_bgra(0xFFFF), [255, 255, 255, 255]);
+
+        // Black: 0x0000
+        assert_eq!(rgb565_to_rgb888(0x0000), (0, 0, 0));
+        assert_eq!(rgb565_to_bgra(0x0000), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn test_rgb555_conversions() {
+        // Red: 0x7C00 (bits 14..10 = 31, bit 15 = 0)
+        assert_eq!(rgb555_to_rgb888(0x7C00), (255, 0, 0));
+        assert_eq!(rgb555_to_bgra(0x7C00), [0, 0, 255, 255]);
+
+        // Red with bit 15 set: 0xFC00 -> should ignore bit 15
+        assert_eq!(rgb555_to_rgb888(0xFC00), (255, 0, 0));
+
+        // Green: 0x03E0 (bits 9..5 = 31)
+        assert_eq!(rgb555_to_rgb888(0x03E0), (0, 255, 0));
+        assert_eq!(rgb555_to_bgra(0x03E0), [0, 255, 0, 255]);
+
+        // Blue: 0x001F (bits 4..0 = 31)
+        assert_eq!(rgb555_to_rgb888(0x001F), (0, 0, 255));
+        assert_eq!(rgb555_to_bgra(0x001F), [255, 0, 0, 255]);
+
+        // White: 0x7FFF
+        assert_eq!(rgb555_to_rgb888(0x7FFF), (255, 255, 255));
+        assert_eq!(rgb555_to_bgra(0x7FFF), [255, 255, 255, 255]);
+
+        // Black: 0x0000
+        assert_eq!(rgb555_to_rgb888(0x0000), (0, 0, 0));
+        assert_eq!(rgb555_to_bgra(0x0000), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn test_render_visual_map_rgb565_le_and_be() {
+        // Pixel 0: Red 0xF800, Pixel 1: Blue 0x001F
+        // LE bytes: [0x00, 0xF8, 0x1F, 0x00]
+        let data_le = vec![0x00, 0xF8, 0x1F, 0x00];
+        let params_le = VisualMapRenderParams {
+            cols: 2,
+            start_row: 0,
+            visible_rows: 1,
+            max_visible_cols: 2,
+            cell_width: 1,
+            cell_height: 1,
+            physical_width: 2,
+            physical_height: 1,
+            color_mode: VisualMapColorMode::Rgb565,
+            entropy_window: 64,
+            custom_lut: None,
+            is_big_endian: false,
+        };
+        let pixels_le = render_visual_map_bgra(&data_le, &params_le);
+        assert_eq!(pixels_le.len(), 8);
+        // Pixel 0 BGRA: Red [0, 0, 255, 255]
+        assert_eq!(&pixels_le[0..4], &[0, 0, 255, 255]);
+        // Pixel 1 BGRA: Blue [255, 0, 0, 255]
+        assert_eq!(&pixels_le[4..8], &[255, 0, 0, 255]);
+
+        // BE bytes: [0xF8, 0x00, 0x00, 0x1F]
+        let data_be = vec![0xF8, 0x00, 0x00, 0x1F];
+        let mut params_be = params_le;
+        params_be.is_big_endian = true;
+        let pixels_be = render_visual_map_bgra(&data_be, &params_be);
+        assert_eq!(&pixels_be[0..4], &[0, 0, 255, 255]);
+        assert_eq!(&pixels_be[4..8], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn test_render_visual_map_rgb555_odd_bytes() {
+        // 3 bytes: 1 full pixel + 1 partial pixel (should not panic)
+        // Pixel 0: Green 0x03E0 in LE -> [0xE0, 0x03]
+        // Trailing byte: 0x1F
+        let data = vec![0xE0, 0x03, 0x1F];
+        let params = VisualMapRenderParams {
+            cols: 2,
+            start_row: 0,
+            visible_rows: 1,
+            max_visible_cols: 2,
+            cell_width: 1,
+            cell_height: 1,
+            physical_width: 2,
+            physical_height: 1,
+            color_mode: VisualMapColorMode::Rgb555,
+            entropy_window: 64,
+            custom_lut: None,
+            is_big_endian: false,
+        };
+        let pixels = render_visual_map_bgra(&data, &params);
+        assert_eq!(pixels.len(), 8);
+        // Pixel 0 BGRA: Green [0, 255, 0, 255]
+        assert_eq!(&pixels[0..4], &[0, 255, 0, 255]);
     }
 }
