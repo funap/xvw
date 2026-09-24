@@ -3,12 +3,20 @@
 //! Provides color categorization, color map LUT generation, and pixel buffer
 //! rendering independent of any GUI framework.
 
+pub mod geometry;
+pub mod hover;
+
+#[allow(unused_imports)]
+pub use geometry::{PlanarTileCoord, VisualMapGeometry};
+#[allow(unused_imports)]
+pub use hover::{HoveredPixel, decode_hovered_pixel};
+
 use crate::core::color::RgbaColor;
 use serde::{Deserialize, Serialize};
 use std::cmp;
 
 /// Visual display color modes for byte / word map rendering.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub enum VisualMapColorMode {
     Grayscale,
     DataCategory,
