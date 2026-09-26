@@ -388,6 +388,21 @@ impl Workspace {
         )
         .detach();
 
+        cx.subscribe_in(
+            &left_panel,
+            window,
+            |this, _, event: &crate::ui::panels::visual_map_panel::VisualMapPanelEvent, _window, cx| match event {
+                crate::ui::panels::visual_map_panel::VisualMapPanelEvent::NavigateTo { offset } => {
+                    if let Some(editor_view) = this.active_editor_view(cx) {
+                        editor_view.update(cx, |view, cx| {
+                            view.scroll_to_byte_if_needed(*offset, cx);
+                        });
+                    }
+                }
+            },
+        )
+        .detach();
+
         cx.subscribe(&left_panel, |_, _, event: &FileTreeViewEvent, cx| match event {
             FileTreeViewEvent::OpenFile { path, format, record_recent } => {
                 let action = if *record_recent {

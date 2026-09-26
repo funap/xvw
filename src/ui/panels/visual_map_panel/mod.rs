@@ -5,6 +5,8 @@ pub mod element;
 pub mod footer;
 pub mod legend;
 pub mod repeat;
+#[cfg(test)]
+mod tests;
 pub mod toolbar;
 
 #[allow(unused_imports)]
@@ -68,6 +70,14 @@ pub struct VisualMapPanel {
 }
 
 impl EventEmitter<PanelEvent> for VisualMapPanel {}
+
+/// Events emitted by the visual map panel for workspace coordination.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VisualMapPanelEvent {
+    NavigateTo { offset: usize },
+}
+
+impl EventEmitter<VisualMapPanelEvent> for VisualMapPanel {}
 
 impl VisualMapPanel {
     pub fn new(editor: Option<Entity<Editor>>, cx: &mut Context<Self>) -> Self {
@@ -331,9 +341,11 @@ impl VisualMapPanel {
         if let Some(offset) = self.offset_from_point_clamped(event.position, cx)
             && let Some(editor) = &self.editor
         {
-            editor.update(cx, |ed, _cx| {
+            cx.emit(VisualMapPanelEvent::NavigateTo { offset });
+            editor.update(cx, |ed, cx| {
                 ed.set_cursor_offset(offset);
                 ed.clear_selection();
+                cx.notify();
             });
             cx.notify();
         }
@@ -374,6 +386,7 @@ impl VisualMapPanel {
         {
             editor.update(cx, |editor, cx| {
                 editor.set_cursor_offset(offset);
+                editor.clear_selection();
                 cx.notify();
             });
         }

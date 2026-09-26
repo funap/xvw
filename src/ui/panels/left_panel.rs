@@ -8,7 +8,7 @@ use crate::ui::panels::file_tree_view::{FileTreeView, FileTreeViewEvent};
 use crate::ui::panels::search_panel::{SearchPanel, SearchPanelEvent};
 use crate::ui::panels::strings_panel::{StringsPanel, StringsPanelEvent};
 use crate::ui::panels::struct_tree_view::StructTreeView;
-use crate::ui::panels::visual_map_panel::VisualMapPanel;
+use crate::ui::panels::visual_map_panel::{VisualMapPanel, VisualMapPanelEvent};
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -38,6 +38,7 @@ pub struct LeftPanel {
 impl EventEmitter<FileTreeViewEvent> for LeftPanel {}
 impl EventEmitter<SearchPanelEvent> for LeftPanel {}
 impl EventEmitter<StringsPanelEvent> for LeftPanel {}
+impl EventEmitter<VisualMapPanelEvent> for LeftPanel {}
 
 impl LeftPanel {
     pub fn new(file_tree: Entity<FileTreeView>, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -64,6 +65,11 @@ impl LeftPanel {
         .detach();
 
         cx.subscribe(&strings_panel, |_, _, event: &StringsPanelEvent, cx| {
+            cx.emit(event.clone());
+        })
+        .detach();
+
+        cx.subscribe(&visual_map, |_, _, event: &VisualMapPanelEvent, cx| {
             cx.emit(event.clone());
         })
         .detach();
