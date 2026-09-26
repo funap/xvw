@@ -1,13 +1,15 @@
 use crate::core::encoding::Encoding;
-use crate::core::layout::{BytesPerRow, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
+use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
 use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
 use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
+use crate::ui::icon::IconName;
 use gpui_kit::component::{
-    ActiveTheme, Sizable as _, Size, StyledExt,
-    button::Button,
+    ActiveTheme, Sizable as _, Size, StyledExt, WindowExt as _,
+    button::{Button, ButtonVariants as _},
     dock::{Panel, PanelEvent},
     input::{self, Input, InputState, NumberInput},
     menu::{DropdownMenu as _, PopupMenuItem},
+    notification::Notification,
     theme::Theme,
 };
 use gpui_kit::prelude::*;
@@ -179,26 +181,46 @@ impl Render for SettingsView {
                     .child({
                         let active_theme_name = cx.theme().theme_name().clone();
                         let all_themes = crate::theme::all_theme_names(cx);
+                        let is_modified = active_theme_name != crate::settings::DEFAULT_LIGHT_THEME;
 
-                        div().flex().items_center().gap_4().child(div().w_32().child("Theme")).child(
-                            div().w_48().child(
-                                Button::new("theme-selection")
-                                    .label(active_theme_name.clone())
-                                    .outline()
-                                    .dropdown_caret(true)
-                                    .with_size(Size::Small)
-                                    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
-                                        all_themes.iter().fold(menu.scrollable(true).max_h(px(360.)), |menu, theme_name| {
-                                            let is_active = theme_name == &active_theme_name;
-                                            let name = theme_name.clone();
-                                            menu.item(PopupMenuItem::new(name.clone()).checked(is_active).on_click(move |_, window, cx| {
-                                                crate::theme::apply_theme_by_name(&name, Some(window), cx);
-                                                crate::settings::save_current(cx);
-                                            }))
-                                        })
-                                    }),
-                            ),
-                        )
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_4()
+                            .child(div().w_32().child("Theme"))
+                            .child(
+                                div().w_48().child(
+                                    Button::new("theme-selection")
+                                        .label(active_theme_name.clone())
+                                        .outline()
+                                        .dropdown_caret(true)
+                                        .with_size(Size::Small)
+                                        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
+                                            all_themes.iter().fold(menu.scrollable(true).max_h(px(360.)), |menu, theme_name| {
+                                                let is_active = theme_name == &active_theme_name;
+                                                let name = theme_name.clone();
+                                                menu.item(PopupMenuItem::new(name.clone()).checked(is_active).on_click(move |_, window, cx| {
+                                                    crate::theme::apply_theme_by_name(&name, Some(window), cx);
+                                                    crate::settings::save_current(cx);
+                                                }))
+                                            })
+                                        }),
+                                ),
+                            )
+                            .when(is_modified, |row| {
+                                row.child(
+                                    Button::new("reset-theme")
+                                        .icon(IconName::Undo2)
+                                        .ghost()
+                                        .with_size(Size::Small)
+                                        .tooltip("Reset to default")
+                                        .on_click(cx.listener(|_, _, window, cx| {
+                                            crate::theme::apply_theme_by_name(crate::settings::DEFAULT_LIGHT_THEME, Some(window), cx);
+                                            crate::settings::save_current(cx);
+                                            window.push_notification(Notification::info("Reset Theme to default"), cx);
+                                        })),
+                                )
+                            })
                     }),
             )
             .child(
@@ -207,43 +229,116 @@ impl Render for SettingsView {
                     .flex_col()
                     .gap_2()
                     .child(div().text_xs().font_semibold().text_color(cx.theme().muted_foreground).child("Editor"))
-                    .child(
+                    .child({
+                        let default_family = Appearance::default().font_family;
+                        let is_modified = cx.global::<Appearance>().font_family != default_family;
+
                         div()
                             .flex()
                             .items_center()
                             .gap_4()
                             .child(div().w_32().child("Font Family"))
-                            .child(div().w_48().child(Input::new(&self.font_family_input))),
-                    )
-                    .child(
+                            .child(div().w_48().child(Input::new(&self.font_family_input)))
+                            .when(is_modified, |row| {
+                                row.child(
+                                    Button::new("reset-font-family")
+                                        .icon(IconName::Undo2)
+                                        .ghost()
+                                        .with_size(Size::Small)
+                                        .tooltip("Reset to default")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            let default_family = Appearance::default().font_family;
+                                            cx.update_global::<Appearance, _>(|appearance, _| {
+                                                appearance.font_family = default_family.clone();
+                                            });
+                                            this.font_family_input.update(cx, |input, cx| {
+                                                input.set_value(default_family, window, cx);
+                                            });
+                                            crate::settings::save_current(cx);
+                                            window.push_notification(Notification::info("Reset Font Family to default"), cx);
+                                        })),
+                                )
+                            })
+                    })
+                    .child({
+                        let default_size = Appearance::default().font_size;
+                        let is_modified = (cx.global::<Appearance>().font_size - default_size).abs() > f32::EPSILON;
+
                         div()
                             .flex()
                             .items_center()
                             .gap_4()
                             .child(div().w_32().child("Font Size"))
-                            .child(div().w_48().child(NumberInput::new(&self.font_size_input))),
-                    )
-                    .child(
+                            .child(div().w_48().child(NumberInput::new(&self.font_size_input)))
+                            .when(is_modified, |row| {
+                                row.child(
+                                    Button::new("reset-font-size")
+                                        .icon(IconName::Undo2)
+                                        .ghost()
+                                        .with_size(Size::Small)
+                                        .tooltip("Reset to default")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            let default_size = Appearance::default().font_size;
+                                            cx.update_global::<Appearance, _>(|appearance, _| {
+                                                appearance.font_size = default_size;
+                                            });
+                                            this.font_size_input.update(cx, |input, cx| {
+                                                input.set_value(default_size.to_string(), window, cx);
+                                            });
+                                            crate::settings::save_current(cx);
+                                            window.push_notification(Notification::info("Reset Font Size to default"), cx);
+                                        })),
+                                )
+                            })
+                    })
+                    .child({
+                        let default_bytes = DEFAULT_BYTES_PER_ROW;
+                        let is_modified = cx.global::<BytesPerRow>().0 != default_bytes;
+
                         div()
                             .flex()
                             .items_center()
                             .gap_4()
                             .child(div().w_32().child("Bytes Per Row"))
-                            .child(div().w_48().child(NumberInput::new(&self.bytes_per_row_input))),
-                    )
+                            .child(div().w_48().child(NumberInput::new(&self.bytes_per_row_input)))
+                            .when(is_modified, |row| {
+                                row.child(
+                                    Button::new("reset-bytes-per-row")
+                                        .icon(IconName::Undo2)
+                                        .ghost()
+                                        .with_size(Size::Small)
+                                        .tooltip("Reset to default")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            cx.update_global::<BytesPerRow, _>(|bytes_per_row, _| {
+                                                bytes_per_row.0 = DEFAULT_BYTES_PER_ROW;
+                                            });
+                                            this.bytes_per_row_input.update(cx, |input, cx| {
+                                                input.set_value(DEFAULT_BYTES_PER_ROW.to_string(), window, cx);
+                                            });
+                                            crate::settings::save_current(cx);
+                                            window.push_notification(Notification::info("Reset Bytes Per Row to default"), cx);
+                                        })),
+                                )
+                            })
+                    })
                     .child({
                         let default_encoding = *cx.global::<Encoding>();
+                        let is_modified = default_encoding != Encoding::default();
 
-                        div().flex().items_center().gap_4().child(div().w_32().child("Default Encoding")).child(
-                            div().w_48().child(
-                                Button::new("default-encoding")
-                                    .label(default_encoding.label())
-                                    .outline()
-                                    .dropdown_caret(true)
-                                    .with_size(Size::Small)
-                                    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
-                                        let menu =
-                                            Encoding::primary_encodings().iter().copied().fold(menu, |menu, encoding| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_4()
+                            .child(div().w_32().child("Default Encoding"))
+                            .child(
+                                div().w_48().child(
+                                    Button::new("default-encoding")
+                                        .label(default_encoding.label())
+                                        .outline()
+                                        .dropdown_caret(true)
+                                        .with_size(Size::Small)
+                                        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, window, cx| {
+                                            let menu = Encoding::primary_encodings().iter().copied().fold(menu, |menu, encoding| {
                                                 menu.item(PopupMenuItem::new(encoding.label()).checked(encoding == default_encoding).on_click(
                                                     move |_, _, cx| {
                                                         cx.update_global::<Encoding, _>(|current, _| {
@@ -253,97 +348,179 @@ impl Render for SettingsView {
                                                     },
                                                 ))
                                             });
-                                        let menu = menu.separator();
-                                        Encoding::secondary_categories().iter().fold(menu, |menu, (cat, encs)| {
-                                            menu.submenu(cat.label(), window, cx, move |menu, _window, _cx| {
-                                                encs.iter().copied().fold(menu, |menu, encoding| {
-                                                    menu.item(PopupMenuItem::new(encoding.label()).checked(encoding == default_encoding).on_click(
-                                                        move |_, _, cx| {
-                                                            cx.update_global::<Encoding, _>(|current, _| {
-                                                                *current = encoding;
-                                                            });
-                                                            crate::settings::save_current(cx);
-                                                        },
-                                                    ))
+                                            let menu = menu.separator();
+                                            Encoding::secondary_categories().iter().fold(menu, |menu, (cat, encs)| {
+                                                menu.submenu(cat.label(), window, cx, move |menu, _window, _cx| {
+                                                    encs.iter().copied().fold(menu, |menu, encoding| {
+                                                        menu.item(PopupMenuItem::new(encoding.label()).checked(encoding == default_encoding).on_click(
+                                                            move |_, _, cx| {
+                                                                cx.update_global::<Encoding, _>(|current, _| {
+                                                                    *current = encoding;
+                                                                });
+                                                                crate::settings::save_current(cx);
+                                                            },
+                                                        ))
+                                                    })
                                                 })
                                             })
-                                        })
-                                    }),
-                            ),
-                        )
+                                        }),
+                                ),
+                            )
+                            .when(is_modified, |row| {
+                                row.child(
+                                    Button::new("reset-encoding")
+                                        .icon(IconName::Undo2)
+                                        .ghost()
+                                        .with_size(Size::Small)
+                                        .tooltip("Reset to default")
+                                        .on_click(cx.listener(|_, _, window, cx| {
+                                            cx.update_global::<Encoding, _>(|current, _| {
+                                                *current = Encoding::default();
+                                            });
+                                            crate::settings::save_current(cx);
+                                            window.push_notification(Notification::info("Reset Default Encoding to default"), cx);
+                                        })),
+                                )
+                            })
                     })
                     .child({
                         let default_radix = *cx.global::<DisplayRadix>();
+                        let is_modified = default_radix != DisplayRadix::default();
 
-                        div().flex().items_center().gap_4().child(div().w_32().child("Default Radix")).child(
-                            div().w_48().child(
-                                Button::new("default-radix")
-                                    .label(default_radix.label())
-                                    .outline()
-                                    .dropdown_caret(true)
-                                    .with_size(Size::Small)
-                                    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
-                                        DisplayRadix::ALL.iter().copied().fold(menu, |menu, radix| {
-                                            menu.item(PopupMenuItem::new(radix.label()).checked(radix == default_radix).on_click(move |_, _, cx| {
-                                                cx.update_global::<DisplayRadix, _>(|current, _| {
-                                                    *current = radix;
-                                                });
-                                                crate::settings::save_current(cx);
-                                            }))
-                                        })
-                                    }),
-                            ),
-                        )
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_4()
+                            .child(div().w_32().child("Default Radix"))
+                            .child(
+                                div().w_48().child(
+                                    Button::new("default-radix")
+                                        .label(default_radix.label())
+                                        .outline()
+                                        .dropdown_caret(true)
+                                        .with_size(Size::Small)
+                                        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
+                                            DisplayRadix::ALL.iter().copied().fold(menu, |menu, radix| {
+                                                menu.item(PopupMenuItem::new(radix.label()).checked(radix == default_radix).on_click(move |_, _, cx| {
+                                                    cx.update_global::<DisplayRadix, _>(|current, _| {
+                                                        *current = radix;
+                                                    });
+                                                    crate::settings::save_current(cx);
+                                                }))
+                                            })
+                                        }),
+                                ),
+                            )
+                            .when(is_modified, |row| {
+                                row.child(
+                                    Button::new("reset-radix")
+                                        .icon(IconName::Undo2)
+                                        .ghost()
+                                        .with_size(Size::Small)
+                                        .tooltip("Reset to default")
+                                        .on_click(cx.listener(|_, _, window, cx| {
+                                            cx.update_global::<DisplayRadix, _>(|current, _| {
+                                                *current = DisplayRadix::default();
+                                            });
+                                            crate::settings::save_current(cx);
+                                            window.push_notification(Notification::info("Reset Default Radix to default"), cx);
+                                        })),
+                                )
+                            })
                     })
                     .child({
                         let default_group_size = *cx.global::<ByteGroupSize>();
+                        let is_modified = default_group_size != ByteGroupSize::default();
 
-                        div().flex().items_center().gap_4().child(div().w_32().child("Default Grouping")).child(
-                            div().w_48().child(
-                                Button::new("default-grouping")
-                                    .label(default_group_size.label())
-                                    .outline()
-                                    .dropdown_caret(true)
-                                    .with_size(Size::Small)
-                                    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
-                                        ByteGroupSize::ALL.iter().copied().fold(menu, |menu, group_size| {
-                                            menu.item(PopupMenuItem::new(group_size.label()).checked(group_size == default_group_size).on_click(
-                                                move |_, _, cx| {
-                                                    cx.update_global::<ByteGroupSize, _>(|current, _| {
-                                                        *current = group_size;
-                                                    });
-                                                    crate::settings::save_current(cx);
-                                                },
-                                            ))
-                                        })
-                                    }),
-                            ),
-                        )
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_4()
+                            .child(div().w_32().child("Default Grouping"))
+                            .child(
+                                div().w_48().child(
+                                    Button::new("default-grouping")
+                                        .label(default_group_size.label())
+                                        .outline()
+                                        .dropdown_caret(true)
+                                        .with_size(Size::Small)
+                                        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
+                                            ByteGroupSize::ALL.iter().copied().fold(menu, |menu, group_size| {
+                                                menu.item(PopupMenuItem::new(group_size.label()).checked(group_size == default_group_size).on_click(
+                                                    move |_, _, cx| {
+                                                        cx.update_global::<ByteGroupSize, _>(|current, _| {
+                                                            *current = group_size;
+                                                        });
+                                                        crate::settings::save_current(cx);
+                                                    },
+                                                ))
+                                            })
+                                        }),
+                                ),
+                            )
+                            .when(is_modified, |row| {
+                                row.child(
+                                    Button::new("reset-grouping")
+                                        .icon(IconName::Undo2)
+                                        .ghost()
+                                        .with_size(Size::Small)
+                                        .tooltip("Reset to default")
+                                        .on_click(cx.listener(|_, _, window, cx| {
+                                            cx.update_global::<ByteGroupSize, _>(|current, _| {
+                                                *current = ByteGroupSize::default();
+                                            });
+                                            crate::settings::save_current(cx);
+                                            window.push_notification(Notification::info("Reset Default Grouping to default"), cx);
+                                        })),
+                                )
+                            })
                     })
                     .child({
                         let default_byte_order = *cx.global::<ByteOrder>();
+                        let is_modified = default_byte_order != ByteOrder::default();
 
-                        div().flex().items_center().gap_4().child(div().w_32().child("Default Byte Order")).child(
-                            div().w_48().child(
-                                Button::new("default-byte-order")
-                                    .label(default_byte_order.label())
-                                    .outline()
-                                    .dropdown_caret(true)
-                                    .with_size(Size::Small)
-                                    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
-                                        ByteOrder::ALL.iter().copied().fold(menu, |menu, byte_order| {
-                                            menu.item(PopupMenuItem::new(byte_order.label()).checked(byte_order == default_byte_order).on_click(
-                                                move |_, _, cx| {
-                                                    cx.update_global::<ByteOrder, _>(|current, _| {
-                                                        *current = byte_order;
-                                                    });
-                                                    crate::settings::save_current(cx);
-                                                },
-                                            ))
-                                        })
-                                    }),
-                            ),
-                        )
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_4()
+                            .child(div().w_32().child("Default Byte Order"))
+                            .child(
+                                div().w_48().child(
+                                    Button::new("default-byte-order")
+                                        .label(default_byte_order.label())
+                                        .outline()
+                                        .dropdown_caret(true)
+                                        .with_size(Size::Small)
+                                        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
+                                            ByteOrder::ALL.iter().copied().fold(menu, |menu, byte_order| {
+                                                menu.item(PopupMenuItem::new(byte_order.label()).checked(byte_order == default_byte_order).on_click(
+                                                    move |_, _, cx| {
+                                                        cx.update_global::<ByteOrder, _>(|current, _| {
+                                                            *current = byte_order;
+                                                        });
+                                                        crate::settings::save_current(cx);
+                                                    },
+                                                ))
+                                            })
+                                        }),
+                                ),
+                            )
+                            .when(is_modified, |row| {
+                                row.child(
+                                    Button::new("reset-byte-order")
+                                        .icon(IconName::Undo2)
+                                        .ghost()
+                                        .with_size(Size::Small)
+                                        .tooltip("Reset to default")
+                                        .on_click(cx.listener(|_, _, window, cx| {
+                                            cx.update_global::<ByteOrder, _>(|current, _| {
+                                                *current = ByteOrder::default();
+                                            });
+                                            crate::settings::save_current(cx);
+                                            window.push_notification(Notification::info("Reset Default Byte Order to default"), cx);
+                                        })),
+                                )
+                            })
                     }),
             )
     }
