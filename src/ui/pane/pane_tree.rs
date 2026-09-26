@@ -673,6 +673,14 @@ impl Render for PaneTree {
                 .justify_center()
                 .items_center()
                 .bg(cx.theme().background)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_this, event: &MouseDownEvent, window, cx| {
+                        if event.click_count == 2 {
+                            window.dispatch_action(Box::new(crate::actions::NewEmptyFile), cx);
+                        }
+                    }),
+                )
                 .child(div().text_xl().text_color(cx.theme().muted_foreground).child("Nothing is open"))
         }
     }
