@@ -12,3 +12,6 @@ pub mod workspace;
 
 impl gpui_kit::Global for crate::core::layout::BytesPerRow {}
 impl gpui_kit::Global for crate::core::encoding::Encoding {}
+impl gpui_kit::Global for crate::core::radix::DisplayRadix {}
+impl gpui_kit::Global for crate::core::radix::ByteGroupSize {}
+impl gpui_kit::Global for crate::core::radix::ByteOrder {}

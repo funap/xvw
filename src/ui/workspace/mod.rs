@@ -11,6 +11,7 @@ use crate::ui::views::editor_view::EditorView;
 use crate::app_state::{AppState, InsertModeState};
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
+use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
 use gpui_kit::component::{ActiveTheme as _, Root, WindowExt, v_flex};
 use std::cell::Cell;
@@ -587,10 +588,16 @@ impl Workspace {
 
     pub(crate) fn open_editor_view(&mut self, document: Arc<RwLock<crate::core::document::Document>>, window: &mut Window, cx: &mut Context<Self>) {
         let default_encoding = *cx.global::<Encoding>();
+        let default_radix = *cx.global::<DisplayRadix>();
+        let default_group_size = *cx.global::<ByteGroupSize>();
+        let default_byte_order = *cx.global::<ByteOrder>();
         let bytes_per_row = cx.global::<crate::core::layout::BytesPerRow>().0;
         let editor = cx.new(|_| {
             let mut editor = Editor::new(document);
             editor.set_encoding(default_encoding);
+            editor.set_radix(default_radix);
+            editor.set_group_size(default_group_size);
+            editor.set_is_big_endian(default_byte_order.is_big_endian());
             editor.set_bytes_per_row(bytes_per_row);
             editor
         });

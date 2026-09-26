@@ -83,6 +83,8 @@ pub enum ByteOrder {
 
 #[allow(dead_code)]
 impl ByteOrder {
+    pub const ALL: [ByteOrder; 2] = [ByteOrder::LittleEndian, ByteOrder::BigEndian];
+
     pub fn is_big_endian(&self) -> bool {
         matches!(self, ByteOrder::BigEndian)
     }

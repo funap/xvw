@@ -1,5 +1,6 @@
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
+use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
 use crate::core::structure::{DefinitionHistory, FileHistory, RecentFileEntry};
 use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use gpui_kit::App;
@@ -30,6 +31,10 @@ pub struct Settings {
     pub dark_theme: String,
     pub theme_mode: ThemeMode,
     pub default_encoding: Encoding,
+    pub default_radix: DisplayRadix,
+    pub default_group_size: ByteGroupSize,
+    #[serde(alias = "default_byte_order")]
+    pub default_endianness: ByteOrder,
     #[serde(default = "default_bytes_per_row")]
     pub bytes_per_row: usize,
     pub recent_definition_paths: Vec<PathBuf>,
@@ -73,6 +78,9 @@ impl Default for Settings {
             dark_theme: DEFAULT_DARK_THEME.to_string(),
             theme_mode: ThemeMode::Light,
             default_encoding: Encoding::default(),
+            default_radix: DisplayRadix::default(),
+            default_group_size: ByteGroupSize::default(),
+            default_endianness: ByteOrder::default(),
             bytes_per_row: DEFAULT_BYTES_PER_ROW,
             recent_definition_paths: Vec::new(),
             recent_file_paths: Vec::new(),
@@ -118,6 +126,9 @@ impl Settings {
             dark_theme: theme.dark_theme.name.to_string(),
             theme_mode: theme.mode,
             default_encoding: *cx.global::<Encoding>(),
+            default_radix: *cx.global::<DisplayRadix>(),
+            default_group_size: *cx.global::<ByteGroupSize>(),
+            default_endianness: *cx.global::<ByteOrder>(),
             bytes_per_row: cx.global::<BytesPerRow>().0,
             recent_definition_paths: recent_history.definitions.paths().to_vec(),
             recent_file_paths: recent_history.files.paths(),
@@ -299,6 +310,9 @@ mod tests {
             dark_theme: "Tokyo Night".into(),
             theme_mode: ThemeMode::Dark,
             default_encoding: Encoding::Utf16Le,
+            default_radix: DisplayRadix::Binary,
+            default_group_size: ByteGroupSize::Four,
+            default_endianness: ByteOrder::BigEndian,
             bytes_per_row: 24,
             recent_definition_paths: vec![PathBuf::from("definition.ksy")],
             recent_file_paths: vec![PathBuf::from("binary.bin")],
@@ -355,6 +369,9 @@ mod tests {
         assert_eq!(settings.dark_theme, DEFAULT_DARK_THEME);
         assert_eq!(settings.theme_mode, ThemeMode::Light);
         assert_eq!(settings.default_encoding, Encoding::default());
+        assert_eq!(settings.default_radix, DisplayRadix::default());
+        assert_eq!(settings.default_group_size, ByteGroupSize::default());
+        assert_eq!(settings.default_endianness, ByteOrder::default());
         assert_eq!(settings.bytes_per_row, DEFAULT_BYTES_PER_ROW);
     }
 
@@ -384,5 +401,14 @@ mod tests {
 
         let settings_high = Settings::load_from(&file_high.path).expect("load settings");
         assert_eq!(settings_high.bytes_per_row, DEFAULT_BYTES_PER_ROW);
+    }
+
+    #[test]
+    fn default_byte_order_alias_supported() {
+        let file = TestSettingsFile::new("byte-order-alias");
+        fs::write(&file.path, "default_byte_order = \"BigEndian\"\n").expect("write settings");
+
+        let settings = Settings::load_from(&file.path).expect("load settings");
+        assert_eq!(settings.default_endianness, ByteOrder::BigEndian);
     }
 }

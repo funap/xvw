@@ -1,5 +1,6 @@
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
+use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
 use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use gpui_kit::component::{
     ActiveTheme, Sizable as _, Size, StyledExt,
@@ -74,6 +75,18 @@ impl SettingsView {
         }));
 
         subscriptions.push(cx.observe_global::<Encoding>(|_, cx| {
+            cx.notify();
+        }));
+
+        subscriptions.push(cx.observe_global::<DisplayRadix>(|_, cx| {
+            cx.notify();
+        }));
+
+        subscriptions.push(cx.observe_global::<ByteGroupSize>(|_, cx| {
+            cx.notify();
+        }));
+
+        subscriptions.push(cx.observe_global::<ByteOrder>(|_, cx| {
             cx.notify();
         }));
 
@@ -254,6 +267,79 @@ impl Render for SettingsView {
                                                     ))
                                                 })
                                             })
+                                        })
+                                    }),
+                            ),
+                        )
+                    })
+                    .child({
+                        let default_radix = *cx.global::<DisplayRadix>();
+
+                        div().flex().items_center().gap_4().child(div().w_32().child("Default Radix")).child(
+                            div().w_48().child(
+                                Button::new("default-radix")
+                                    .label(default_radix.label())
+                                    .outline()
+                                    .dropdown_caret(true)
+                                    .with_size(Size::Small)
+                                    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
+                                        DisplayRadix::ALL.iter().copied().fold(menu, |menu, radix| {
+                                            menu.item(PopupMenuItem::new(radix.label()).checked(radix == default_radix).on_click(move |_, _, cx| {
+                                                cx.update_global::<DisplayRadix, _>(|current, _| {
+                                                    *current = radix;
+                                                });
+                                                crate::settings::save_current(cx);
+                                            }))
+                                        })
+                                    }),
+                            ),
+                        )
+                    })
+                    .child({
+                        let default_group_size = *cx.global::<ByteGroupSize>();
+
+                        div().flex().items_center().gap_4().child(div().w_32().child("Default Grouping")).child(
+                            div().w_48().child(
+                                Button::new("default-grouping")
+                                    .label(default_group_size.label())
+                                    .outline()
+                                    .dropdown_caret(true)
+                                    .with_size(Size::Small)
+                                    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
+                                        ByteGroupSize::ALL.iter().copied().fold(menu, |menu, group_size| {
+                                            menu.item(PopupMenuItem::new(group_size.label()).checked(group_size == default_group_size).on_click(
+                                                move |_, _, cx| {
+                                                    cx.update_global::<ByteGroupSize, _>(|current, _| {
+                                                        *current = group_size;
+                                                    });
+                                                    crate::settings::save_current(cx);
+                                                },
+                                            ))
+                                        })
+                                    }),
+                            ),
+                        )
+                    })
+                    .child({
+                        let default_byte_order = *cx.global::<ByteOrder>();
+
+                        div().flex().items_center().gap_4().child(div().w_32().child("Default Byte Order")).child(
+                            div().w_48().child(
+                                Button::new("default-byte-order")
+                                    .label(default_byte_order.label())
+                                    .outline()
+                                    .dropdown_caret(true)
+                                    .with_size(Size::Small)
+                                    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
+                                        ByteOrder::ALL.iter().copied().fold(menu, |menu, byte_order| {
+                                            menu.item(PopupMenuItem::new(byte_order.label()).checked(byte_order == default_byte_order).on_click(
+                                                move |_, _, cx| {
+                                                    cx.update_global::<ByteOrder, _>(|current, _| {
+                                                        *current = byte_order;
+                                                    });
+                                                    crate::settings::save_current(cx);
+                                                },
+                                            ))
                                         })
                                     }),
                             ),

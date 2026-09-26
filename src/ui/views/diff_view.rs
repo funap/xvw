@@ -12,6 +12,7 @@ use crate::actions::{NextDifference, PrevDifference, RefreshDiff, SwapDiffFiles,
 use crate::app_state::AppState;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
+use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
 use crate::ui::appearance::Appearance;
 use crate::ui::views::hex_view::{HexView, HexViewEvent, HorizontalScrollTarget, ScrollColumn};
 
@@ -44,16 +45,25 @@ pub struct DiffView {
 impl DiffView {
     pub fn new(left_document: Arc<RwLock<Document>>, right_document: Arc<RwLock<Document>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let default_encoding = *cx.global::<Encoding>();
+        let default_radix = *cx.global::<DisplayRadix>();
+        let default_group_size = *cx.global::<ByteGroupSize>();
+        let default_byte_order = *cx.global::<ByteOrder>();
         let bytes_per_row = cx.global::<crate::core::layout::BytesPerRow>().0;
         let left_editor = cx.new(|_cx| {
             let mut editor = Editor::new(left_document.clone());
             editor.set_encoding(default_encoding);
+            editor.set_radix(default_radix);
+            editor.set_group_size(default_group_size);
+            editor.set_is_big_endian(default_byte_order.is_big_endian());
             editor.set_bytes_per_row(bytes_per_row);
             editor
         });
         let right_editor = cx.new(|_cx| {
             let mut editor = Editor::new(right_document.clone());
             editor.set_encoding(default_encoding);
+            editor.set_radix(default_radix);
+            editor.set_group_size(default_group_size);
+            editor.set_is_big_endian(default_byte_order.is_big_endian());
             editor.set_bytes_per_row(bytes_per_row);
             editor
         });
