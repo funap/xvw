@@ -105,7 +105,7 @@ impl ActivityBar {
             }))
             .child(Icon::new(icon).size(px(24.0)))
             .when(is_active, |this| {
-                this.child(div().absolute().left_0().top_2().bottom_2().w_0p5().bg(theme.accent))
+                this.child(div().absolute().left_0().top_2().bottom_2().w_0p5().bg(theme.sidebar_primary))
             })
     }
 }
