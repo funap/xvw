@@ -43,11 +43,25 @@ impl EmbeddedThemes {
         self.themes.get(name).cloned()
     }
 
-    /// Returns a sorted list of all available theme names.
+    /// Returns a list of all available theme names with default themes first, followed by alphabetical order.
     pub fn theme_names(&self) -> Vec<SharedString> {
-        let mut names: Vec<_> = self.themes.keys().cloned().collect();
+        let mut names: Vec<_> = self
+            .themes
+            .keys()
+            .filter(|name| name.as_ref() != DEFAULT_LIGHT_THEME && name.as_ref() != DEFAULT_DARK_THEME)
+            .cloned()
+            .collect();
         names.sort();
-        names
+
+        let mut result = Vec::with_capacity(self.themes.len());
+        if self.themes.contains_key(DEFAULT_LIGHT_THEME) {
+            result.push(SharedString::from(DEFAULT_LIGHT_THEME));
+        }
+        if self.themes.contains_key(DEFAULT_DARK_THEME) {
+            result.push(SharedString::from(DEFAULT_DARK_THEME));
+        }
+        result.extend(names);
+        result
     }
 }
 
@@ -113,7 +127,7 @@ pub fn apply_theme_by_name(name: &str, window: Option<&mut Window>, cx: &mut App
     cx.refresh_windows();
 }
 
-/// Returns a sorted list of all available theme names.
+/// Returns a list of all available theme names with default themes first, followed by alphabetical order.
 pub fn all_theme_names(cx: &App) -> Vec<SharedString> {
     cx.global::<EmbeddedThemes>().theme_names()
 }
@@ -207,6 +221,9 @@ mod tests {
         let embedded = EmbeddedThemes::load_from_assets(&Assets);
         let names = embedded.theme_names();
         assert_eq!(names.len(), 38);
+        assert_eq!(names[0], SharedString::from("Default Light"));
+        assert_eq!(names[1], SharedString::from("Default Dark"));
+        assert_eq!(names[2], SharedString::from("Adventure"));
         assert!(names.contains(&SharedString::from("Adventure")));
         assert!(names.contains(&SharedString::from("Ayu Light")));
         assert!(names.contains(&SharedString::from("Catppuccin Mocha")));
@@ -217,5 +234,8 @@ mod tests {
         assert!(names.contains(&SharedString::from("Solarized Light")));
         assert!(names.contains(&SharedString::from("Tokyo Night")));
         assert!(names.contains(&SharedString::from("Twilight")));
+
+        // Verify remaining themes are in alphabetical order
+        assert!(names[2..].windows(2).all(|w| w[0] <= w[1]));
     }
 }

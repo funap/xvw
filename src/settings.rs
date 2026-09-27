@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-pub const DEFAULT_LIGHT_THEME: &str = "Ayu Light";
-pub const DEFAULT_DARK_THEME: &str = "Ayu Dark";
+pub const DEFAULT_LIGHT_THEME: &str = "Default Light";
+pub const DEFAULT_DARK_THEME: &str = "Default Dark";
 
 const APPLICATION_CONFIG_DIRECTORY: &str = "xvw";
 const SETTINGS_FILE_NAME: &str = "settings.toml";
@@ -365,6 +365,8 @@ mod tests {
 
         assert_eq!(settings.appearance.font_family, "Fira Code");
         assert_eq!(settings.appearance.font_size, Appearance::default().font_size);
+        assert_eq!(DEFAULT_LIGHT_THEME, "Default Light");
+        assert_eq!(DEFAULT_DARK_THEME, "Default Dark");
         assert_eq!(settings.light_theme, DEFAULT_LIGHT_THEME);
         assert_eq!(settings.dark_theme, DEFAULT_DARK_THEME);
         assert_eq!(settings.theme_mode, ThemeMode::Light);
