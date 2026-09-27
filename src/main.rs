@@ -123,6 +123,8 @@ fn init_app_state(cx: &mut App) {
     cx.set_global(settings.default_group_size);
     cx.set_global(settings.default_endianness);
     cx.set_global(crate::core::layout::BytesPerRow(settings.bytes_per_row));
+    cx.set_global(crate::core::structure::StructureYamlShaThreshold(settings.structure_yaml_sha_threshold));
+    cx.set_global(crate::core::structure::StructureYamlIncludeOffsets(settings.structure_yaml_include_offsets));
     cx.set_global(settings::RecentHistoryState::from_settings(&settings));
 
     gpui_kit::init(cx);

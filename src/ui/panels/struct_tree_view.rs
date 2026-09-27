@@ -1,7 +1,10 @@
 use crate::core::editor::Editor;
 use crate::core::format::{format_size_friendly, format_with_commas};
 use crate::core::radix::DisplayRadix;
-use crate::core::structure::{ParseResult, ParsedField, format_parse_result_as_text, format_parse_result_as_yaml};
+use crate::core::structure::{
+    ParseResult, ParsedField, StructureYamlIncludeOffsets, StructureYamlShaThreshold, YamlExportOptions, format_parse_result_as_text,
+    format_parse_result_as_yaml_with_options,
+};
 use crate::ui::appearance::Appearance;
 use crate::ui::components::data_table::{TableColumn, VirtualTable, VirtualTableState};
 use crate::ui::icon::IconName;
@@ -508,6 +511,8 @@ impl StructTreeView {
 
         let prompt = cx.prompt_for_new_path(&parent_dir, Some(&default_file_name));
 
+        let threshold = cx.global::<StructureYamlShaThreshold>().0;
+        let include_offsets = cx.global::<StructureYamlIncludeOffsets>().0;
         let request_id = self.export_request_id.wrapping_add(1);
         self.export_request_id = request_id;
         self.export_status = StructureExportStatus::Exporting;
@@ -534,7 +539,11 @@ impl StructTreeView {
                     path.set_extension("yaml");
                 }
 
-                let yaml = format_parse_result_as_yaml(&parse_result).map_err(|error| error.to_string())?;
+                let options = YamlExportOptions {
+                    binary_sha256_threshold: threshold,
+                    include_offsets,
+                };
+                let yaml = format_parse_result_as_yaml_with_options(&parse_result, options).map_err(|error| error.to_string())?;
                 std::fs::write(&path, yaml).map_err(|error| format!("{}: {error}", path.display()))?;
                 Ok::<PathBuf, String>(path)
             });

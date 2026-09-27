@@ -5,8 +5,116 @@
 //! can run them on a background executor while parsing or rendering continues.
 
 use super::types::{FieldValue, ParseResult, ParsedField};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
+
+pub const DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD: usize = 32;
+pub const MAX_STRUCTURE_YAML_SHA_THRESHOLD: usize = 10_000_000;
+pub const DEFAULT_STRUCTURE_YAML_INCLUDE_OFFSETS: bool = true;
+
+/// Threshold in bytes at or above which binary data is serialized as a SHA-256 digest in YAML export.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct StructureYamlShaThreshold(pub usize);
+
+impl Default for StructureYamlShaThreshold {
+    fn default() -> Self {
+        Self(DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD)
+    }
+}
+
+impl std::ops::Deref for StructureYamlShaThreshold {
+    type Target = usize;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<usize> for StructureYamlShaThreshold {
+    fn from(value: usize) -> Self {
+        Self(value)
+    }
+}
+
+/// Setting for whether to include field byte offsets in YAML structure export.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct StructureYamlIncludeOffsets(pub bool);
+
+impl Default for StructureYamlIncludeOffsets {
+    fn default() -> Self {
+        Self(DEFAULT_STRUCTURE_YAML_INCLUDE_OFFSETS)
+    }
+}
+
+impl std::ops::Deref for StructureYamlIncludeOffsets {
+    type Target = bool;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<bool> for StructureYamlIncludeOffsets {
+    fn from(value: bool) -> Self {
+        Self(value)
+    }
+}
+
+/// Options controlling structure YAML export formatting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct YamlExportOptions {
+    /// Minimum byte count at which binary data is serialized as a SHA-256 digest
+    /// rather than raw lower-case hex digits.
+    pub binary_sha256_threshold: usize,
+    /// Whether to include field byte offsets in the exported YAML.
+    /// Disabling offsets produces cleaner diffs when variable-sized fields shift
+    /// subsequent byte positions.
+    pub include_offsets: bool,
+}
+
+impl Default for YamlExportOptions {
+    fn default() -> Self {
+        Self {
+            binary_sha256_threshold: DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD,
+            include_offsets: DEFAULT_STRUCTURE_YAML_INCLUDE_OFFSETS,
+        }
+    }
+}
+
+/// Formats binary data for YAML structure export.
+///
+/// If `data.len() >= sha256_threshold`, outputs `"sha256:<hex_digest>"`.
+/// Otherwise, outputs the raw bytes as lower-case hexadecimal digits.
+/// For binary fields exceeding 16 bytes, lines are wrapped every 16 bytes
+/// (32 hex characters) to facilitate line-based text diffing.
+pub fn format_bytes_for_yaml(data: &[u8], sha256_threshold: usize) -> String {
+    if data.len() >= sha256_threshold {
+        let digest = crate::core::checksum::sha256(data);
+        let mut s = String::with_capacity(7 + 64);
+        s.push_str("sha256:");
+        for byte in digest {
+            let _ = write!(s, "{byte:02x}");
+        }
+        s
+    } else if data.len() > 16 {
+        let mut s = String::with_capacity(data.len() * 2 + (data.len() / 16) + 1);
+        for (i, byte) in data.iter().enumerate() {
+            let _ = write!(s, "{byte:02x}");
+            if (i + 1) % 16 == 0 && (i + 1) < data.len() {
+                s.push('\n');
+            }
+        }
+        s
+    } else {
+        let mut s = String::with_capacity(data.len() * 2);
+        for byte in data {
+            let _ = write!(s, "{byte:02x}");
+        }
+        s
+    }
+}
 
 /// Formats a structure-analysis snapshot as readable, Wireshark-like indented text.
 ///
@@ -58,12 +166,18 @@ pub fn format_parse_result_as_text(result: &ParseResult) -> String {
     output
 }
 
-/// Formats a structure-analysis snapshot as a YAML document.
+/// Formats a structure-analysis snapshot as a YAML document using default export options.
+#[allow(dead_code)]
 pub fn format_parse_result_as_yaml(result: &ParseResult) -> Result<String, serde_yaml::Error> {
+    format_parse_result_as_yaml_with_options(result, YamlExportOptions::default())
+}
+
+/// Formats a structure-analysis snapshot as a YAML document using custom export options.
+pub fn format_parse_result_as_yaml_with_options(result: &ParseResult, options: YamlExportOptions) -> Result<String, serde_yaml::Error> {
     let mut field_count = 0;
     let mut fields = Vec::with_capacity(result.fields.len());
     for field in result.fields.iter() {
-        fields.push(convert_field_to_yaml(field, &mut field_count));
+        fields.push(convert_field_to_yaml(field, &mut field_count, options));
     }
 
     let document = YamlStructureExport {
@@ -88,7 +202,7 @@ pub fn format_parse_result_as_yaml(result: &ParseResult) -> Result<String, serde
     serde_yaml::to_string(&document)
 }
 
-fn convert_field_to_yaml(root: &ParsedField, field_count: &mut usize) -> YamlField {
+fn convert_field_to_yaml(root: &ParsedField, field_count: &mut usize, options: YamlExportOptions) -> YamlField {
     struct Frame<'a> {
         field: &'a ParsedField,
         next_child: usize,
@@ -99,7 +213,7 @@ fn convert_field_to_yaml(root: &ParsedField, field_count: &mut usize) -> YamlFie
         let value = if field.is_struct() && !field.children.is_empty() {
             None
         } else {
-            Some(format_field_value(field))
+            Some(format_yaml_field_value(field, options.binary_sha256_threshold))
         };
 
         let field_type = if field.field_type.is_empty() {
@@ -112,10 +226,12 @@ fn convert_field_to_yaml(root: &ParsedField, field_count: &mut usize) -> YamlFie
             field.field_type.clone()
         };
 
+        let offset = if options.include_offsets { Some(field.offset) } else { None };
+
         YamlField {
             id: field.id.clone(),
             field_type,
-            offset: field.offset,
+            offset,
             size: field.size,
             value,
             is_instance: field.is_instance,
@@ -167,6 +283,30 @@ fn convert_field_to_yaml(root: &ParsedField, field_count: &mut usize) -> YamlFie
     }
 }
 
+fn format_yaml_field_value(field: &ParsedField, sha256_threshold: usize) -> String {
+    let mut value = match &field.value {
+        FieldValue::U8(value) => format!("{:X}h ({value})", value),
+        FieldValue::U16(value) => format!("{:X}h ({value})", value),
+        FieldValue::U32(value) => format!("{:X}h ({value})", value),
+        FieldValue::U64(value) => format!("{:X}h ({value})", value),
+        FieldValue::I8(value) => value.to_string(),
+        FieldValue::I16(value) => value.to_string(),
+        FieldValue::I32(value) => value.to_string(),
+        FieldValue::I64(value) => value.to_string(),
+        FieldValue::F32(value) => value.to_string(),
+        FieldValue::F64(value) => value.to_string(),
+        FieldValue::Bool(value) => value.to_string(),
+        FieldValue::String(value) => format!("{value:?}"),
+        FieldValue::Bytes(value) => format_bytes_for_yaml(value, sha256_threshold),
+        FieldValue::Struct => "{...}".to_string(),
+    };
+
+    if let Some(label) = &field.enum_label {
+        let _ = write!(value, " ({label})");
+    }
+    value
+}
+
 fn format_field_value(field: &ParsedField) -> String {
     let mut value = match &field.value {
         FieldValue::U8(value) => format!("{:X}h ({value})", value),
@@ -214,7 +354,8 @@ pub struct YamlField {
     pub id: String,
     #[serde(rename = "type")]
     pub field_type: String,
-    pub offset: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<usize>,
     pub size: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
@@ -304,5 +445,105 @@ mod tests {
         assert_eq!(value["fields"][0]["children"][0]["type"].as_str(), Some("u4"));
         assert_eq!(value["fields"][0]["children"][0]["value"].as_str(), Some("8h (8) (Eight bytes)"));
         assert_eq!(value["fields"][0]["children"][0]["enum_label"].as_str(), Some("Eight bytes"));
+    }
+
+    #[test]
+    fn format_bytes_for_yaml_hex_and_sha256() {
+        let sample = [0x01, 0x02, 0x03, 0x04, 0x0a, 0x0b, 0x0c, 0x0d, 0x0f];
+        // Below threshold: hex string
+        assert_eq!(format_bytes_for_yaml(&sample, 10), "010203040a0b0c0d0f");
+        assert_eq!(format_bytes_for_yaml(&sample, 32), "010203040a0b0c0d0f");
+
+        // At or above threshold: sha256:<digest>
+        let sha = format_bytes_for_yaml(&sample, 9);
+        assert!(sha.starts_with("sha256:"));
+        assert_eq!(sha.len(), 7 + 64);
+
+        let expected_digest = crate::core::checksum::sha256(&sample);
+        let expected_sha = format!("sha256:{}", expected_digest.iter().map(|b| format!("{b:02x}")).collect::<String>());
+        assert_eq!(sha, expected_sha);
+
+        // Empty slice below threshold: empty string
+        assert_eq!(format_bytes_for_yaml(&[], 1), "");
+        // Empty slice at threshold 0: sha256 of empty
+        let empty_sha = format_bytes_for_yaml(&[], 0);
+        assert!(empty_sha.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn yaml_export_formats_binary_fields_based_on_threshold() {
+        let small_bytes = vec![0x01, 0x02, 0x03, 0x04];
+        let large_bytes = vec![0xaa; 40];
+
+        let mut root = field("packet", "packet_t", 0, FieldValue::Struct);
+        root.children.push(field("small", "bytes", 0, FieldValue::Bytes(small_bytes.clone())));
+        root.children.push(field("large", "bytes", 4, FieldValue::Bytes(large_bytes.clone())));
+
+        let result = ParseResult::new("test_bin".to_string(), vec![root], 44, Vec::new());
+
+        // Default threshold is 32: small is hex, large is sha256
+        let yaml_default = format_parse_result_as_yaml(&result).expect("serialize with default options");
+        let val_default: serde_yaml::Value = serde_yaml::from_str(&yaml_default).expect("parse yaml");
+        assert_eq!(val_default["fields"][0]["children"][0]["value"].as_str(), Some("01020304"));
+        let large_val = val_default["fields"][0]["children"][1]["value"].as_str().unwrap();
+        assert!(large_val.starts_with("sha256:"));
+
+        // Custom threshold = 2: small is also sha256
+        let yaml_threshold_2 = format_parse_result_as_yaml_with_options(
+            &result,
+            YamlExportOptions {
+                binary_sha256_threshold: 2,
+                include_offsets: true,
+            },
+        )
+        .expect("serialize with threshold 2");
+        let val_threshold_2: serde_yaml::Value = serde_yaml::from_str(&yaml_threshold_2).expect("parse yaml");
+        let small_val = val_threshold_2["fields"][0]["children"][0]["value"].as_str().unwrap();
+        assert!(small_val.starts_with("sha256:"));
+
+        // Custom threshold = 100: large is also hex, formatted with 16-byte lines
+        let yaml_threshold_100 = format_parse_result_as_yaml_with_options(
+            &result,
+            YamlExportOptions {
+                binary_sha256_threshold: 100,
+                include_offsets: true,
+            },
+        )
+        .expect("serialize with threshold 100");
+        let val_threshold_100: serde_yaml::Value = serde_yaml::from_str(&yaml_threshold_100).expect("parse yaml");
+        assert_eq!(val_threshold_100["fields"][0]["children"][0]["value"].as_str(), Some("01020304"));
+        let expected_large_hex = format!("{}\n{}\n{}", "aa".repeat(16), "aa".repeat(16), "aa".repeat(8));
+        assert_eq!(
+            val_threshold_100["fields"][0]["children"][1]["value"].as_str(),
+            Some(expected_large_hex.as_str())
+        );
+    }
+
+    #[test]
+    fn yaml_export_omits_offsets_when_disabled() {
+        let mut root = field("block", "block_t", 100, FieldValue::Struct);
+        root.children.push(field("data", "bytes", 100, FieldValue::Bytes(vec![0x11, 0x22])));
+
+        let result = ParseResult::new("test_offsets".to_string(), vec![root], 102, Vec::new());
+
+        // When include_offsets is true (default)
+        let yaml_with_offsets = format_parse_result_as_yaml(&result).expect("serialize with offsets");
+        let val_with_offsets: serde_yaml::Value = serde_yaml::from_str(&yaml_with_offsets).expect("parse");
+        assert_eq!(val_with_offsets["fields"][0]["offset"].as_u64(), Some(100));
+        assert_eq!(val_with_offsets["fields"][0]["children"][0]["offset"].as_u64(), Some(100));
+
+        // When include_offsets is false
+        let yaml_without_offsets = format_parse_result_as_yaml_with_options(
+            &result,
+            YamlExportOptions {
+                binary_sha256_threshold: 32,
+                include_offsets: false,
+            },
+        )
+        .expect("serialize without offsets");
+        let val_without_offsets: serde_yaml::Value = serde_yaml::from_str(&yaml_without_offsets).expect("parse");
+        assert!(val_without_offsets["fields"][0].get("offset").is_none());
+        assert!(val_without_offsets["fields"][0]["children"][0].get("offset").is_none());
+        assert_eq!(val_without_offsets["fields"][0]["children"][0]["value"].as_str(), Some("1122"));
     }
 }

@@ -1,6 +1,7 @@
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
 use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
+use crate::core::structure::{StructureYamlIncludeOffsets, StructureYamlShaThreshold};
 use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::ui::icon::IconName;
 use gpui_kit::component::{
@@ -26,6 +27,7 @@ pub struct SettingsView {
     font_family_input: Entity<InputState>,
     font_size_input: Entity<InputState>,
     bytes_per_row_input: Entity<InputState>,
+    structure_yaml_sha_threshold_input: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -41,12 +43,24 @@ impl SettingsView {
                 .min(MIN_BYTES_PER_ROW as f64)
                 .max(MAX_BYTES_PER_ROW as f64)
         });
+        let structure_yaml_sha_threshold_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .step(1.0)
+                .min(0.0)
+                .max(crate::core::structure::MAX_STRUCTURE_YAML_SHA_THRESHOLD as f64)
+        });
 
         // The global must be retrieved after the entities have been created.
-        let (family, size, bytes_per_row) = {
+        let (family, size, bytes_per_row, yaml_sha_threshold) = {
             let appearance = cx.global::<Appearance>();
             let bytes_per_row = cx.global::<BytesPerRow>().0;
-            (appearance.font_family.clone(), appearance.font_size.to_string(), bytes_per_row.to_string())
+            let yaml_sha_threshold = cx.global::<StructureYamlShaThreshold>().0;
+            (
+                appearance.font_family.clone(),
+                appearance.font_size.to_string(),
+                bytes_per_row.to_string(),
+                yaml_sha_threshold.to_string(),
+            )
         };
 
         // Set initial values
@@ -60,6 +74,10 @@ impl SettingsView {
 
         bytes_per_row_input.update(cx, |input: &mut InputState, cx| {
             input.set_value(bytes_per_row, window, cx);
+        });
+
+        structure_yaml_sha_threshold_input.update(cx, |input: &mut InputState, cx| {
+            input.set_value(yaml_sha_threshold, window, cx);
         });
 
         let mut subscriptions = Vec::new();
@@ -89,6 +107,14 @@ impl SettingsView {
         }));
 
         subscriptions.push(cx.observe_global::<ByteOrder>(|_, cx| {
+            cx.notify();
+        }));
+
+        subscriptions.push(cx.observe_global::<StructureYamlShaThreshold>(|_, cx| {
+            cx.dispatch_action(&UpdateSettingInput);
+        }));
+
+        subscriptions.push(cx.observe_global::<StructureYamlIncludeOffsets>(|_, cx| {
             cx.notify();
         }));
 
@@ -132,11 +158,29 @@ impl SettingsView {
             }),
         );
 
+        subscriptions.push(cx.subscribe(
+            &structure_yaml_sha_threshold_input,
+            |_, input: Entity<InputState>, event: &input::InputEvent, cx| {
+                if let input::InputEvent::Change = event {
+                    let value = input.read(cx).value().to_string();
+                    if let Ok(threshold) = value.parse::<usize>()
+                        && threshold <= crate::core::structure::MAX_STRUCTURE_YAML_SHA_THRESHOLD
+                    {
+                        cx.update_global::<StructureYamlShaThreshold, _>(|current, _| {
+                            current.0 = threshold;
+                        });
+                        crate::settings::save_current(cx);
+                    }
+                }
+            },
+        ));
+
         Self {
             focus_handle,
             font_family_input,
             font_size_input,
             bytes_per_row_input,
+            structure_yaml_sha_threshold_input,
             _subscriptions: subscriptions,
         }
     }
@@ -146,6 +190,7 @@ impl SettingsView {
         let family = appearance.font_family.clone();
         let size_str = appearance.font_size.to_string();
         let bytes_per_row_str = cx.global::<BytesPerRow>().0.to_string();
+        let yaml_sha_threshold_str = cx.global::<StructureYamlShaThreshold>().0.to_string();
 
         self.font_family_input.update(cx, |input, cx| {
             if input.value() != family.as_str() {
@@ -160,6 +205,11 @@ impl SettingsView {
         self.bytes_per_row_input.update(cx, |input, cx| {
             if input.value() != bytes_per_row_str.as_str() {
                 input.set_value(bytes_per_row_str, window, cx);
+            }
+        });
+        self.structure_yaml_sha_threshold_input.update(cx, |input, cx| {
+            if input.value() != yaml_sha_threshold_str.as_str() {
+                input.set_value(yaml_sha_threshold_str, window, cx);
             }
         });
     }
@@ -518,6 +568,108 @@ impl Render for SettingsView {
                                             });
                                             crate::settings::save_current(cx);
                                             window.push_notification(Notification::info("Reset Default Byte Order to default"), cx);
+                                        })),
+                                )
+                            })
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_semibold()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Structure Analysis"),
+                    )
+                    .child({
+                        let default_threshold = crate::settings::DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD;
+                        let is_modified = cx.global::<StructureYamlShaThreshold>().0 != default_threshold;
+
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_4()
+                            .child(div().w_32().child("YAML SHA Threshold"))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(div().w_48().child(NumberInput::new(&self.structure_yaml_sha_threshold_input)))
+                                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child("bytes")),
+                            )
+                            .when(is_modified, |row| {
+                                row.child(
+                                    Button::new("reset-yaml-sha-threshold")
+                                        .icon(IconName::Undo2)
+                                        .ghost()
+                                        .with_size(Size::Small)
+                                        .tooltip("Reset to default (32 bytes)")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            cx.update_global::<StructureYamlShaThreshold, _>(|current, _| {
+                                                current.0 = crate::settings::DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD;
+                                            });
+                                            this.structure_yaml_sha_threshold_input.update(cx, |input, cx| {
+                                                input.set_value(crate::settings::DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD.to_string(), window, cx);
+                                            });
+                                            crate::settings::save_current(cx);
+                                            window.push_notification(Notification::info("Reset YAML SHA Threshold to default"), cx);
+                                        })),
+                                )
+                            })
+                    })
+                    .child({
+                        let include_offsets = cx.global::<StructureYamlIncludeOffsets>().0;
+                        let default_include_offsets = crate::settings::DEFAULT_STRUCTURE_YAML_INCLUDE_OFFSETS;
+                        let is_modified = include_offsets != default_include_offsets;
+
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_4()
+                            .child(div().w_32().child("YAML Include Offsets"))
+                            .child(
+                                div().w_48().child(
+                                    Button::new("yaml-include-offsets")
+                                        .label(if include_offsets { "Enabled" } else { "Disabled" })
+                                        .outline()
+                                        .dropdown_caret(true)
+                                        .with_size(Size::Small)
+                                        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
+                                            menu.item(PopupMenuItem::new("Enabled").checked(include_offsets).on_click(move |_, _, cx| {
+                                                cx.update_global::<StructureYamlIncludeOffsets, _>(|current, _| {
+                                                    current.0 = true;
+                                                });
+                                                crate::settings::save_current(cx);
+                                            }))
+                                            .item(
+                                                PopupMenuItem::new("Disabled").checked(!include_offsets).on_click(move |_, _, cx| {
+                                                    cx.update_global::<StructureYamlIncludeOffsets, _>(|current, _| {
+                                                        current.0 = false;
+                                                    });
+                                                    crate::settings::save_current(cx);
+                                                }),
+                                            )
+                                        }),
+                                ),
+                            )
+                            .when(is_modified, |row| {
+                                row.child(
+                                    Button::new("reset-yaml-include-offsets")
+                                        .icon(IconName::Undo2)
+                                        .ghost()
+                                        .with_size(Size::Small)
+                                        .tooltip("Reset to default (Enabled)")
+                                        .on_click(cx.listener(|_, _, window, cx| {
+                                            cx.update_global::<StructureYamlIncludeOffsets, _>(|current, _| {
+                                                current.0 = crate::settings::DEFAULT_STRUCTURE_YAML_INCLUDE_OFFSETS;
+                                            });
+                                            crate::settings::save_current(cx);
+                                            window.push_notification(Notification::info("Reset YAML Include Offsets to default"), cx);
                                         })),
                                 )
                             })

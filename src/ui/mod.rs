@@ -15,3 +15,5 @@ impl gpui_kit::Global for crate::core::encoding::Encoding {}
 impl gpui_kit::Global for crate::core::radix::DisplayRadix {}
 impl gpui_kit::Global for crate::core::radix::ByteGroupSize {}
 impl gpui_kit::Global for crate::core::radix::ByteOrder {}
+impl gpui_kit::Global for crate::core::structure::StructureYamlShaThreshold {}
+impl gpui_kit::Global for crate::core::structure::StructureYamlIncludeOffsets {}

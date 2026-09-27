@@ -1,6 +1,7 @@
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
 use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
+pub use crate::core::structure::{DEFAULT_STRUCTURE_YAML_INCLUDE_OFFSETS, DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD, MAX_STRUCTURE_YAML_SHA_THRESHOLD};
 use crate::core::structure::{DefinitionHistory, FileHistory, RecentFileEntry};
 use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use gpui_kit::App;
@@ -37,6 +38,14 @@ pub struct Settings {
     pub default_endianness: ByteOrder,
     #[serde(default = "default_bytes_per_row")]
     pub bytes_per_row: usize,
+    #[serde(
+        default = "default_structure_yaml_sha_threshold",
+        alias = "structure_yaml_sha256_threshold",
+        alias = "structure_yaml_binary_sha_threshold"
+    )]
+    pub structure_yaml_sha_threshold: usize,
+    #[serde(default = "default_structure_yaml_include_offsets", alias = "structure_yaml_include_offset")]
+    pub structure_yaml_include_offsets: bool,
     pub recent_definition_paths: Vec<PathBuf>,
     pub recent_file_paths: Vec<PathBuf>,
     pub recent_files: Vec<RecentFileEntry>,
@@ -44,6 +53,14 @@ pub struct Settings {
 
 fn default_bytes_per_row() -> usize {
     DEFAULT_BYTES_PER_ROW
+}
+
+fn default_structure_yaml_sha_threshold() -> usize {
+    DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD
+}
+
+fn default_structure_yaml_include_offsets() -> bool {
+    DEFAULT_STRUCTURE_YAML_INCLUDE_OFFSETS
 }
 
 /// Application-wide recent-path histories shared by all workspace windows.
@@ -82,6 +99,8 @@ impl Default for Settings {
             default_group_size: ByteGroupSize::default(),
             default_endianness: ByteOrder::default(),
             bytes_per_row: DEFAULT_BYTES_PER_ROW,
+            structure_yaml_sha_threshold: DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD,
+            structure_yaml_include_offsets: true,
             recent_definition_paths: Vec::new(),
             recent_file_paths: Vec::new(),
             recent_files: Vec::new(),
@@ -130,6 +149,8 @@ impl Settings {
             default_group_size: *cx.global::<ByteGroupSize>(),
             default_endianness: *cx.global::<ByteOrder>(),
             bytes_per_row: cx.global::<BytesPerRow>().0,
+            structure_yaml_sha_threshold: cx.global::<crate::core::structure::StructureYamlShaThreshold>().0,
+            structure_yaml_include_offsets: cx.global::<crate::core::structure::StructureYamlIncludeOffsets>().0,
             recent_definition_paths: recent_history.definitions.paths().to_vec(),
             recent_file_paths: recent_history.files.paths(),
             recent_files: recent_history.files.entries().to_vec(),
@@ -190,6 +211,9 @@ impl Settings {
         }
         if !(MIN_BYTES_PER_ROW..=MAX_BYTES_PER_ROW).contains(&self.bytes_per_row) {
             self.bytes_per_row = DEFAULT_BYTES_PER_ROW;
+        }
+        if self.structure_yaml_sha_threshold > MAX_STRUCTURE_YAML_SHA_THRESHOLD {
+            self.structure_yaml_sha_threshold = DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD;
         }
 
         self.recent_definition_paths = DefinitionHistory::from_paths(self.recent_definition_paths).paths().to_vec();
@@ -314,6 +338,8 @@ mod tests {
             default_group_size: ByteGroupSize::Four,
             default_endianness: ByteOrder::BigEndian,
             bytes_per_row: 24,
+            structure_yaml_sha_threshold: 64,
+            structure_yaml_include_offsets: false,
             recent_definition_paths: vec![PathBuf::from("definition.ksy")],
             recent_file_paths: vec![PathBuf::from("binary.bin")],
             recent_files: vec![RecentFileEntry::new(PathBuf::from("binary.bin"), None)],
@@ -375,6 +401,8 @@ mod tests {
         assert_eq!(settings.default_group_size, ByteGroupSize::default());
         assert_eq!(settings.default_endianness, ByteOrder::default());
         assert_eq!(settings.bytes_per_row, DEFAULT_BYTES_PER_ROW);
+        assert_eq!(settings.structure_yaml_sha_threshold, DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD);
+        assert!(settings.structure_yaml_include_offsets);
     }
 
     #[test]
@@ -412,5 +440,32 @@ mod tests {
 
         let settings = Settings::load_from(&file.path).expect("load settings");
         assert_eq!(settings.default_endianness, ByteOrder::BigEndian);
+    }
+
+    #[test]
+    fn structure_yaml_sha_threshold_alias_supported() {
+        let file = TestSettingsFile::new("yaml-sha-alias");
+        fs::write(&file.path, "structure_yaml_sha256_threshold = 48\n").expect("write settings");
+
+        let settings = Settings::load_from(&file.path).expect("load settings");
+        assert_eq!(settings.structure_yaml_sha_threshold, 48);
+    }
+
+    #[test]
+    fn invalid_structure_yaml_sha_threshold_is_replaced_with_defaults() {
+        let file = TestSettingsFile::new("sanitize-yaml-sha-high");
+        fs::write(&file.path, "structure_yaml_sha_threshold = 20000000\n").expect("write settings");
+
+        let settings = Settings::load_from(&file.path).expect("load settings");
+        assert_eq!(settings.structure_yaml_sha_threshold, DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD);
+    }
+
+    #[test]
+    fn structure_yaml_include_offsets_setting_supported() {
+        let file = TestSettingsFile::new("yaml-include-offsets");
+        fs::write(&file.path, "structure_yaml_include_offsets = false\n").expect("write settings");
+
+        let settings = Settings::load_from(&file.path).expect("load settings");
+        assert!(!settings.structure_yaml_include_offsets);
     }
 }
