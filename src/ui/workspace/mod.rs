@@ -13,7 +13,7 @@ use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
-use gpui_kit::component::{ActiveTheme as _, Root, WindowExt, v_flex};
+use gpui_kit::component::{Root, WindowExt};
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -30,26 +30,6 @@ pub use activity_bar::{Activity, ActivityBar, ActivityBarEvent};
 pub use status_bar::{StatusBar, StatusBarEvent};
 pub use title_bar::{AppTitleBar, AppTitleBarEvent};
 
-pub(crate) struct NotificationItemState {
-    pub(crate) is_pinned: bool,
-    pub(crate) is_hovered: bool,
-    pub(crate) timer: Option<Task<()>>,
-}
-
-impl NotificationItemState {
-    pub(crate) fn new() -> Self {
-        Self {
-            is_pinned: false,
-            is_hovered: false,
-            timer: None,
-        }
-    }
-
-    pub(crate) fn should_run_timer(&self) -> bool {
-        !self.is_pinned && !self.is_hovered
-    }
-}
-
 pub struct Workspace {
     pub pane_tree: Entity<PaneTree>,
     pub title_bar: Entity<AppTitleBar>,
@@ -65,7 +45,6 @@ pub struct Workspace {
     pub(crate) force_close: bool,
     focus_handle: FocusHandle,
     last_active_editor_id: Cell<Option<EntityId>>,
-    pub(crate) notification_states: std::collections::HashMap<EntityId, NotificationItemState>,
 }
 
 pub fn init(cx: &mut App) {
@@ -211,12 +190,11 @@ fn defer_in_active_workspace(cx: &mut App, handler: impl FnOnce(&mut Workspace, 
     };
 
     cx.defer(move |cx| {
-        let Some(window) = window.downcast::<Root>() else {
-            return;
-        };
-
-        let _ = window.update(cx, |root, window, cx| {
-            let Ok(workspace) = root.view().clone().downcast::<Workspace>() else {
+        let _ = cx.update_window(window, |root_view, window, cx| {
+            let Ok(root) = root_view.downcast::<Root>() else {
+                return;
+            };
+            let Ok(workspace) = root.read(cx).view().clone().downcast::<Workspace>() else {
                 return;
             };
 
@@ -433,7 +411,6 @@ impl Workspace {
             force_close: false,
             focus_handle: cx.focus_handle(),
             last_active_editor_id: Cell::new(None),
-            notification_states: std::collections::HashMap::new(),
         };
 
         workspace.left_panel.update(cx, |panel, cx| {
@@ -518,14 +495,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn observe_notification(&mut self, notification: &Entity<gpui_kit::component::notification::NotificationList>, cx: &mut Context<Self>) {
-        cx.observe(notification, |_, _, cx| {
-            cx.notify();
-        })
-        .detach();
-    }
-
-    fn new_local(cx: &mut App) -> Task<anyhow::Result<WindowHandle<Root>>> {
+    fn new_local(cx: &mut App) -> Task<anyhow::Result<(WindowHandle<Root>, Entity<Workspace>)>> {
         let mut window_size = size(px(1600.0), px(1200.0));
         if let Some(display) = cx.primary_display() {
             let display_size = display.bounds().size;
@@ -552,18 +522,14 @@ impl Workspace {
                 ..Default::default()
             };
 
-            let window = cx.open_window(options, |window, cx| {
-                let view = cx.new(|cx| Self::new(window, cx));
-                let root = cx.new(|cx| Root::new(view.clone(), window, cx));
-                let notification = root.read(cx).notification.clone();
-                view.update(cx, |workspace, cx| {
-                    workspace.observe_notification(&notification, cx);
-                });
-                root
-            })?;
+            let (window_handle, workspace) = cx.update(|cx| gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| Self::new(window, cx))))?;
+
+            let window: WindowHandle<Root> = window_handle
+                .downcast::<Root>()
+                .ok_or_else(|| anyhow::anyhow!("failed to downcast Root window handle"))?;
 
             window
-                .update(cx, |root, window, cx| {
+                .update(cx, |_root, window, cx| {
                     window.activate_window();
                     window.set_window_title("XVW");
                     cx.on_release(|_, cx| {
@@ -571,33 +537,32 @@ impl Workspace {
                     })
                     .detach();
 
-                    if let Ok(workspace) = root.view().clone().downcast::<Workspace>() {
-                        window.on_window_should_close(cx, move |window, cx| {
-                            let (force_close, all_tabs) = {
-                                let ws = workspace.read(cx);
-                                let all_tabs: Vec<crate::ui::pane::TabItem> =
-                                    ws.pane_tree.read(cx).all_groups().iter().flat_map(|g| g.read(cx).tabs.clone()).collect();
-                                (ws.force_close, all_tabs)
-                            };
+                    let ws = workspace.clone();
+                    window.on_window_should_close(cx, move |window, cx| {
+                        let (force_close, all_tabs) = {
+                            let ws_ref = ws.read(cx);
+                            let all_tabs: Vec<crate::ui::pane::TabItem> =
+                                ws_ref.pane_tree.read(cx).all_groups().iter().flat_map(|g| g.read(cx).tabs.clone()).collect();
+                            (ws_ref.force_close, all_tabs)
+                        };
 
-                            let dirty_docs = crate::ui::workspace::dialog_flow::collect_dirty_documents(&all_tabs, cx);
-                            if force_close || dirty_docs.is_empty() {
-                                true
-                            } else {
-                                workspace.update(cx, |workspace, cx| {
-                                    workspace.confirm_close_tabs(&all_tabs, window, cx, |workspace, _window, cx| {
-                                        workspace.force_close = true;
-                                        cx.quit();
-                                    });
+                        let dirty_docs = crate::ui::workspace::dialog_flow::collect_dirty_documents(&all_tabs, cx);
+                        if force_close || dirty_docs.is_empty() {
+                            true
+                        } else {
+                            ws.update(cx, |workspace, cx| {
+                                workspace.confirm_close_tabs(&all_tabs, window, cx, |workspace, _window, cx| {
+                                    workspace.force_close = true;
+                                    cx.quit();
                                 });
-                                false
-                            }
-                        });
-                    }
+                            });
+                            false
+                        }
+                    });
                 })
-                .expect("failed to update window");
+                .map_err(|e| anyhow::anyhow!("failed to update window: {e}"))?;
 
-            Ok(window)
+            Ok((window, workspace))
         })
     }
 
@@ -763,102 +728,103 @@ impl Workspace {
     /// This is the main public API for creating workspace windows.
     pub fn open_window(cx: &mut App, args: crate::CliArgs) -> Task<()> {
         let task = Self::new_local(cx);
-        cx.spawn(async move |cx| {
-            if let Ok(window) = task.await {
-                let _ = window.update(cx, |root, window, cx| {
-                    if let Ok(workspace) = root.view().clone().downcast::<Workspace>() {
-                        workspace.update(cx, |workspace, cx| {
-                            if let Some(folder_path) = args.folder_to_open.clone() {
-                                workspace.left_panel.update(cx, |p, cx| {
-                                    p.file_tree.update(cx, |ft, cx| {
-                                        ft.set_root_path(folder_path, cx);
+        cx.spawn(async move |cx| match task.await {
+            Ok((window, workspace)) => {
+                let _ = window.update(cx, |_root, window, cx| {
+                    workspace.update(cx, |workspace, cx| {
+                        if let Some(folder_path) = args.folder_to_open.clone() {
+                            workspace.left_panel.update(cx, |p, cx| {
+                                p.file_tree.update(cx, |ft, cx| {
+                                    ft.set_root_path(folder_path, cx);
+                                });
+                            });
+                        }
+                        if let Some((left_path, right_path)) = args.diff.clone() {
+                            workspace.on_action_open_diff(
+                                &crate::actions::OpenDiff {
+                                    left_path: left_path.to_string_lossy().to_string(),
+                                    right_path: right_path.to_string_lossy().to_string(),
+                                },
+                                window,
+                                cx,
+                            );
+                        }
+                    });
+
+                    let view = workspace.clone();
+                    let files = args.files_to_open.clone();
+                    let ksy_to_load = args.ksy_to_load.clone();
+                    let panel_name = args.panel.clone();
+
+                    cx.spawn_in(window, async move |_, window| {
+                        let document_service_opt = window.update(|_, cx| AppState::global(cx).document_service.clone()).ok();
+                        if let Some(document_service) = document_service_opt {
+                            for file_path in files {
+                                let recent_path = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
+                                match document_service.open_file(file_path.clone()).await {
+                                    Ok(document) => {
+                                        let _ = window.update(|window, cx| {
+                                            view.update(cx, |this, cx| {
+                                                this.record_recent_file(recent_path.clone(), Some(crate::core::format::FileFormat::Binary), cx);
+                                                this.open_editor_view(document, window, cx);
+                                            });
+                                        });
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to open file {:?}: {:?}", file_path, e);
+                                        let _ = window.update(|window, cx| {
+                                            window.push_notification(crate::ui::notification::error(format!("Failed to open file: {e}")), cx);
+                                        });
+                                    }
+                                }
+                            }
+
+                            if let Some(ksy_path) = ksy_to_load {
+                                let _ = window.update(|window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.load_structure_definition_from_path(ksy_path, window, cx);
                                     });
                                 });
                             }
-                            if let Some((left_path, right_path)) = args.diff.clone() {
-                                workspace.on_action_open_diff(
-                                    &crate::actions::OpenDiff {
-                                        left_path: left_path.to_string_lossy().to_string(),
-                                        right_path: right_path.to_string_lossy().to_string(),
-                                    },
-                                    window,
-                                    cx,
-                                );
-                            }
-                        });
 
-                        let view = workspace.clone();
-                        let files = args.files_to_open.clone();
-                        let ksy_to_load = args.ksy_to_load.clone();
-                        let panel_name = args.panel.clone();
-
-                        cx.spawn_in(window, async move |_, window| {
-                            let document_service_opt = window.update(|_, cx| AppState::global(cx).document_service.clone()).ok();
-                            if let Some(document_service) = document_service_opt {
-                                for file_path in files {
-                                    let recent_path = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
-                                    match document_service.open_file(file_path.clone()).await {
-                                        Ok(document) => {
-                                            let _ = window.update(|window, cx| {
-                                                view.update(cx, |this, cx| {
-                                                    this.record_recent_file(recent_path.clone(), Some(crate::core::format::FileFormat::Binary), cx);
-                                                    this.open_editor_view(document, window, cx);
-                                                });
-                                            });
-                                        }
-                                        Err(e) => {
-                                            eprintln!("Failed to open file {:?}: {:?}", file_path, e);
-                                            let _ = window.update(|window, cx| {
-                                                window.push_notification(crate::ui::notification::error(format!("Failed to open file: {e}")), cx);
-                                            });
-                                        }
-                                    }
-                                }
-
-                                if let Some(ksy_path) = ksy_to_load {
+                            if let Some(panel_name) = panel_name {
+                                let tab = match panel_name.to_lowercase().as_str() {
+                                    "files" => Some(LeftPanelTab::Files),
+                                    "search" => Some(LeftPanelTab::Search),
+                                    "strings" => Some(LeftPanelTab::Strings),
+                                    "structure" => Some(LeftPanelTab::Structure),
+                                    "inspector" => Some(LeftPanelTab::Inspector),
+                                    "map" | "visual_map" => Some(LeftPanelTab::Map),
+                                    "checksum" => Some(LeftPanelTab::Checksum),
+                                    "bookmarks" => Some(LeftPanelTab::Bookmarks),
+                                    _ => None,
+                                };
+                                if let Some(tab) = tab {
                                     let _ = window.update(|window, cx| {
                                         view.update(cx, |this, cx| {
-                                            this.load_structure_definition_from_path(ksy_path, window, cx);
-                                        });
-                                    });
-                                }
-
-                                if let Some(panel_name) = panel_name {
-                                    let tab = match panel_name.to_lowercase().as_str() {
-                                        "files" => Some(LeftPanelTab::Files),
-                                        "search" => Some(LeftPanelTab::Search),
-                                        "strings" => Some(LeftPanelTab::Strings),
-                                        "structure" => Some(LeftPanelTab::Structure),
-                                        "inspector" => Some(LeftPanelTab::Inspector),
-                                        "map" | "visual_map" => Some(LeftPanelTab::Map),
-                                        "checksum" => Some(LeftPanelTab::Checksum),
-                                        "bookmarks" => Some(LeftPanelTab::Bookmarks),
-                                        _ => None,
-                                    };
-                                    if let Some(tab) = tab {
-                                        let _ = window.update(|window, cx| {
-                                            view.update(cx, |this, cx| {
-                                                this.left_panel.update(cx, |p, cx| {
-                                                    p.set_tab(tab, cx);
-                                                });
-                                                this.set_left_panel_visible(true, window, cx);
+                                            this.left_panel.update(cx, |p, cx| {
+                                                p.set_tab(tab, cx);
                                             });
-                                        });
-                                    }
-                                }
-
-                                if args.sidebar == Some(false) || (args.diff.is_some() && args.sidebar != Some(true)) {
-                                    let _ = window.update(|window, cx| {
-                                        view.update(cx, |this, cx| {
-                                            this.set_left_panel_visible(false, window, cx);
+                                            this.set_left_panel_visible(true, window, cx);
                                         });
                                     });
                                 }
                             }
-                        })
-                        .detach();
-                    }
+
+                            if args.sidebar == Some(false) || (args.diff.is_some() && args.sidebar != Some(true)) {
+                                let _ = window.update(|window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.set_left_panel_visible(false, window, cx);
+                                    });
+                                });
+                            }
+                        }
+                    })
+                    .detach();
                 });
+            }
+            Err(e) => {
+                eprintln!("Failed to open workspace window: {e:?}");
             }
         })
     }
@@ -898,164 +864,10 @@ impl Workspace {
             }
         });
     }
-
-    fn start_notification_dismiss_timer(
-        &mut self,
-        id: EntityId,
-        item: Entity<gpui_kit::component::notification::Notification>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(state) = self.notification_states.get_mut(&id) else {
-            return;
-        };
-
-        if !state.should_run_timer() {
-            return;
-        }
-
-        let view = cx.entity();
-        let timer = cx.spawn_in(window, async move |_, window| {
-            window.background_executor().timer(crate::ui::notification::NOTIFICATION_TIMEOUT).await;
-            window
-                .update(|window, cx| {
-                    view.update(cx, |workspace, cx| {
-                        if let Some(state) = workspace.notification_states.get(&id)
-                            && state.should_run_timer()
-                        {
-                            item.update(cx, |note, cx| {
-                                note.dismiss(window, cx);
-                            });
-                            workspace.notification_states.remove(&id);
-                            cx.notify();
-                        }
-                    });
-                })
-                .ok();
-        });
-        state.timer = Some(timer);
-    }
-
-    fn render_bottom_right_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let root = window.root::<Root>()??;
-        let items = root.read(cx).notification.read(cx).notifications();
-        if items.is_empty() {
-            self.notification_states.clear();
-            return None;
-        }
-
-        let current_ids: std::collections::HashSet<_> = items.iter().map(|item| item.entity_id()).collect();
-        self.notification_states.retain(|id, _| current_ids.contains(id));
-
-        for item in &items {
-            let id = item.entity_id();
-            if let std::collections::hash_map::Entry::Vacant(entry) = self.notification_states.entry(id) {
-                entry.insert(NotificationItemState::new());
-                self.start_notification_dismiss_timer(id, item.clone(), window, cx);
-            }
-        }
-
-        let rendered_items = items.into_iter().rev().take(10).rev().map(|item| {
-            let id = item.entity_id();
-            let item_for_hover = item.clone();
-            let is_pinned = self.notification_states.get(&id).map(|s| s.is_pinned).unwrap_or(false);
-            let is_hovered = self.notification_states.get(&id).map(|s| s.is_hovered).unwrap_or(false);
-            let theme = cx.theme().clone();
-            let view = cx.entity();
-
-            let border_color = if is_pinned {
-                theme.primary.opacity(0.7)
-            } else if is_hovered {
-                theme.ring.opacity(0.35)
-            } else {
-                gpui::transparent_black()
-            };
-
-            div()
-                .id(ElementId::NamedInteger("notification-item".into(), id.as_u64()))
-                .w(px(382.0))
-                .relative()
-                .cursor_pointer()
-                .rounded(theme.radius_lg)
-                .border_1()
-                .border_color(border_color)
-                .when(is_hovered || is_pinned, |this| this.shadow_md())
-                .child(
-                    canvas(
-                        |_, _, _| {},
-                        move |bounds, _, window, cx| {
-                            let view = view.clone();
-                            let item_for_hover = item_for_hover.clone();
-
-                            let is_initially_hovered = bounds.contains(&window.mouse_position());
-                            if is_initially_hovered {
-                                let view = view.clone();
-                                cx.defer(move |cx| {
-                                    view.update(cx, |workspace, cx| {
-                                        if let Some(state) = workspace.notification_states.get_mut(&id)
-                                            && !state.is_hovered
-                                        {
-                                            state.is_hovered = true;
-                                            state.timer = None;
-                                            cx.notify();
-                                        }
-                                    });
-                                });
-                            }
-
-                            window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
-                                if !phase.capture() {
-                                    return;
-                                }
-                                let hovered = bounds.contains(&event.position);
-                                view.update(cx, |workspace, cx| {
-                                    if let Some(state) = workspace.notification_states.get_mut(&id)
-                                        && state.is_hovered != hovered
-                                    {
-                                        state.is_hovered = hovered;
-                                        if hovered {
-                                            state.timer = None;
-                                        } else if !state.is_pinned {
-                                            workspace.start_notification_dismiss_timer(id, item_for_hover.clone(), window, cx);
-                                        }
-                                        cx.notify();
-                                    }
-                                });
-                            });
-                        },
-                    )
-                    .absolute()
-                    .size_full(),
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |workspace, _, _, cx| {
-                        if let Some(state) = workspace.notification_states.get_mut(&id) {
-                            state.is_pinned = true;
-                            state.timer = None;
-                            cx.notify();
-                        }
-                        cx.stop_propagation();
-                    }),
-                )
-                .child(item)
-        });
-
-        Some(
-            div()
-                .absolute()
-                .bottom(px(32.0))
-                .right(px(16.0))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
-                .child(v_flex().id("notification-list-bottom-right").gap_3().children(rendered_items)),
-        )
-    }
 }
 
 impl Render for Workspace {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("workspace")
             .on_action(cx.listener(Self::on_action_new_file))
@@ -1244,9 +1056,6 @@ impl Render for Workspace {
                         .child(modal),
                 )
             })
-            .children(Root::render_dialog_layer(window, cx))
-            .children(Root::render_sheet_layer(window, cx))
-            .children(self.render_bottom_right_notifications(window, cx))
     }
 }
 

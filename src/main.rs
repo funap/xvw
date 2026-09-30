@@ -27,6 +27,12 @@ pub struct CliArgs {
 }
 
 fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("CRITICAL PANIC: {info}\n{:?}", std::backtrace::Backtrace::force_capture());
+        eprintln!("{msg}");
+        let _ = std::fs::write("xvw_panic.log", msg);
+    }));
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -39,8 +45,8 @@ fn main() {
 
     app.run(move |cx| {
         init_app_state(cx);
-        setup_menus(cx);
         setup_keybindings(cx);
+        setup_menus(cx);
 
         Workspace::open_window(cx, cli_args).detach();
     });

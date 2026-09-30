@@ -8,9 +8,6 @@ use std::time::Duration;
 
 use crate::ui::icon::IconName;
 
-/// Default auto-dismiss timeout for notifications (3 seconds).
-pub const NOTIFICATION_TIMEOUT: Duration = Duration::from_secs(3);
-
 /// Trait to extend `Notification` with copy actions.
 pub trait NotificationExt {
     /// Adds a copy action button to the notification that copies `copy_text` to the clipboard.
@@ -63,40 +60,40 @@ impl NotificationExt for Notification {
                 .detach();
             })
         })
+        // Note: gpui-component's `Notification::action` explicitly resets `self.autohide = false`
+        // so that interactive notifications remain visible by default. In xvw, copy actions should
+        // still automatically dismiss after the standard timeout, so we re-enable autohide here.
+        .autohide(true)
     }
 }
 
-/// Helper to construct a notification with autohide disabled and a copy action button.
-fn persistent_notification_with_copy(create: impl FnOnce(SharedString) -> Notification, message: impl Into<SharedString>) -> Notification {
+/// Helper to construct a notification with autohide enabled and a copy action button.
+fn notification_with_copy(create: impl FnOnce(SharedString) -> Notification, message: impl Into<SharedString>) -> Notification {
     let message: SharedString = message.into();
-    create(message.clone()).autohide(false).with_copy_action(message)
+    create(message.clone()).with_copy_action(message).autohide(true)
 }
 
-/// Creates an error notification with a copy button that copies the message to the clipboard,
-/// and disables autohide so it remains visible until closed.
+/// Creates an error notification with a copy button that copies the message to the clipboard.
 pub fn error(message: impl Into<SharedString>) -> Notification {
-    persistent_notification_with_copy(Notification::error, message)
+    notification_with_copy(Notification::error, message)
 }
 
-/// Creates an informational notification with a copy button that copies the message to the clipboard,
-/// and disables autohide so it remains visible until closed.
+/// Creates an informational notification with a copy button that copies the message to the clipboard.
 #[allow(dead_code)]
 pub fn info(message: impl Into<SharedString>) -> Notification {
-    persistent_notification_with_copy(Notification::info, message)
+    notification_with_copy(Notification::info, message)
 }
 
-/// Creates a success notification with a copy button that copies the message to the clipboard,
-/// and disables autohide so it remains visible until closed.
+/// Creates a success notification with a copy button that copies the message to the clipboard.
 #[allow(dead_code)]
 pub fn success(message: impl Into<SharedString>) -> Notification {
-    persistent_notification_with_copy(Notification::success, message)
+    notification_with_copy(Notification::success, message)
 }
 
-/// Creates a warning notification with a copy button that copies the message to the clipboard,
-/// and disables autohide so it remains visible until closed.
+/// Creates a warning notification with a copy button that copies the message to the clipboard.
 #[allow(dead_code)]
 pub fn warning(message: impl Into<SharedString>) -> Notification {
-    persistent_notification_with_copy(Notification::warning, message)
+    notification_with_copy(Notification::warning, message)
 }
 
 #[cfg(test)]
@@ -105,7 +102,6 @@ mod tests {
 
     #[test]
     fn test_error_notification_creation() {
-        assert_eq!(NOTIFICATION_TIMEOUT, Duration::from_secs(3));
         let _note = error("An unexpected error occurred");
     }
 

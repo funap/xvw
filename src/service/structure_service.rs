@@ -2,8 +2,8 @@ use crate::core::buffer::Buffer;
 use crate::core::editor::Editor;
 use crate::core::structure::types::ParseProgress;
 use crate::core::structure::{KaitaiInterpreter, KaitaiStream, KsyDefinition, ParseResult, ParsedField};
-use gpui_kit::component::Root;
-use gpui_kit::{App, BackgroundExecutor, Entity};
+use gpui_kit::component::WindowExt;
+use gpui_kit::{App, AppContext, BackgroundExecutor, Entity};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -291,13 +291,10 @@ impl StructureService {
                             && let Some(err) = res.errors.first()
                         {
                             let msg = format!("Structure parse error at offset 0x{:08X}: {}", err.offset, err.message);
-                            if let Some(window) = cx.active_window()
-                                && let Some(window) = window.downcast::<Root>()
-                            {
-                                let _ = window.update(cx, |root, window, cx| {
+                            if let Some(window) = cx.active_window() {
+                                let _ = cx.update_window(window, |_, window, cx| {
                                     let note = crate::ui::notification::error(msg);
-                                    root.notification.update(cx, |view, cx| view.push(note, window, cx));
-                                    cx.notify();
+                                    window.push_notification(note, cx);
                                 });
                             }
                         }

@@ -10,7 +10,7 @@ use crate::ui::components::data_table::{TableColumn, VirtualTable, VirtualTableS
 use crate::ui::icon::IconName;
 use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, button::ButtonVariants as _, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, button::ButtonVariants as _, h_flex, toolbar::Toolbar, v_flex,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -1239,31 +1239,28 @@ impl Render for StructTreeView {
                     .border_b_1()
                     .border_color(theme.border.opacity(0.7))
                     .child(
-                        h_flex()
-                            .w_full()
-                            .justify_end()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                gpui_kit::component::button::Button::new("expand-all-struct-btn")
-                                    .ghost()
-                                    .icon(IconName::ListTree)
-                                    .with_size(gpui_kit::component::Size::XSmall)
-                                    .tooltip("Expand all fields")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.expand_all(cx);
-                                    })),
-                            )
-                            .child(
-                                gpui_kit::component::button::Button::new("collapse-all-struct-btn")
-                                    .ghost()
-                                    .icon(IconName::Minimize)
-                                    .with_size(gpui_kit::component::Size::XSmall)
-                                    .tooltip("Collapse all fields")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.collapse_all(cx);
-                                    })),
-                            ),
+                        h_flex().w_full().justify_end().items_center().gap_1().child(
+                            Toolbar::new("structure-toolbar")
+                                .with_size(gpui_kit::component::Size::XSmall)
+                                .child(
+                                    gpui_kit::component::button::Button::new("expand-all-struct-btn")
+                                        .ghost()
+                                        .icon(IconName::ListTree)
+                                        .tooltip("Expand all fields")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.expand_all(cx);
+                                        })),
+                                )
+                                .child(
+                                    gpui_kit::component::button::Button::new("collapse-all-struct-btn")
+                                        .ghost()
+                                        .icon(IconName::Minimize)
+                                        .tooltip("Collapse all fields")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.collapse_all(cx);
+                                        })),
+                                ),
+                        ),
                     )
                     .into_any_element(),
             )

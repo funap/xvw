@@ -1,7 +1,7 @@
 use crate::assets::Assets;
 use crate::settings::{DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, Settings};
 use gpui_kit::component::theme::{Theme, ThemeConfig, ThemeMode, ThemeSet};
-use gpui_kit::{App, AssetSource, SharedString, Window};
+use gpui_kit::{Anchor, App, AssetSource, SharedString, Window, px};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -72,13 +72,16 @@ pub fn init(cx: &mut App) {
     let default_dark = embedded_themes.get(DEFAULT_DARK_THEME);
     cx.set_global(embedded_themes);
 
-    let theme = Theme::global_mut(cx);
-    if let Some(light_theme) = default_light {
-        theme.light_theme = light_theme;
-    }
-    if let Some(dark_theme) = default_dark {
-        theme.dark_theme = dark_theme;
-    }
+    Theme::update(cx, |theme| {
+        if let Some(light_theme) = default_light {
+            theme.light_theme = light_theme;
+        }
+        if let Some(dark_theme) = default_dark {
+            theme.dark_theme = dark_theme;
+        }
+        theme.notification.placement = Anchor::BottomRight;
+        theme.notification.margins.bottom = px(32.0);
+    });
 }
 
 /// Applies the theme pair and mode configured in application settings.
@@ -92,18 +95,19 @@ pub fn set_theme_pair(light_name: &str, dark_name: &str, mode: ThemeMode, window
     let light_theme = embedded_themes.get(light_name).or_else(|| embedded_themes.get(DEFAULT_LIGHT_THEME));
     let dark_theme = embedded_themes.get(dark_name).or_else(|| embedded_themes.get(DEFAULT_DARK_THEME));
 
-    {
-        let theme = Theme::global_mut(cx);
+    Theme::update(cx, |theme| {
         if let Some(light_theme) = light_theme {
             theme.light_theme = light_theme;
         }
         if let Some(dark_theme) = dark_theme {
             theme.dark_theme = dark_theme;
         }
-    }
+        theme.mode = mode;
+        theme.notification.placement = Anchor::BottomRight;
+        theme.notification.margins.bottom = px(32.0);
+    });
 
     Theme::change(mode, window, cx);
-    cx.refresh_windows();
 }
 
 /// Applies an individual theme by name, activating the corresponding light or dark slot and mode.
@@ -114,17 +118,18 @@ pub fn apply_theme_by_name(name: &str, window: Option<&mut Window>, cx: &mut App
     };
 
     let mode = theme_config.mode;
-    {
-        let theme = Theme::global_mut(cx);
+    Theme::update(cx, |theme| {
         if mode.is_dark() {
             theme.dark_theme = theme_config;
         } else {
             theme.light_theme = theme_config;
         }
-    }
+        theme.mode = mode;
+        theme.notification.placement = Anchor::BottomRight;
+        theme.notification.margins.bottom = px(32.0);
+    });
 
     Theme::change(mode, window, cx);
-    cx.refresh_windows();
 }
 
 /// Returns a list of all available theme names with default themes first, followed by alphabetical order.

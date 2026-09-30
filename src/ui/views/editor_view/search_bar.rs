@@ -3,6 +3,7 @@ use gpui_kit::component::{
     ActiveTheme, Icon,
     button::{Button, ButtonVariants},
     input::{self, Input, InputState},
+    toolbar::Toolbar,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -143,15 +144,36 @@ impl Render for SearchBar {
                     .flex_1()
                     .child(Input::new(&self.input).prefix(Icon::new(IconName::Search).size_3p5()).cleanable(true)),
             )
-            .child(Button::new("prev").ghost().icon(IconName::ChevronUp).on_click(cx.listener(|_, _, _, cx| {
-                cx.emit(SearchBarEvent::Prev);
-            })))
-            .child(Button::new("next").ghost().icon(IconName::ChevronDown).on_click(cx.listener(|_, _, _, cx| {
-                cx.emit(SearchBarEvent::Next);
-            })))
-            .child(Button::new("close").ghost().icon(IconName::Close).on_click(cx.listener(|_, _, _, cx| {
-                cx.emit(SearchBarEvent::Dismiss);
-            })))
+            .child(
+                Toolbar::new("search-actions")
+                    .child(
+                        Button::new("prev")
+                            .ghost()
+                            .icon(IconName::ChevronUp)
+                            .tooltip("Previous match (Shift+Enter)")
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.emit(SearchBarEvent::Prev);
+                            })),
+                    )
+                    .child(
+                        Button::new("next")
+                            .ghost()
+                            .icon(IconName::ChevronDown)
+                            .tooltip("Next match (Enter)")
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.emit(SearchBarEvent::Next);
+                            })),
+                    )
+                    .child(
+                        Button::new("close")
+                            .ghost()
+                            .icon(IconName::Close)
+                            .tooltip("Close search (Esc)")
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.emit(SearchBarEvent::Dismiss);
+                            })),
+                    ),
+            )
     }
 }
 
