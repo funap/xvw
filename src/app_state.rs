@@ -62,7 +62,14 @@ pub struct AppState {
 impl Global for AppState {}
 
 impl AppState {
+    #[allow(dead_code)]
     pub fn init(cx: &mut App) {
+        let settings = crate::settings::Settings::load();
+        Self::init_with_settings(cx, &settings);
+    }
+
+    /// Initializes core application services and registers settings-driven globals.
+    pub fn init_with_settings(cx: &mut App, settings: &crate::settings::Settings) {
         let state = Self {
             document_service: DocumentService::new(),
             structure_service: StructureService::new(),
@@ -72,6 +79,16 @@ impl AppState {
         cx.set_global::<AppState>(state);
         cx.set_global(InsertModeState::default());
         cx.set_global(PendingCompareState::default());
+
+        cx.set_global(settings.appearance.clone());
+        cx.set_global(settings.default_encoding);
+        cx.set_global(settings.default_radix);
+        cx.set_global(settings.default_group_size);
+        cx.set_global(settings.default_endianness);
+        cx.set_global(crate::core::layout::BytesPerRow(settings.bytes_per_row));
+        cx.set_global(crate::core::structure::StructureYamlShaThreshold(settings.structure_yaml_sha_threshold));
+        cx.set_global(crate::core::structure::StructureYamlIncludeOffsets(settings.structure_yaml_include_offsets));
+        cx.set_global(crate::settings::RecentHistoryState::from_settings(settings));
     }
 
     pub fn global(cx: &App) -> &Self {
