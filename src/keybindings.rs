@@ -31,6 +31,7 @@ pub fn init(cx: &mut App) {
     cx.bind_keys([
         // File / Folder dialogs
         KeyBinding::new(primary_key!("n"), crate::actions::NewFile, None),
+        KeyBinding::new(primary_key!("shift-n"), crate::actions::NewScratchpad, None),
         KeyBinding::new(primary_key!("o"), crate::actions::OpenFileDialog, None),
         KeyBinding::new(primary_key!("shift-o"), crate::actions::OpenFolder, None),
         // Save

@@ -144,6 +144,9 @@ pub struct NewFile;
 pub struct NewEmptyFile;
 
 #[derive(Clone, PartialEq, Action)]
+pub struct NewScratchpad;
+
+#[derive(Clone, PartialEq, Action)]
 pub struct OpenFileDialog;
 
 #[derive(Clone, PartialEq, Action)]

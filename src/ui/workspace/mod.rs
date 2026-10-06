@@ -14,7 +14,7 @@ use crate::core::encoding::Encoding;
 use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
 use gpui_kit::component::{Root, WindowExt};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
@@ -42,9 +42,12 @@ pub struct Workspace {
     pub new_file_modal: Option<Entity<crate::ui::dialogs::new_file_modal::NewFileModal>>,
     pub fill_selection_modal: Option<Entity<crate::ui::dialogs::fill_selection_modal::FillSelectionModal>>,
     pub untitled_count: usize,
+    pub scratchpad_count: usize,
     pub(crate) force_close: bool,
     focus_handle: FocusHandle,
     last_active_editor_id: Cell<Option<EntityId>>,
+    last_active_editor: RefCell<Option<WeakEntity<Editor>>>,
+    last_active_editor_view: RefCell<Option<WeakEntity<EditorView>>>,
 }
 
 pub fn init(cx: &mut App) {
@@ -81,6 +84,11 @@ pub fn init(cx: &mut App) {
     cx.on_action::<crate::actions::NewEmptyFile>(|_, cx| {
         defer_in_active_workspace(cx, |workspace, window, cx| {
             workspace.on_action_new_empty_file(&crate::actions::NewEmptyFile, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::NewScratchpad>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_new_scratchpad(&crate::actions::NewScratchpad, window, cx);
         });
     });
     cx.on_action::<crate::actions::FillSelection>(|_, cx| {
@@ -293,7 +301,7 @@ impl Workspace {
                     this.on_action_import_bookmarks(&crate::actions::ImportBookmarks, _window, cx);
                 }
                 crate::ui::panels::bookmark_panel::BookmarkPanelEvent::NavigateTo { offset, size } => {
-                    if let Some(editor_view) = this.active_editor_view(cx) {
+                    if let Some(editor_view) = this.effective_editor_view(cx) {
                         editor_view.update(cx, |view, cx| {
                             let len = (*size).max(1);
                             view.scroll_to_range_if_needed(*offset..offset.saturating_add(len), cx);
@@ -309,7 +317,7 @@ impl Workspace {
             window,
             |this, _, event: &crate::ui::panels::struct_tree_view::StructTreeViewEvent, _window, cx| match event {
                 crate::ui::panels::struct_tree_view::StructTreeViewEvent::NavigateTo { offset, size } => {
-                    if let Some(editor_view) = this.active_editor_view(cx) {
+                    if let Some(editor_view) = this.effective_editor_view(cx) {
                         editor_view.update(cx, |view, cx| {
                             let len = (*size).max(1);
                             view.scroll_to_range_if_needed(*offset..offset.saturating_add(len), cx);
@@ -325,7 +333,7 @@ impl Workspace {
             window,
             |this, _, event: &crate::ui::panels::search_panel::SearchPanelEvent, window, cx| match event {
                 crate::ui::panels::search_panel::SearchPanelEvent::NavigateTo { offset, len } => {
-                    if let Some(editor_view) = this.active_editor_view(cx) {
+                    if let Some(editor_view) = this.effective_editor_view(cx) {
                         editor_view.update(cx, |view, cx| {
                             let match_len = (*len).max(1);
                             view.scroll_to_range_if_needed(*offset..offset.saturating_add(match_len), cx);
@@ -333,7 +341,7 @@ impl Workspace {
                     }
                 }
                 crate::ui::panels::search_panel::SearchPanelEvent::FocusEditor => {
-                    if let Some(editor_view) = this.active_editor_view(cx) {
+                    if let Some(editor_view) = this.effective_editor_view(cx) {
                         editor_view.update(cx, |view, cx| {
                             view.hex_view().read(cx).focus_handle(cx).focus(window, cx);
                         });
@@ -348,7 +356,7 @@ impl Workspace {
             window,
             |this, _, event: &crate::ui::panels::strings_panel::StringsPanelEvent, window, cx| match event {
                 crate::ui::panels::strings_panel::StringsPanelEvent::NavigateTo { offset, len } => {
-                    if let Some(editor_view) = this.active_editor_view(cx) {
+                    if let Some(editor_view) = this.effective_editor_view(cx) {
                         editor_view.update(cx, |view, cx| {
                             let match_len = (*len).max(1);
                             view.scroll_to_range_if_needed(*offset..offset.saturating_add(match_len), cx);
@@ -356,7 +364,7 @@ impl Workspace {
                     }
                 }
                 crate::ui::panels::strings_panel::StringsPanelEvent::FocusEditor => {
-                    if let Some(editor_view) = this.active_editor_view(cx) {
+                    if let Some(editor_view) = this.effective_editor_view(cx) {
                         editor_view.update(cx, |view, cx| {
                             view.hex_view().read(cx).focus_handle(cx).focus(window, cx);
                         });
@@ -371,7 +379,7 @@ impl Workspace {
             window,
             |this, _, event: &crate::ui::panels::visual_map_panel::VisualMapPanelEvent, _window, cx| match event {
                 crate::ui::panels::visual_map_panel::VisualMapPanelEvent::NavigateTo { offset } => {
-                    if let Some(editor_view) = this.active_editor_view(cx) {
+                    if let Some(editor_view) = this.effective_editor_view(cx) {
                         editor_view.update(cx, |view, cx| {
                             view.scroll_to_byte_if_needed(*offset, cx);
                         });
@@ -408,9 +416,12 @@ impl Workspace {
             new_file_modal: None,
             fill_selection_modal: None,
             untitled_count: 0,
+            scratchpad_count: 0,
             force_close: false,
             focus_handle: cx.focus_handle(),
             last_active_editor_id: Cell::new(None),
+            last_active_editor: RefCell::new(None),
+            last_active_editor_view: RefCell::new(None),
         };
 
         workspace.left_panel.update(cx, |panel, cx| {
@@ -429,6 +440,98 @@ impl Workspace {
         self.pane_tree.read(cx).active_tab_as::<Entity<EditorView>>(cx)
     }
 
+    /// Checks whether the specified Editor is still open in any pane group.
+    pub fn is_editor_open(&self, editor: &Entity<Editor>, cx: &App) -> bool {
+        for group in self.pane_tree.read(cx).all_groups() {
+            for tab in &group.read(cx).tabs {
+                if let Some(tab_editor) = tab.content.editor(cx)
+                    && tab_editor.entity_id() == editor.entity_id()
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Checks whether the specified EditorView is still open in any pane group.
+    pub fn is_editor_view_open(&self, view: &Entity<EditorView>, cx: &App) -> bool {
+        for group in self.pane_tree.read(cx).all_groups() {
+            for tab in &group.read(cx).tabs {
+                if let Some(tab_view) = tab.content.downcast::<Entity<EditorView>>()
+                    && tab_view.entity_id() == view.entity_id()
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Returns the first open Editor in the workspace pane tree, if any.
+    pub fn any_open_editor(&self, cx: &App) -> Option<Entity<Editor>> {
+        for group in self.pane_tree.read(cx).all_groups() {
+            for tab in &group.read(cx).tabs {
+                if let Some(tab_editor) = tab.content.editor(cx) {
+                    return Some(tab_editor);
+                }
+            }
+        }
+        None
+    }
+
+    /// Returns the first open EditorView in the workspace pane tree, if any.
+    pub fn any_open_editor_view(&self, cx: &App) -> Option<Entity<EditorView>> {
+        for group in self.pane_tree.read(cx).all_groups() {
+            for tab in &group.read(cx).tabs {
+                if let Some(tab_view) = tab.content.downcast::<Entity<EditorView>>() {
+                    return Some(tab_view);
+                }
+            }
+        }
+        None
+    }
+
+    /// Returns the effective Editor for panel displays and inspection.
+    /// Falls back to the last active editor if the current active tab has no editor (e.g. Scratchpad).
+    pub fn effective_editor(&self, cx: &App) -> Option<Entity<Editor>> {
+        let current = self.active_editor(cx);
+        let last = self.last_active_editor.borrow().as_ref().and_then(|w| w.upgrade());
+        resolve_effective_item(current, last, |editor| self.is_editor_open(editor, cx), || self.any_open_editor(cx))
+    }
+
+    /// Returns the effective EditorView for navigation from side panels.
+    /// Falls back to the last active editor view if the current active tab has no editor view (e.g. Scratchpad).
+    pub fn effective_editor_view(&self, cx: &App) -> Option<Entity<EditorView>> {
+        let current = self.active_editor_view(cx);
+        let last = self.last_active_editor_view.borrow().as_ref().and_then(|w| w.upgrade());
+        resolve_effective_item(current, last, |view| self.is_editor_view_open(view, cx), || self.any_open_editor_view(cx))
+    }
+}
+
+/// Resolves the effective target item (e.g. Editor or EditorView) for panel inspection and navigation.
+///
+/// If `current_active` is present, it takes priority.
+/// When `current_active` is absent (such as when focus is on a Scratchpad),
+/// it falls back to `last_active` if it is still open, or otherwise to any open item.
+pub fn resolve_effective_item<T: Clone>(
+    current_active: Option<T>,
+    last_active: Option<T>,
+    is_open: impl Fn(&T) -> bool,
+    fallback_any: impl FnOnce() -> Option<T>,
+) -> Option<T> {
+    if let Some(active) = current_active {
+        return Some(active);
+    }
+    if let Some(last) = last_active
+        && is_open(&last)
+    {
+        return Some(last);
+    }
+    fallback_any()
+}
+
+impl Workspace {
     pub(crate) fn publish_recent_history(&mut self, cx: &mut Context<Self>) {
         let definition_paths = self.recent_definition_history.paths().to_vec();
         let file_entries = self.recent_file_history.entries().to_vec();
@@ -452,27 +555,37 @@ impl Workspace {
     }
 
     pub(crate) fn sync_active_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let active_editor = self.active_editor(cx);
+        let direct_editor = self.active_editor(cx);
+        let direct_view = self.active_editor_view(cx);
+
+        if let Some(ref editor) = direct_editor {
+            self.last_active_editor.replace(Some(editor.downgrade()));
+        }
+        if let Some(ref view) = direct_view {
+            self.last_active_editor_view.replace(Some(view.downgrade()));
+        }
+
+        let effective_editor = self.effective_editor(cx);
         let pane_tree_is_empty = self.pane_tree.read(cx).is_empty();
 
         // A split can emit several state events while its new group is being
         // assembled. Only the active editor entity affects these subscribers,
         // so avoid rebuilding every side-panel subscription for duplicate
         // notifications.
-        let active_editor_id = active_editor.as_ref().map(Entity::entity_id);
-        if self.last_active_editor_id.get() == active_editor_id {
+        let effective_editor_id = effective_editor.as_ref().map(Entity::entity_id);
+        if self.last_active_editor_id.get() == effective_editor_id {
             if pane_tree_is_empty {
                 self.focus_handle.focus(window, cx);
             }
             return;
         }
-        self.last_active_editor_id.set(active_editor_id);
+        self.last_active_editor_id.set(effective_editor_id);
 
         self.status_bar.update(cx, |status_bar, cx| {
-            status_bar.set_active_editor(active_editor.clone(), cx);
+            status_bar.set_active_editor(effective_editor.clone(), cx);
         });
         self.left_panel.update(cx, |panel, cx| {
-            panel.set_editor(active_editor, cx);
+            panel.set_editor(effective_editor, cx);
         });
         self.on_focus_changed(cx);
 
@@ -872,6 +985,7 @@ impl Render for Workspace {
             .id("workspace")
             .on_action(cx.listener(Self::on_action_new_file))
             .on_action(cx.listener(Self::on_action_new_empty_file))
+            .on_action(cx.listener(Self::on_action_new_scratchpad))
             .on_action(cx.listener(Self::on_action_open_file))
             .on_action(cx.listener(Self::on_action_save))
             .on_action(cx.listener(Self::on_action_save_as))

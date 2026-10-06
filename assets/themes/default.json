@@ -193,8 +193,15 @@
           "text.code.span": {
             "color": "#6F42C1"
           },
+          "punctuation.special": {
+            "color": "#0000A2"
+          },
+          "punctuation.list_marker": {
+            "color": "#0433ff"
+          },
           "title": {
-            "color": "#0433FF"
+            "color": "#0433FF",
+            "font_weight": 600
           },
           "type": {
             "color": "#6f42c1"
@@ -405,8 +412,14 @@
           "text.code.span": {
             "color": "#A3E09F"
           },
+          "punctuation.special": {
+            "color": "#569CD6"
+          },
+          "punctuation.list_marker": {
+            "color": "#419CFF"
+          },
           "title": {
-            "color": "#CC9E00",
+            "color": "#4FC1FF",
             "font_weight": 600
           },
           "type": {

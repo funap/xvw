@@ -723,6 +723,20 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(crate) fn on_action_new_scratchpad(&mut self, _: &crate::actions::NewScratchpad, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::ui::views::scratchpad_view::ScratchpadView;
+
+        self.scratchpad_count += 1;
+        let id = self.scratchpad_count;
+        let scratchpad_view = cx.new(|cx| ScratchpadView::new(id, window, cx));
+        let content = TabContent::new(scratchpad_view);
+        self.pane_tree.update(cx, |tree, cx| {
+            tree.open_tab(content, window, cx);
+        });
+        self.sync_active_editor(window, cx);
+        cx.notify();
+    }
+
     pub(crate) fn on_action_open_visual_map(&mut self, _: &OpenVisualMap, window: &mut Window, cx: &mut Context<Self>) {
         self.select_activity(Activity::Map, window, cx);
     }
