@@ -42,7 +42,6 @@ pub struct Workspace {
     pub new_file_modal: Option<Entity<crate::ui::dialogs::new_file_modal::NewFileModal>>,
     pub fill_selection_modal: Option<Entity<crate::ui::dialogs::fill_selection_modal::FillSelectionModal>>,
     pub untitled_count: usize,
-    pub scratchpad_count: usize,
     pub(crate) force_close: bool,
     focus_handle: FocusHandle,
     last_active_editor_id: Cell<Option<EntityId>>,
@@ -89,6 +88,32 @@ pub fn init(cx: &mut App) {
     cx.on_action::<crate::actions::NewScratchpad>(|_, cx| {
         defer_in_active_workspace(cx, |workspace, window, cx| {
             workspace.on_action_new_scratchpad(&crate::actions::NewScratchpad, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::OpenScratchpadDialog>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_open_scratchpad_dialog(&crate::actions::OpenScratchpadDialog, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::OpenScratchpadFile>(|action, cx| {
+        let action = action.clone();
+        defer_in_active_workspace(cx, move |workspace, window, cx| {
+            workspace.on_action_open_scratchpad_file(&action, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::RevealScratchesInExplorer>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_reveal_scratches_in_explorer(&crate::actions::RevealScratchesInExplorer, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::ExportScratchpadAs>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_export_scratchpad_as(&crate::actions::ExportScratchpadAs, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::DeleteCurrentScratchpad>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_delete_current_scratchpad(&crate::actions::DeleteCurrentScratchpad, window, cx);
         });
     });
     cx.on_action::<crate::actions::FillSelection>(|_, cx| {
@@ -416,7 +441,6 @@ impl Workspace {
             new_file_modal: None,
             fill_selection_modal: None,
             untitled_count: 0,
-            scratchpad_count: 0,
             force_close: false,
             focus_handle: cx.focus_handle(),
             last_active_editor_id: Cell::new(None),
@@ -438,6 +462,24 @@ impl Workspace {
 
     pub fn active_editor_view(&self, cx: &App) -> Option<Entity<EditorView>> {
         self.pane_tree.read(cx).active_tab_as::<Entity<EditorView>>(cx)
+    }
+
+    pub fn active_scratchpad(&self, cx: &App) -> Option<Entity<crate::ui::views::scratchpad_view::ScratchpadView>> {
+        self.pane_tree
+            .read(cx)
+            .active_tab_as::<Entity<crate::ui::views::scratchpad_view::ScratchpadView>>(cx)
+    }
+
+    pub fn all_open_scratchpads(&self, cx: &App) -> Vec<Entity<crate::ui::views::scratchpad_view::ScratchpadView>> {
+        let mut scratches = Vec::new();
+        for group in self.pane_tree.read(cx).all_groups() {
+            for tab in &group.read(cx).tabs {
+                if let Some(sp) = tab.content.downcast::<Entity<crate::ui::views::scratchpad_view::ScratchpadView>>() {
+                    scratches.push(sp);
+                }
+            }
+        }
+        scratches
     }
 
     /// Checks whether the specified Editor is still open in any pane group.
@@ -986,6 +1028,11 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_action_new_file))
             .on_action(cx.listener(Self::on_action_new_empty_file))
             .on_action(cx.listener(Self::on_action_new_scratchpad))
+            .on_action(cx.listener(Self::on_action_open_scratchpad_dialog))
+            .on_action(cx.listener(Self::on_action_open_scratchpad_file))
+            .on_action(cx.listener(Self::on_action_reveal_scratches_in_explorer))
+            .on_action(cx.listener(Self::on_action_export_scratchpad_as))
+            .on_action(cx.listener(Self::on_action_delete_current_scratchpad))
             .on_action(cx.listener(Self::on_action_open_file))
             .on_action(cx.listener(Self::on_action_save))
             .on_action(cx.listener(Self::on_action_save_as))

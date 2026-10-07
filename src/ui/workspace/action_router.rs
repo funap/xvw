@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -724,17 +726,80 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_new_scratchpad(&mut self, _: &crate::actions::NewScratchpad, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::views::scratchpad_view::ScratchpadView;
+        use crate::service::ScratchService;
+        use crate::ui::views::scratchpad_view::{DEFAULT_SCRATCHPAD_CONTENT, ScratchpadView};
 
-        self.scratchpad_count += 1;
-        let id = self.scratchpad_count;
-        let scratchpad_view = cx.new(|cx| ScratchpadView::new(id, window, cx));
+        let open_ids: Vec<usize> = self.all_open_scratchpads(cx).iter().map(|s| s.read(cx).id()).collect();
+        let id = ScratchService::next_available_id(&open_ids);
+        let path = ScratchService::scratch_file_path(id).unwrap_or_else(|| PathBuf::from(format!("scratch_{id}.md")));
+        let scratchpad_view = cx.new(|cx| ScratchpadView::new_with_file(id, path, DEFAULT_SCRATCHPAD_CONTENT.to_string(), window, cx));
         let content = TabContent::new(scratchpad_view);
         self.pane_tree.update(cx, |tree, cx| {
             tree.open_tab(content, window, cx);
         });
         self.sync_active_editor(window, cx);
         cx.notify();
+    }
+
+    pub(crate) fn on_action_open_scratchpad_file(&mut self, action: &crate::actions::OpenScratchpadFile, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_scratchpad_file(action.path.clone(), window, cx);
+    }
+
+    pub(crate) fn open_scratchpad_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::service::ScratchService;
+        use crate::ui::views::scratchpad_view::{DEFAULT_SCRATCHPAD_CONTENT, ScratchpadView};
+
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+
+        // Check if already open
+        for group in self.pane_tree.read(cx).all_groups() {
+            let g = group.read(cx);
+            for (tab_ix, tab) in g.tabs.iter().enumerate() {
+                if let Some(sp) = tab.content.downcast::<Entity<ScratchpadView>>() {
+                    let sp_path = sp.read(cx).file_path().canonicalize().unwrap_or_else(|_| sp.read(cx).file_path().to_path_buf());
+                    if sp_path == canonical {
+                        let group_id = g.id;
+                        group.update(cx, |g, cx| {
+                            g.activate_tab(tab_ix, window, cx);
+                        });
+                        self.pane_tree.update(cx, |tree, cx| {
+                            tree.set_active_group(group_id, cx);
+                        });
+                        self.sync_active_editor(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                }
+            }
+        }
+
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let id = ScratchService::extract_id_from_filename(filename).unwrap_or_else(|| {
+            let open_ids: Vec<usize> = self.all_open_scratchpads(cx).iter().map(|s| s.read(cx).id()).collect();
+            ScratchService::next_available_id(&open_ids)
+        });
+        let content = ScratchService::load_scratch(&path).unwrap_or_else(|_| DEFAULT_SCRATCHPAD_CONTENT.to_string());
+        let scratchpad_view = cx.new(|cx| ScratchpadView::new_with_file(id, path, content, window, cx));
+        let tab_content = TabContent::new(scratchpad_view);
+        self.pane_tree.update(cx, |tree, cx| {
+            tree.open_tab(tab_content, window, cx);
+        });
+        self.sync_active_editor(window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn on_action_reveal_scratches_in_explorer(&mut self, _: &crate::actions::RevealScratchesInExplorer, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(active_scratch) = self.active_scratchpad(cx) {
+            let path = active_scratch.read(cx).file_path().to_path_buf();
+            if path.exists() {
+                reveal_in_file_explorer(&path);
+                return;
+            }
+        }
+
+        if let Ok(dir) = crate::service::ScratchService::ensure_scratches_dir() {
+            reveal_directory_in_explorer(&dir);
+        }
     }
 
     pub(crate) fn on_action_open_visual_map(&mut self, _: &OpenVisualMap, window: &mut Window, cx: &mut Context<Self>) {
@@ -819,5 +884,21 @@ fn reveal_in_file_explorer(path: &std::path::Path) {
     {
         let parent = path.parent().unwrap_or(path);
         let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
+    }
+}
+
+/// Reveals a directory in the platform's native file explorer.
+fn reveal_directory_in_explorer(dir: &std::path::Path) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer").arg(dir).spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(dir).spawn();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
     }
 }

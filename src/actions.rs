@@ -147,6 +147,25 @@ pub struct NewEmptyFile;
 pub struct NewScratchpad;
 
 #[derive(Clone, PartialEq, Action)]
+pub struct OpenScratchpadDialog;
+
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[action(namespace = app)]
+#[serde(deny_unknown_fields)]
+pub struct OpenScratchpadFile {
+    pub path: std::path::PathBuf,
+}
+
+#[derive(Clone, PartialEq, Action)]
+pub struct RevealScratchesInExplorer;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct ExportScratchpadAs;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct DeleteCurrentScratchpad;
+
+#[derive(Clone, PartialEq, Action)]
 pub struct OpenFileDialog;
 
 #[derive(Clone, PartialEq, Action)]

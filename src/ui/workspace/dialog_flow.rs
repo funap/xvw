@@ -1053,6 +1053,116 @@ impl Workspace {
         })
         .detach();
     }
+
+    pub(crate) fn on_action_open_scratchpad_dialog(&mut self, _: &crate::actions::OpenScratchpadDialog, window: &mut Window, cx: &mut Context<Self>) {
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Open Scratchpad".into()),
+        });
+
+        let view = cx.entity();
+        cx.spawn_in(window, async move |_, window| {
+            if let Some(path) = prompt.await.ok().and_then(|r| r.ok()).flatten().and_then(|mut v| v.pop()) {
+                window
+                    .update(|window, cx| {
+                        view.update(cx, |this, cx| {
+                            this.open_scratchpad_file(path, window, cx);
+                        });
+                    })
+                    .ok();
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn on_action_export_scratchpad_as(&mut self, _: &crate::actions::ExportScratchpadAs, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(scratchpad) = self.active_scratchpad(cx) else {
+            return;
+        };
+
+        // First flush any pending changes
+        scratchpad.update(cx, |sp, _| sp.save_sync());
+
+        let default_name = format!("{}.md", scratchpad.read(cx).title_str().replace(['/', '\\'], "_"));
+        let content = scratchpad.read(cx).content(cx);
+        let parent_dir = scratchpad
+            .read(cx)
+            .file_path()
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+
+        let prompt = cx.prompt_for_new_path(&parent_dir, Some(&default_name));
+        cx.spawn_in(window, async move |_, window| {
+            if let Some(dest_path) = prompt.await.ok().and_then(|r| r.ok()).flatten() {
+                if let Err(e) = std::fs::write(&dest_path, &content) {
+                    window
+                        .update(|window, cx| {
+                            window.push_notification(notification::error(format!("Failed to export scratchpad: {e}")), cx);
+                        })
+                        .ok();
+                } else {
+                    window
+                        .update(|window, cx| {
+                            window.push_notification(notification::info(format!("Exported scratchpad to {}", dest_path.display())), cx);
+                        })
+                        .ok();
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn on_action_delete_current_scratchpad(&mut self, _: &crate::actions::DeleteCurrentScratchpad, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(scratchpad) = self.active_scratchpad(cx) else {
+            return;
+        };
+
+        let file_path = scratchpad.read(cx).file_path().to_path_buf();
+        let title = scratchpad.read(cx).title_str().to_string();
+
+        let prompt = window.prompt(
+            PromptLevel::Warning,
+            "Delete Scratchpad",
+            Some(&format!(
+                "Are you sure you want to delete \"{title}\"? This will permanently delete the file from disk."
+            )),
+            &["Delete", "Cancel"],
+            cx,
+        );
+
+        let workspace = cx.entity();
+        cx.spawn_in(window, async move |_, window| {
+            let Ok(choice) = prompt.await else {
+                return;
+            };
+            if choice != 0 {
+                return;
+            }
+
+            // Perform deletion
+            let _ = crate::service::ScratchService::delete_scratch(&file_path);
+
+            window
+                .update(|window, cx| {
+                    workspace.update(cx, |this, cx| {
+                        if let Some(sp) = this.active_scratchpad(cx) {
+                            sp.update(cx, |s, _| s.mark_deleted());
+                        }
+                        this.pane_tree.update(cx, |tree, cx| {
+                            tree.close_active_tab(window, cx);
+                        });
+                        this.sync_active_editor(window, cx);
+                        window.push_notification(notification::info(format!("Deleted scratchpad \"{title}\"")), cx);
+                        cx.notify();
+                    });
+                })
+                .ok();
+        })
+        .detach();
+    }
 }
 
 async fn save_single_dirty_document(

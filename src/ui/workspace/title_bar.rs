@@ -192,6 +192,7 @@ impl AppMenu {
     fn query_editor_state(&self, cx: &mut Context<Self>) -> MenuEditorState {
         if let Some(workspace) = self.workspace.upgrade() {
             let ws = workspace.read(cx);
+            let has_scratch = ws.active_scratchpad(cx).is_some();
             if let Some(editor) = ws.active_editor(cx) {
                 let ed = editor.read(cx);
                 let is_ro = ed.is_read_only();
@@ -223,10 +224,12 @@ impl AppMenu {
                     can_close_others: can_o,
                     can_close_right: can_r_tab,
                     has_saved: has_s,
+                    has_scratch,
                 }
             } else {
                 MenuEditorState {
                     is_read_only: true,
+                    has_scratch,
                     ..Default::default()
                 }
             }

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::{Action, Context, Menu, MenuItem, Window};
+use gpui_kit::{Action, Context, Menu, MenuItem, SharedString, Window};
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct MenuEditorState {
@@ -14,41 +14,46 @@ pub struct MenuEditorState {
     pub can_close_others: bool,
     pub can_close_right: bool,
     pub has_saved: bool,
+    pub has_scratch: bool,
 }
 
 #[derive(Clone)]
 pub enum MenuItemDef {
     Action {
-        label: &'static str,
+        label: SharedString,
         action: Arc<dyn Fn() -> Box<dyn Action> + Send + Sync>,
         is_enabled: Option<fn(&MenuEditorState) -> bool>,
     },
     Submenu {
-        label: &'static str,
+        label: SharedString,
         items: Vec<MenuItemDef>,
     },
     Separator,
 }
 
 impl MenuItemDef {
-    pub fn action<A: Action + Clone + 'static + Sync>(label: &'static str, action: A) -> Self {
+    pub fn action<A: Action + Clone + 'static + Sync>(label: impl Into<SharedString>, action: A) -> Self {
         Self::Action {
-            label,
+            label: label.into(),
             action: Arc::new(move || Box::new(action.clone())),
             is_enabled: None,
         }
     }
 
-    pub fn action_with_condition<A: Action + Clone + 'static + Sync>(label: &'static str, action: A, is_enabled: fn(&MenuEditorState) -> bool) -> Self {
+    pub fn action_with_condition<A: Action + Clone + 'static + Sync>(
+        label: impl Into<SharedString>,
+        action: A,
+        is_enabled: fn(&MenuEditorState) -> bool,
+    ) -> Self {
         Self::Action {
-            label,
+            label: label.into(),
             action: Arc::new(move || Box::new(action.clone())),
             is_enabled: Some(is_enabled),
         }
     }
 
-    pub fn submenu(label: &'static str, items: Vec<MenuItemDef>) -> Self {
-        Self::Submenu { label, items }
+    pub fn submenu(label: impl Into<SharedString>, items: Vec<MenuItemDef>) -> Self {
+        Self::Submenu { label: label.into(), items }
     }
 
     pub fn separator() -> Self {
@@ -58,14 +63,14 @@ impl MenuItemDef {
     pub fn to_gpui_menu_item(&self) -> MenuItem {
         match self {
             MenuItemDef::Action { label, action, .. } => MenuItem::Action {
-                name: (*label).into(),
+                name: label.clone(),
                 action: (action)(),
                 os_action: None,
                 checked: false,
                 disabled: false,
             },
             MenuItemDef::Submenu { label, items } => MenuItem::submenu(Menu {
-                name: (*label).into(),
+                name: label.clone(),
                 items: items.iter().map(|item| item.to_gpui_menu_item()).collect(),
                 disabled: false,
             }),
@@ -77,12 +82,12 @@ impl MenuItemDef {
         match self {
             MenuItemDef::Action { label, action, is_enabled } => {
                 let disabled = is_enabled.is_some_and(|f| !f(state));
-                menu.menu_with_disabled(*label, (action)(), disabled)
+                menu.menu_with_disabled(label.clone(), (action)(), disabled)
             }
             MenuItemDef::Submenu { label, items } => {
                 let sub_items = items.clone();
                 let state_copy = *state;
-                menu.submenu(*label, window, cx, move |sub_menu, window, cx| {
+                menu.submenu(label.clone(), window, cx, move |sub_menu, window, cx| {
                     sub_items.iter().fold(sub_menu, |m, item| item.apply_to_popup_menu(m, &state_copy, window, cx))
                 })
             }
@@ -121,6 +126,7 @@ pub fn application_menus() -> Vec<MenuDef> {
         build_view_menu(),
         build_go_menu(),
         build_analysis_menu(),
+        build_scratch_menu(),
         build_window_menu(),
     ]
 }
@@ -130,7 +136,6 @@ fn build_file_menu() -> MenuDef {
         name: "File",
         items: vec![
             MenuItemDef::action("New File...", crate::actions::NewFile),
-            MenuItemDef::action("New Scratchpad", crate::actions::NewScratchpad),
             MenuItemDef::action("Open File...", crate::actions::OpenFileDialog),
             MenuItemDef::action("Open Folder...", crate::actions::OpenFolder),
             MenuItemDef::action("Close Folder", crate::actions::CloseFolder),
@@ -295,10 +300,7 @@ fn build_view_menu() -> MenuDef {
             .copied()
             .map(|encoding| MenuItemDef::action_with_condition(encoding.label(), crate::actions::SetEncoding { encoding }, |s| s.has_doc))
             .collect();
-        encoding_items.push(MenuItemDef::Submenu {
-            label: category.label(),
-            items: cat_items,
-        });
+        encoding_items.push(MenuItemDef::submenu(category.label(), cat_items));
     }
 
     MenuDef {
@@ -344,10 +346,7 @@ fn build_view_menu() -> MenuDef {
                     MenuItemDef::action_with_condition("Toggle Byte Order", crate::actions::ToggleByteOrder, |s| s.has_doc),
                 ],
             ),
-            MenuItemDef::Submenu {
-                label: "Encoding",
-                items: encoding_items,
-            },
+            MenuItemDef::submenu("Encoding", encoding_items),
             MenuItemDef::separator(),
             MenuItemDef::submenu(
                 "Custom Line Breaks",
@@ -417,6 +416,39 @@ fn build_analysis_menu() -> MenuDef {
     }
 }
 
+fn build_scratch_menu() -> MenuDef {
+    let recent_scratches = crate::service::ScratchService::list_scratches();
+    let mut recent_items = Vec::new();
+    if recent_scratches.is_empty() {
+        recent_items.push(MenuItemDef::action_with_condition("No Recent Scratches", crate::actions::NewScratchpad, |_| {
+            false
+        }));
+    } else {
+        for entry in recent_scratches.into_iter().take(15) {
+            let label = if entry.title != entry.filename {
+                format!("{} ({})", entry.title, entry.filename)
+            } else {
+                entry.title
+            };
+            recent_items.push(MenuItemDef::action(label, crate::actions::OpenScratchpadFile { path: entry.path }));
+        }
+    }
+
+    MenuDef {
+        name: "Scratch",
+        items: vec![
+            MenuItemDef::action("New Scratchpad", crate::actions::NewScratchpad),
+            MenuItemDef::action("Open Scratchpad...", crate::actions::OpenScratchpadDialog),
+            MenuItemDef::submenu("Recent Scratches", recent_items),
+            MenuItemDef::separator(),
+            MenuItemDef::action("Reveal in File Manager", crate::actions::RevealScratchesInExplorer),
+            MenuItemDef::separator(),
+            MenuItemDef::action_with_condition("Export Scratchpad As...", crate::actions::ExportScratchpadAs, |s| s.has_scratch),
+            MenuItemDef::action_with_condition("Delete Current Scratchpad", crate::actions::DeleteCurrentScratchpad, |s| s.has_scratch),
+        ],
+    }
+}
+
 fn build_window_menu() -> MenuDef {
     MenuDef {
         name: "Window",
@@ -432,18 +464,19 @@ fn build_window_menu() -> MenuDef {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{MenuEditorState, MenuItemDef, application_menus};
 
     #[test]
     fn test_application_menus_structure() {
         let menus = application_menus();
-        assert_eq!(menus.len(), 6);
+        assert_eq!(menus.len(), 7);
         assert_eq!(menus[0].name, "File");
         assert_eq!(menus[1].name, "Edit");
         assert_eq!(menus[2].name, "View");
         assert_eq!(menus[3].name, "Go");
         assert_eq!(menus[4].name, "Analysis");
-        assert_eq!(menus[5].name, "Window");
+        assert_eq!(menus[5].name, "Scratch");
+        assert_eq!(menus[6].name, "Window");
     }
 
     #[test]
@@ -457,6 +490,63 @@ mod tests {
     }
 
     #[test]
+    fn test_scratch_menu_structure() {
+        let menus = application_menus();
+        let scratch_menu = menus.iter().find(|m| m.name == "Scratch").expect("Scratch menu found");
+        let has_new = scratch_menu
+            .items
+            .iter()
+            .any(|item| matches!(item, MenuItemDef::Action { label, .. } if label.as_ref() == "New Scratchpad"));
+        let has_open = scratch_menu
+            .items
+            .iter()
+            .any(|item| matches!(item, MenuItemDef::Action { label, .. } if label.as_ref() == "Open Scratchpad..."));
+        let has_recent = scratch_menu
+            .items
+            .iter()
+            .any(|item| matches!(item, MenuItemDef::Submenu { label, .. } if label.as_ref() == "Recent Scratches"));
+        assert!(has_new);
+        assert!(has_open);
+        assert!(has_recent);
+
+        let export_item = scratch_menu
+            .items
+            .iter()
+            .find(|item| matches!(item, MenuItemDef::Action { label, .. } if label.as_ref() == "Export Scratchpad As..."))
+            .expect("Export item found");
+        if let MenuItemDef::Action { is_enabled: Some(cond), .. } = export_item {
+            assert!(cond(&MenuEditorState {
+                has_scratch: true,
+                ..Default::default()
+            }));
+            assert!(!cond(&MenuEditorState {
+                has_scratch: false,
+                ..Default::default()
+            }));
+        } else {
+            panic!("Export item must have condition");
+        }
+
+        let delete_item = scratch_menu
+            .items
+            .iter()
+            .find(|item| matches!(item, MenuItemDef::Action { label, .. } if label.as_ref() == "Delete Current Scratchpad"))
+            .expect("Delete item found");
+        if let MenuItemDef::Action { is_enabled: Some(cond), .. } = delete_item {
+            assert!(cond(&MenuEditorState {
+                has_scratch: true,
+                ..Default::default()
+            }));
+            assert!(!cond(&MenuEditorState {
+                has_scratch: false,
+                ..Default::default()
+            }));
+        } else {
+            panic!("Delete item must have condition");
+        }
+    }
+
+    #[test]
     fn test_view_encoding_menu_structure() {
         let menus = application_menus();
         let view_menu = menus.iter().find(|m| m.name == "View").expect("View menu found");
@@ -464,7 +554,7 @@ mod tests {
             .items
             .iter()
             .find_map(|item| match item {
-                MenuItemDef::Submenu { label, items } if *label == "Encoding" => Some(items),
+                MenuItemDef::Submenu { label, items } if label.as_ref() == "Encoding" => Some(items),
                 _ => None,
             })
             .expect("Encoding submenu found");
@@ -474,7 +564,7 @@ mod tests {
         let primary_labels: Vec<&str> = encoding_submenu[..4]
             .iter()
             .map(|item| match item {
-                MenuItemDef::Action { label, .. } => *label,
+                MenuItemDef::Action { label, .. } => label.as_ref(),
                 _ => panic!("Expected action item"),
             })
             .collect();
@@ -487,7 +577,7 @@ mod tests {
         let category_labels: Vec<&str> = encoding_submenu[5..]
             .iter()
             .map(|item| match item {
-                MenuItemDef::Submenu { label, .. } => *label,
+                MenuItemDef::Submenu { label, .. } => label.as_ref(),
                 _ => panic!("Expected submenu"),
             })
             .collect();
@@ -505,7 +595,7 @@ mod tests {
         let copy_item = edit_menu
             .items
             .iter()
-            .find(|item| matches!(item, MenuItemDef::Action { label: "Copy", .. }))
+            .find(|item| matches!(item, MenuItemDef::Action { label, .. } if label.as_ref() == "Copy"))
             .expect("Copy item found");
 
         let is_enabled = match copy_item {
@@ -531,7 +621,7 @@ mod tests {
             .items
             .iter()
             .find_map(|item| match item {
-                MenuItemDef::Submenu { label, items } if *label == "Copy As" => Some(items),
+                MenuItemDef::Submenu { label, items } if label.as_ref() == "Copy As" => Some(items),
                 _ => None,
             })
             .expect("Copy As submenu found");

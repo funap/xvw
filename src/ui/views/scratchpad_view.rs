@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::component::{
     ActiveTheme, Icon, Sizable, StyledExt,
@@ -78,6 +79,11 @@ pub fn find_case_insensitive_matches(text: &str, query: &str) -> Vec<Range<usize
 
 pub struct ScratchpadView {
     id: usize,
+    file_path: PathBuf,
+    title: String,
+    cached_content: String,
+    debounce_task: Option<Task<()>>,
+    is_dirty: bool,
     focus_handle: FocusHandle,
     editor: Entity<EditorState>,
     text_view_state: Entity<TextViewState>,
@@ -91,11 +97,20 @@ pub struct ScratchpadView {
 }
 
 impl ScratchpadView {
+    #[allow(dead_code)]
     pub fn new(id: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_with_content(id, DEFAULT_SCRATCHPAD_CONTENT.to_string(), window, cx)
+        let file_path = crate::service::ScratchService::scratch_file_path(id).unwrap_or_else(|| PathBuf::from(format!("scratch_{id}.md")));
+        let content = if file_path.exists() {
+            crate::service::ScratchService::load_scratch(&file_path).unwrap_or_else(|_| DEFAULT_SCRATCHPAD_CONTENT.to_string())
+        } else {
+            DEFAULT_SCRATCHPAD_CONTENT.to_string()
+        };
+        Self::new_with_file(id, file_path, content, window, cx)
     }
 
-    pub fn new_with_content(id: usize, content: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new_with_file(id: usize, file_path: PathBuf, content: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let title = crate::service::ScratchService::extract_title(&content).unwrap_or_else(|| format!("Scratchpad {id}"));
+        let cached_content = content.clone();
         let focus_handle = cx.focus_handle();
         let editor = cx.new(|cx| {
             let mut state = EditorState::new(window, cx).language("markdown");
@@ -110,12 +125,29 @@ impl ScratchpadView {
         let sub_editor = cx.subscribe_in(&editor, window, |this, editor, event: &input::InputEvent, _window, cx| {
             if let input::InputEvent::Change = event {
                 let content = editor.read(cx).value().to_string();
+                this.cached_content = content.clone();
+                this.title = crate::service::ScratchService::extract_title(&content).unwrap_or_else(|| format!("Scratchpad {}", this.id));
+                this.is_dirty = true;
                 this.text_view_state.update(cx, |tv, cx| {
                     tv.set_text(&content, cx);
                 });
                 if this.is_search_open {
                     this.update_search(cx);
                 }
+
+                // Debounced auto-save (500ms)
+                this.debounce_task = None;
+                let task = cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+                    if let Some(this) = this.upgrade() {
+                        this.update(cx, |this, cx| {
+                            this.save_sync();
+                            cx.notify();
+                        });
+                    }
+                });
+                this.debounce_task = Some(task);
+
                 cx.notify();
             }
         });
@@ -150,6 +182,11 @@ impl ScratchpadView {
 
         Self {
             id,
+            file_path,
+            title,
+            cached_content,
+            debounce_task: None,
+            is_dirty: false,
             focus_handle,
             editor,
             text_view_state,
@@ -164,8 +201,43 @@ impl ScratchpadView {
     }
 
     #[allow(dead_code)]
+    pub fn new_with_content(id: usize, content: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let file_path = crate::service::ScratchService::scratch_file_path(id).unwrap_or_else(|| PathBuf::from(format!("scratch_{id}.md")));
+        Self::new_with_file(id, file_path, content, window, cx)
+    }
+
+    #[allow(dead_code)]
     pub fn id(&self) -> usize {
         self.id
+    }
+
+    pub fn file_path(&self) -> &Path {
+        &self.file_path
+    }
+
+    pub fn title_str(&self) -> &str {
+        &self.title
+    }
+
+    #[allow(dead_code)]
+    pub fn is_dirty(&self) -> bool {
+        self.is_dirty
+    }
+
+    pub fn save_sync(&mut self) {
+        if !self.is_dirty {
+            return;
+        }
+        if let Err(e) = crate::service::ScratchService::save_scratch_atomic(&self.file_path, &self.cached_content) {
+            eprintln!("Failed to save scratchpad to {}: {}", self.file_path.display(), e);
+        } else {
+            self.is_dirty = false;
+        }
+    }
+
+    pub fn mark_deleted(&mut self) {
+        self.is_dirty = false;
+        self.debounce_task = None;
     }
 
     #[allow(dead_code)]
@@ -422,6 +494,13 @@ impl Render for ScratchpadView {
         let theme = cx.theme();
         let mode = self.mode;
 
+        let filename_badge = self
+            .file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|name| format!("({name})"))
+            .unwrap_or_default();
+
         let toolbar = div()
             .flex()
             .flex_row()
@@ -439,13 +518,8 @@ impl Render for ScratchpadView {
                     .items_center()
                     .gap_2()
                     .child(Icon::new(IconName::FileText).size_4().text_color(theme.muted_foreground))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_semibold()
-                            .text_color(theme.foreground)
-                            .child(format!("Scratchpad {}", self.id)),
-                    ),
+                    .child(div().text_sm().font_semibold().text_color(theme.foreground).child(self.title.clone()))
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(filename_badge)),
             )
             .child(
                 div()
@@ -659,13 +733,19 @@ impl Focusable for ScratchpadView {
     }
 }
 
+impl Drop for ScratchpadView {
+    fn drop(&mut self) {
+        self.save_sync();
+    }
+}
+
 impl Panel for ScratchpadView {
     fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        format!("Scratchpad {}", self.id)
+        self.title.clone()
     }
 
     fn tab_name(&self, _: &App) -> Option<SharedString> {
-        Some(format!("Scratchpad {}", self.id).into())
+        Some(self.title.clone().into())
     }
 
     fn zoom_control(&self, _: &App) -> Option<PanelControl> {
@@ -705,8 +785,15 @@ impl crate::ui::pane::WorkspaceTab for Entity<ScratchpadView> {
     }
 
     fn title(&self, cx: &App) -> String {
-        let view = self.read(cx);
-        format!("Scratchpad {}", view.id)
+        self.read(cx).title.clone()
+    }
+
+    fn is_dirty(&self, cx: &App) -> bool {
+        self.read(cx).is_dirty
+    }
+
+    fn path(&self, cx: &App) -> Option<PathBuf> {
+        Some(self.read(cx).file_path.clone())
     }
 
     fn focus_handle(&self, cx: &App) -> FocusHandle {
@@ -718,11 +805,11 @@ impl crate::ui::pane::WorkspaceTab for Entity<ScratchpadView> {
     }
 
     fn create_split(&self, window: &mut Window, cx: &mut App) -> Option<crate::ui::pane::TabContent> {
-        let (id, content) = {
+        let (id, file_path, content) = {
             let view = self.read(cx);
-            (view.id, view.content(cx))
+            (view.id, view.file_path.clone(), view.content(cx))
         };
-        let new_view = cx.new(|cx| ScratchpadView::new_with_content(id, content, window, cx));
+        let new_view = cx.new(|cx| ScratchpadView::new_with_file(id, file_path, content, window, cx));
         Some(crate::ui::pane::TabContent::new(new_view))
     }
 }
@@ -812,5 +899,15 @@ mod tests {
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0], 0..2);
         assert_eq!(matches[1], 2..4);
+    }
+
+    #[test]
+    fn test_scratchpad_title_fallback_and_extraction() {
+        use crate::service::ScratchService;
+        let content_with_title = "# Project Architecture\n\nNotes here";
+        assert_eq!(ScratchService::extract_title(content_with_title), Some("Project Architecture".to_string()));
+
+        let content_without_title = "Just plain text notes";
+        assert_eq!(ScratchService::extract_title(content_without_title), None);
     }
 }
