@@ -255,6 +255,43 @@ impl ScratchpadView {
         }
     }
 
+    /// Inserts text at the editor's current cursor position or replaces active selection,
+    /// syncing cached content, preview, and triggering debounced auto-save.
+    pub fn insert_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode == ScratchpadMode::Preview {
+            self.mode = ScratchpadMode::Split;
+        }
+
+        self.editor.update(cx, |ed, cx| {
+            ed.insert(text, window, cx);
+            ed.focus_handle(cx).focus(window, cx);
+        });
+        let content = self.editor.read(cx).value().to_string();
+        self.cached_content = content.clone();
+        self.title = crate::service::ScratchService::extract_title(&content).unwrap_or_else(|| format!("Scratchpad {}", self.id));
+        self.is_dirty = true;
+        self.text_view_state.update(cx, |tv, cx| {
+            tv.set_text(&content, cx);
+        });
+        if self.is_search_open {
+            self.update_search(cx);
+        }
+
+        // Debounced auto-save (500ms)
+        self.debounce_task = None;
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+            if let Some(this) = this.upgrade() {
+                this.update(cx, |this, cx| {
+                    this.save_sync();
+                    cx.notify();
+                });
+            }
+        });
+        self.debounce_task = Some(task);
+        cx.notify();
+    }
+
     pub fn content(&self, cx: &App) -> String {
         self.editor.read(cx).value().to_string()
     }
@@ -483,8 +520,12 @@ impl ScratchpadView {
                             }),
                     )
             })
-            .on_link_click(|url, _event, _window, cx| {
-                cx.open_url(url.as_ref());
+            .on_link_click(|url, _event, window, cx| {
+                if crate::core::offset_link::parse_offset_link(url.as_ref()).is_some() {
+                    window.dispatch_action(Box::new(crate::actions::NavigateToOffsetLink { url: url.to_string() }), cx);
+                } else {
+                    cx.open_url(url.as_ref());
+                }
             })
     }
 }
@@ -527,6 +568,16 @@ impl Render for ScratchpadView {
                     .flex_row()
                     .items_center()
                     .gap_1()
+                    .child(
+                        Button::new("insert-offset-link")
+                            .icon(IconName::ExternalLink)
+                            .label("Link Offset")
+                            .tooltip("Insert offset link from active binary editor")
+                            .ghost()
+                            .on_click(cx.listener(|_this, _, window, cx| {
+                                window.dispatch_action(Box::new(crate::actions::InsertActiveOffsetLink), cx);
+                            })),
+                    )
                     .child(
                         Button::new("toggle-search")
                             .icon(IconName::Search)
@@ -909,5 +960,19 @@ mod tests {
 
         let content_without_title = "Just plain text notes";
         assert_eq!(ScratchService::extract_title(content_without_title), None);
+    }
+
+    #[test]
+    fn test_scratchpad_offset_link_integration() {
+        use crate::core::offset_link::{OffsetLinkTarget, format_offset_markdown, parse_offset_link};
+
+        // 1. Generate link markdown from an editor offset
+        let md = format_offset_markdown(0x200, Some(32), 0x1000);
+        assert_eq!(md, "[0x0200..0x021F (32 B)](xvw://goto/0x200?len=32)");
+
+        // 2. Extract link URL target and verify it parses back to the expected range
+        let url = "xvw://goto/0x200?len=32";
+        let target = parse_offset_link(url).expect("link must parse");
+        assert_eq!(target, OffsetLinkTarget::Range(0x200..0x220));
     }
 }

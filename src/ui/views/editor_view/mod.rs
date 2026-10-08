@@ -12,9 +12,9 @@ use gpui_kit::{
 use crate::actions::{
     AddCustomBreak, BookmarkBlue, BookmarkCyan, BookmarkGreen, BookmarkOrange, BookmarkPink, BookmarkPurple, BookmarkRed, BookmarkYellow, ClearAllBookmarks,
     ClearAllCustomBreaks, ClearBookmark, Copy, CopyAsBase64, CopyAsBinary, CopyAsCppArray, CopyAsEscapedString, CopyAsHexDump, CopyAsHexSpaces,
-    CopyAsHexStream, CopyAsJsonArray, CopyAsPrintableText, CopyAsRustArray, Cut, FocusHexView, GoToBeginning, GoToEnd, HideAllBookmarks, JoinLine, Paste, Redo,
-    RemoveCustomBreakBackward, RemoveCustomBreakForward, SearchNext, SearchPrev, SelectAll, ShowAllBookmarks, ToggleGoToAddress, ToggleHideUnbookmarked,
-    ToggleSearch, Undo, UnfoldBookmarkAtCursor,
+    CopyAsHexStream, CopyAsJsonArray, CopyAsOffsetLink, CopyAsPrintableText, CopyAsRustArray, Cut, FocusHexView, GoToBeginning, GoToEnd, HideAllBookmarks,
+    JoinLine, Paste, Redo, RemoveCustomBreakBackward, RemoveCustomBreakForward, SearchNext, SearchPrev, SelectAll, ShowAllBookmarks, ToggleGoToAddress,
+    ToggleHideUnbookmarked, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
 };
 use crate::app_state::{AppState, InsertModeState};
 use crate::core::editor::Editor;
@@ -698,6 +698,36 @@ impl EditorView {
 
     pub fn unfold_bookmark_at_cursor(&mut self, action: &UnfoldBookmarkAtCursor, window: &mut Window, cx: &mut Context<Self>) {
         self.hex_view.update(cx, |hv, cx| hv.unfold_bookmark_at_cursor(action, window, cx));
+    }
+
+    pub fn copy_as_offset_link(&mut self, action: &CopyAsOffsetLink, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view.update(cx, |hv, cx| hv.copy_as_offset_link(action, window, cx));
+    }
+
+    /// Jumps the editor to a specific byte offset, optionally extending current selection.
+    pub fn jump_to_offset(&mut self, offset: usize, extend: bool, cx: &mut Context<Self>) {
+        self.editor.update(cx, |editor, cx| {
+            editor.go_to_offset(offset, extend);
+            cx.notify();
+        });
+        let cursor_offset = self.editor.read(cx).cursor.offset;
+        self.hex_view.update(cx, |view, cx| {
+            view.scroll_to_byte_if_needed(cursor_offset, cx);
+        });
+        cx.notify();
+    }
+
+    /// Jumps the editor to and selects a contiguous byte range `[start..end)`.
+    pub fn jump_to_range(&mut self, range: std::ops::Range<usize>, cx: &mut Context<Self>) {
+        self.editor.update(cx, |editor, cx| {
+            editor.go_to_range(range);
+            cx.notify();
+        });
+        let cursor_offset = self.editor.read(cx).cursor.offset;
+        self.hex_view.update(cx, |view, cx| {
+            view.scroll_to_byte_if_needed(cursor_offset, cx);
+        });
+        cx.notify();
     }
 }
 

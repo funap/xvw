@@ -104,6 +104,28 @@ impl ClipboardHandler {
         cx.write_to_clipboard(item);
     }
 
+    pub fn copy_offset_link(editor: &Entity<Editor>, focus_handle: &FocusHandle, range: Option<Range<usize>>, window: &mut Window, cx: &mut App) {
+        let text = {
+            let editor = editor.read(cx);
+            let doc = editor.document.read().expect("document read lock");
+            let total = doc.buffer.len();
+            if let Some(range) = range {
+                let clamped = range.start.min(total)..range.end.min(total);
+                if clamped.len() > 1 {
+                    crate::core::offset_link::format_offset_markdown(clamped.start, Some(clamped.len()), total)
+                } else {
+                    crate::core::offset_link::format_offset_markdown(clamped.start, None, total)
+                }
+            } else {
+                let cursor = editor.cursor.offset.min(total);
+                crate::core::offset_link::format_offset_markdown(cursor, None, total)
+            }
+        };
+
+        focus_handle.focus(window, cx);
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+    }
+
     pub fn copy_range(editor: &Entity<Editor>, focus_handle: &FocusHandle, range: Option<Range<usize>>, window: &mut Window, cx: &mut App) {
         let (formatted, raw_bytes) = {
             let Some(range) = range else {

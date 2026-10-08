@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use gpui_kit::component::WindowExt;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -151,6 +152,14 @@ impl Workspace {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.copy_as_json_array(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_copy_as_offset_link(&mut self, action: &CopyAsOffsetLink, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.copy_as_offset_link(action, window, cx);
             });
         }
     }
@@ -799,6 +808,59 @@ impl Workspace {
 
         if let Ok(dir) = crate::service::ScratchService::ensure_scratches_dir() {
             reveal_directory_in_explorer(&dir);
+        }
+    }
+
+    pub(crate) fn on_action_navigate_to_offset_link(&mut self, action: &crate::actions::NavigateToOffsetLink, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = crate::core::offset_link::parse_offset_link(&action.url) else {
+            return;
+        };
+
+        if let Some(editor_view) = self.find_or_activate_editor_view(window, cx) {
+            let focus_handle = editor_view.read(cx).focus_handle(cx);
+            focus_handle.focus(window, cx);
+            editor_view.update(cx, |view, cx| match target {
+                crate::core::offset_link::OffsetLinkTarget::Offset(off) => {
+                    view.jump_to_offset(off, false, cx);
+                }
+                crate::core::offset_link::OffsetLinkTarget::Range(range) => {
+                    view.jump_to_range(range, cx);
+                }
+            });
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn on_action_insert_active_offset_link(&mut self, _: &crate::actions::InsertActiveOffsetLink, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor_view) = self.effective_editor_view(cx).or_else(|| self.any_editor_view(cx)) else {
+            window.push_notification(crate::ui::notification::warning("No open binary editor to link offset from"), cx);
+            return;
+        };
+
+        let link_text = {
+            let ed_view = editor_view.read(cx);
+            let editor = ed_view.editor().read(cx);
+            let doc = editor.document.read().expect("document read lock");
+            let total = doc.buffer.len();
+            if let Some(range) = editor.cursor.selection_range(total) {
+                if range.len() > 1 {
+                    crate::core::offset_link::format_offset_markdown(range.start, Some(range.len()), total)
+                } else {
+                    crate::core::offset_link::format_offset_markdown(range.start, None, total)
+                }
+            } else {
+                let cursor = editor.cursor.offset.min(total);
+                crate::core::offset_link::format_offset_markdown(cursor, None, total)
+            }
+        };
+
+        if let Some(scratchpad) = self.any_scratchpad(cx) {
+            scratchpad.update(cx, |sp, cx| {
+                sp.insert_text(&link_text, window, cx);
+            });
+            window.push_notification(crate::ui::notification::info(format!("Inserted offset link: {link_text}")), cx);
+        } else {
+            window.push_notification(crate::ui::notification::warning("No open scratchpad to insert link into"), cx);
         }
     }
 

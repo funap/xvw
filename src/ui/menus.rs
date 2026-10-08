@@ -209,6 +209,7 @@ fn build_edit_menu() -> MenuDef {
                     MenuItemDef::action_with_condition("as C++ Array", crate::actions::CopyAsCppArray, |s| s.can_copy),
                     MenuItemDef::action_with_condition("as Rust Array", crate::actions::CopyAsRustArray, |s| s.can_copy),
                     MenuItemDef::action_with_condition("as JSON Array", crate::actions::CopyAsJsonArray, |s| s.can_copy),
+                    MenuItemDef::action_with_condition("as Offset Link", crate::actions::CopyAsOffsetLink, |s| s.can_copy),
                 ],
             ),
             MenuItemDef::action_with_condition("Select All", crate::actions::SelectAll, |s| s.has_doc),
@@ -443,6 +444,7 @@ fn build_scratch_menu() -> MenuDef {
             MenuItemDef::separator(),
             MenuItemDef::action("Reveal in File Manager", crate::actions::RevealScratchesInExplorer),
             MenuItemDef::separator(),
+            MenuItemDef::action_with_condition("Insert Offset Link", crate::actions::InsertActiveOffsetLink, |s| s.has_scratch),
             MenuItemDef::action_with_condition("Export Scratchpad As...", crate::actions::ExportScratchpadAs, |s| s.has_scratch),
             MenuItemDef::action_with_condition("Delete Current Scratchpad", crate::actions::DeleteCurrentScratchpad, |s| s.has_scratch),
         ],
@@ -508,6 +510,24 @@ mod tests {
         assert!(has_new);
         assert!(has_open);
         assert!(has_recent);
+
+        let link_item = scratch_menu
+            .items
+            .iter()
+            .find(|item| matches!(item, MenuItemDef::Action { label, .. } if label.as_ref() == "Insert Offset Link"))
+            .expect("Insert Offset Link item found");
+        if let MenuItemDef::Action { is_enabled: Some(cond), .. } = link_item {
+            assert!(cond(&MenuEditorState {
+                has_scratch: true,
+                ..Default::default()
+            }));
+            assert!(!cond(&MenuEditorState {
+                has_scratch: false,
+                ..Default::default()
+            }));
+        } else {
+            panic!("Insert Offset Link item must have condition");
+        }
 
         let export_item = scratch_menu
             .items
@@ -626,7 +646,7 @@ mod tests {
             })
             .expect("Copy As submenu found");
 
-        assert_eq!(copy_as_submenu.len(), 10);
+        assert_eq!(copy_as_submenu.len(), 11);
         for item in copy_as_submenu {
             match item {
                 MenuItemDef::Action { is_enabled: Some(f), .. } => {

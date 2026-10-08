@@ -116,6 +116,22 @@ pub fn init(cx: &mut App) {
             workspace.on_action_delete_current_scratchpad(&crate::actions::DeleteCurrentScratchpad, window, cx);
         });
     });
+    cx.on_action::<crate::actions::NavigateToOffsetLink>(|action, cx| {
+        let action = action.clone();
+        defer_in_active_workspace(cx, move |workspace, window, cx| {
+            workspace.on_action_navigate_to_offset_link(&action, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::InsertActiveOffsetLink>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_insert_active_offset_link(&crate::actions::InsertActiveOffsetLink, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::CopyAsOffsetLink>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_copy_as_offset_link(&crate::actions::CopyAsOffsetLink, window, cx);
+        });
+    });
     cx.on_action::<crate::actions::FillSelection>(|_, cx| {
         defer_in_active_workspace(cx, |workspace, window, cx| {
             workspace.on_action_fill_selection(window, cx);
@@ -464,10 +480,86 @@ impl Workspace {
         self.pane_tree.read(cx).active_tab_as::<Entity<EditorView>>(cx)
     }
 
+    /// Finds any open EditorView across all pane groups, preferring the active group.
+    pub fn any_editor_view(&self, cx: &App) -> Option<Entity<EditorView>> {
+        if let Some(view) = self.active_editor_view(cx) {
+            return Some(view);
+        }
+        for group in self.pane_tree.read(cx).all_groups() {
+            if let Some(view) = group.read(cx).active_tab_as::<Entity<EditorView>>() {
+                return Some(view);
+            }
+        }
+        for group in self.pane_tree.read(cx).all_groups() {
+            for tab in &group.read(cx).tabs {
+                if let Some(view) = tab.content.downcast::<Entity<EditorView>>() {
+                    return Some(view.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Finds and optionally switches to an open EditorView across all pane groups.
+    pub fn find_or_activate_editor_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<EditorView>> {
+        if let Some(view) = self.active_editor_view(cx) {
+            return Some(view);
+        }
+        for group in self.pane_tree.read(cx).all_groups() {
+            if let Some(view) = group.read(cx).active_tab_as::<Entity<EditorView>>() {
+                return Some(view);
+            }
+        }
+        let mut target = None;
+        for group in self.pane_tree.read(cx).all_groups() {
+            let tabs = &group.read(cx).tabs;
+            for (idx, tab) in tabs.iter().enumerate() {
+                if let Some(view) = tab.content.downcast::<Entity<EditorView>>() {
+                    target = Some((group.clone(), idx, view.clone()));
+                    break;
+                }
+            }
+            if target.is_some() {
+                break;
+            }
+        }
+
+        if let Some((group, idx, view)) = target {
+            group.update(cx, |g, cx| {
+                g.activate_tab(idx, window, cx);
+            });
+            self.sync_active_editor(window, cx);
+            cx.notify();
+            Some(view)
+        } else {
+            None
+        }
+    }
+
     pub fn active_scratchpad(&self, cx: &App) -> Option<Entity<crate::ui::views::scratchpad_view::ScratchpadView>> {
         self.pane_tree
             .read(cx)
             .active_tab_as::<Entity<crate::ui::views::scratchpad_view::ScratchpadView>>(cx)
+    }
+
+    /// Finds any open ScratchpadView across all pane groups, preferring the active group.
+    pub fn any_scratchpad(&self, cx: &App) -> Option<Entity<crate::ui::views::scratchpad_view::ScratchpadView>> {
+        if let Some(sp) = self.active_scratchpad(cx) {
+            return Some(sp);
+        }
+        for group in self.pane_tree.read(cx).all_groups() {
+            if let Some(sp) = group.read(cx).active_tab_as::<Entity<crate::ui::views::scratchpad_view::ScratchpadView>>() {
+                return Some(sp);
+            }
+        }
+        for group in self.pane_tree.read(cx).all_groups() {
+            for tab in &group.read(cx).tabs {
+                if let Some(sp) = tab.content.downcast::<Entity<crate::ui::views::scratchpad_view::ScratchpadView>>() {
+                    return Some(sp);
+                }
+            }
+        }
+        None
     }
 
     pub fn all_open_scratchpads(&self, cx: &App) -> Vec<Entity<crate::ui::views::scratchpad_view::ScratchpadView>> {
@@ -1033,6 +1125,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_action_reveal_scratches_in_explorer))
             .on_action(cx.listener(Self::on_action_export_scratchpad_as))
             .on_action(cx.listener(Self::on_action_delete_current_scratchpad))
+            .on_action(cx.listener(Self::on_action_navigate_to_offset_link))
+            .on_action(cx.listener(Self::on_action_insert_active_offset_link))
             .on_action(cx.listener(Self::on_action_open_file))
             .on_action(cx.listener(Self::on_action_save))
             .on_action(cx.listener(Self::on_action_save_as))
@@ -1059,6 +1153,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_action_copy_as_binary))
             .on_action(cx.listener(Self::on_action_copy_as_rust_array))
             .on_action(cx.listener(Self::on_action_copy_as_json_array))
+            .on_action(cx.listener(Self::on_action_copy_as_offset_link))
             .on_action(cx.listener(Self::on_action_bookmark_red))
             .on_action(cx.listener(Self::on_action_bookmark_orange))
             .on_action(cx.listener(Self::on_action_bookmark_yellow))
