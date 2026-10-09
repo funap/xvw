@@ -6,6 +6,8 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     dock::{Panel, PanelControl, PanelEvent},
     input::{self, Editor, EditorState, Input, InputState},
+    menu::DropdownMenu as _,
+    resizable::{h_resizable, resizable_panel},
     text::{FrontmatterPlugin, MarkdownExtensions, RangeHighlight, RenderedText, SelectionFormat, TextView, TextViewState},
 };
 use gpui_kit::prelude::*;
@@ -75,6 +77,17 @@ pub fn find_case_insensitive_matches(text: &str, query: &str) -> Vec<Range<usize
     }
 
     matches
+}
+
+/// Pure helper calculating line count, word count, and character count for a text buffer.
+pub fn calculate_text_stats(text: &str) -> (usize, usize, usize) {
+    if text.is_empty() {
+        return (0, 0, 0);
+    }
+    let lines = text.lines().count().max(1);
+    let words = text.split_whitespace().count();
+    let chars = text.chars().count();
+    (lines, words, chars)
 }
 
 pub struct ScratchpadView {
@@ -204,6 +217,27 @@ impl ScratchpadView {
     pub fn new_with_content(id: usize, content: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let file_path = crate::service::ScratchService::scratch_file_path(id).unwrap_or_else(|| PathBuf::from(format!("scratch_{id}.md")));
         Self::new_with_file(id, file_path, content, window, cx)
+    }
+
+    /// Loads a new scratchpad file into the active view, saving any unsaved changes first.
+    pub fn load_file(&mut self, id: usize, file_path: PathBuf, content: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_sync();
+        self.id = id;
+        self.file_path = file_path;
+        self.title = crate::service::ScratchService::extract_title(&content).unwrap_or_else(|| format!("Scratchpad {id}"));
+        self.cached_content = content.clone();
+        self.is_dirty = false;
+        self.debounce_task = None;
+        self.editor.update(cx, |ed, cx| {
+            ed.set_value(content.clone(), window, cx);
+        });
+        self.text_view_state.update(cx, |tv, cx| {
+            tv.set_text(&content, cx);
+        });
+        if self.is_search_open {
+            self.update_search(cx);
+        }
+        cx.notify();
     }
 
     #[allow(dead_code)]
@@ -535,90 +569,159 @@ impl Render for ScratchpadView {
         let theme = cx.theme();
         let mode = self.mode;
 
-        let filename_badge = self
-            .file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|name| format!("({name})"))
-            .unwrap_or_default();
+        let filename_str = self.file_path.file_name().and_then(|n| n.to_str()).unwrap_or("scratch.md").to_string();
+
+        let title_str = self.title.clone();
+
+        let switcher = Button::new("scratchpad-switcher")
+            .ghost()
+            .xsmall()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .child(Icon::new(IconName::FileText).size_3p5().text_color(theme.muted_foreground))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_semibold()
+                            .text_color(theme.foreground)
+                            .max_w(px(140.0))
+                            .truncate()
+                            .child(title_str),
+                    )
+                    .child(
+                        div()
+                            .px_1()
+                            .py_0p5()
+                            .rounded_md()
+                            .bg(theme.accent.opacity(0.4))
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(filename_str),
+                    )
+                    .child(Icon::new(IconName::ChevronDown).size_3().text_color(theme.muted_foreground)),
+            )
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
+                let recent = crate::service::ScratchService::list_scratches();
+                let mut menu = menu.menu_with_icon("New Scratchpad", IconName::Plus, Box::new(crate::actions::NewScratchpad));
+                menu = menu.separator();
+                if recent.is_empty() {
+                    menu = menu.menu_with_icon("No Saved Scratches", IconName::FileText, Box::new(crate::actions::NewScratchpad));
+                } else {
+                    for entry in recent.into_iter().take(15) {
+                        let label = if entry.title != entry.filename {
+                            format!("{} ({})", entry.title, entry.filename)
+                        } else {
+                            entry.title
+                        };
+                        menu = menu.menu(label, Box::new(crate::actions::OpenScratchpadFile { path: entry.path }));
+                    }
+                }
+                menu = menu.separator();
+                menu.menu_with_icon(
+                    "Reveal in File Manager",
+                    IconName::FolderSearch,
+                    Box::new(crate::actions::RevealScratchesInExplorer),
+                )
+                .menu_with_icon(
+                    "Export Scratchpad As...",
+                    IconName::HardDriveDownload,
+                    Box::new(crate::actions::ExportScratchpadAs),
+                )
+                .menu_with_icon("Delete Current Scratchpad", IconName::Delete, Box::new(crate::actions::DeleteCurrentScratchpad))
+            });
+
+        let mode_controls = div()
+            .flex()
+            .items_center()
+            .rounded_md()
+            .bg(theme.accent.opacity(0.2))
+            .p_0p5()
+            .gap_0p5()
+            .child(
+                Button::new("mode-edit")
+                    .icon(IconName::PenLine)
+                    .tooltip("Edit (Markdown source)")
+                    .xsmall()
+                    .when(mode == ScratchpadMode::Edit, |btn| btn.primary())
+                    .when(mode != ScratchpadMode::Edit, |btn| btn.ghost())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_mode(ScratchpadMode::Edit, cx);
+                    })),
+            )
+            .child(
+                Button::new("mode-split")
+                    .icon(IconName::Split)
+                    .tooltip("Split (Editor & Preview)")
+                    .xsmall()
+                    .when(mode == ScratchpadMode::Split, |btn| btn.primary())
+                    .when(mode != ScratchpadMode::Split, |btn| btn.ghost())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_mode(ScratchpadMode::Split, cx);
+                    })),
+            )
+            .child(
+                Button::new("mode-preview")
+                    .icon(IconName::Eye)
+                    .tooltip("Preview (Rendered document)")
+                    .xsmall()
+                    .when(mode == ScratchpadMode::Preview, |btn| btn.primary())
+                    .when(mode != ScratchpadMode::Preview, |btn| btn.ghost())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_mode(ScratchpadMode::Preview, cx);
+                    })),
+            );
+
+        let action_controls = div()
+            .flex()
+            .items_center()
+            .gap_0p5()
+            .child(
+                Button::new("insert-offset-link")
+                    .icon(IconName::ExternalLink)
+                    .tooltip("Insert offset link from active binary editor")
+                    .ghost()
+                    .xsmall()
+                    .on_click(cx.listener(|_this, _, window, cx| {
+                        window.dispatch_action(Box::new(crate::actions::InsertActiveOffsetLink), cx);
+                    })),
+            )
+            .child(
+                Button::new("toggle-search")
+                    .icon(IconName::Search)
+                    .tooltip("Search in note (Cmd/Ctrl+F)")
+                    .ghost()
+                    .xsmall()
+                    .when(self.is_search_open, |btn| btn.primary())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_search(window, cx);
+                    })),
+            )
+            .child(
+                Button::new("close-scratchpad")
+                    .icon(IconName::Close)
+                    .tooltip("Close Scratchpad")
+                    .ghost()
+                    .xsmall()
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(Box::new(crate::actions::ToggleRightPanel), cx);
+                    })),
+            );
 
         let toolbar = div()
             .flex()
             .flex_row()
             .items_center()
             .justify_between()
-            .px_3()
-            .py_1p5()
+            .px_2()
+            .py_1()
             .border_b_1()
             .border_color(theme.border)
             .bg(theme.muted)
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .child(Icon::new(IconName::FileText).size_4().text_color(theme.muted_foreground))
-                    .child(div().text_sm().font_semibold().text_color(theme.foreground).child(self.title.clone()))
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(filename_badge)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        Button::new("insert-offset-link")
-                            .icon(IconName::ExternalLink)
-                            .label("Link Offset")
-                            .tooltip("Insert offset link from active binary editor")
-                            .ghost()
-                            .on_click(cx.listener(|_this, _, window, cx| {
-                                window.dispatch_action(Box::new(crate::actions::InsertActiveOffsetLink), cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("toggle-search")
-                            .icon(IconName::Search)
-                            .tooltip("Search in note")
-                            .when(self.is_search_open, |btn| btn.primary())
-                            .when(!self.is_search_open, |btn| btn.ghost())
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_search(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("mode-split")
-                            .icon(IconName::Split)
-                            .label("Split")
-                            .when(mode == ScratchpadMode::Split, |btn| btn.primary())
-                            .when(mode != ScratchpadMode::Split, |btn| btn.ghost())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.set_mode(ScratchpadMode::Split, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("mode-edit")
-                            .icon(IconName::PenLine)
-                            .label("Edit")
-                            .when(mode == ScratchpadMode::Edit, |btn| btn.primary())
-                            .when(mode != ScratchpadMode::Edit, |btn| btn.ghost())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.set_mode(ScratchpadMode::Edit, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("mode-preview")
-                            .icon(IconName::Eye)
-                            .label("Preview")
-                            .when(mode == ScratchpadMode::Preview, |btn| btn.primary())
-                            .when(mode != ScratchpadMode::Preview, |btn| btn.ghost())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.set_mode(ScratchpadMode::Preview, cx);
-                            })),
-                    ),
-            );
+            .child(switcher)
+            .child(div().flex().items_center().gap_1().child(mode_controls).child(action_controls));
 
         let search_bar = if self.is_search_open {
             let query = self.search_input.read(cx).value();
@@ -689,32 +792,35 @@ impl Render for ScratchpadView {
 
         let content_view: AnyElement = match mode {
             ScratchpadMode::Split => div()
-                .flex()
-                .flex_row()
                 .flex_1()
                 .size_full()
                 .min_w_0()
                 .min_h_0()
                 .overflow_hidden()
                 .child(
-                    div()
-                        .flex_1()
-                        .h_full()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .border_r_1()
-                        .border_color(theme.border)
-                        .child(Editor::new(&self.editor).size_full().bordered(false)),
-                )
-                .child(
-                    div()
-                        .id("scratchpad_split_preview")
-                        .flex_1()
-                        .h_full()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .p_4()
-                        .child(self.render_text_view()),
+                    h_resizable("scratchpad-split")
+                        .child(
+                            resizable_panel().size(px(200.)).child(
+                                div()
+                                    .size_full()
+                                    .min_w_0()
+                                    .min_h_0()
+                                    .overflow_hidden()
+                                    .child(Editor::new(&self.editor).size_full().bordered(false)),
+                            ),
+                        )
+                        .child(
+                            resizable_panel().child(
+                                div()
+                                    .id("scratchpad_split_preview")
+                                    .size_full()
+                                    .min_w_0()
+                                    .min_h_0()
+                                    .overflow_hidden()
+                                    .p_4()
+                                    .child(self.render_text_view()),
+                            ),
+                        ),
                 )
                 .into_any_element(),
             ScratchpadMode::Edit => div()
@@ -736,6 +842,48 @@ impl Render for ScratchpadView {
                 .child(self.render_text_view())
                 .into_any_element(),
         };
+
+        let (lines, words, chars) = calculate_text_stats(&self.cached_content);
+        let footer = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .px_2p5()
+            .py_1()
+            .border_t_1()
+            .border_color(theme.border)
+            .bg(theme.muted)
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .child(div().child(format!("{lines} lines")))
+                    .child(div().w_px().h_3().bg(theme.border))
+                    .child(div().child(format!("{words} words")))
+                    .child(div().w_px().h_3().bg(theme.border))
+                    .child(div().child(format!("{chars} chars"))),
+            )
+            .child(div().flex().items_center().gap_1().child(if self.is_dirty {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_color(theme.muted_foreground)
+                    .child(Icon::new(IconName::LoaderCircle).size_3())
+                    .child("Saving...")
+            } else {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .text_color(theme.muted_foreground)
+                    .child(Icon::new(IconName::Check).size_3())
+                    .child("Saved")
+            }));
 
         div()
             .flex()
@@ -763,6 +911,7 @@ impl Render for ScratchpadView {
             .child(toolbar)
             .children(search_bar)
             .child(content_view)
+            .child(footer)
     }
 }
 
@@ -974,5 +1123,15 @@ mod tests {
         let url = "xvw://goto/0x200?len=32";
         let target = parse_offset_link(url).expect("link must parse");
         assert_eq!(target, OffsetLinkTarget::Range(0x200..0x220));
+    }
+
+    #[test]
+    fn test_calculate_text_stats() {
+        use super::calculate_text_stats;
+
+        assert_eq!(calculate_text_stats(""), (0, 0, 0));
+        assert_eq!(calculate_text_stats("Hello world"), (1, 2, 11));
+        assert_eq!(calculate_text_stats("Line 1\nLine 2\nLine 3"), (3, 6, 20));
+        assert_eq!(calculate_text_stats("# Title\n\n- item 1\n- item 2"), (4, 8, 26));
     }
 }

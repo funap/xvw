@@ -59,6 +59,19 @@ impl Render for AppTitleBar {
                     cx.stop_propagation();
                 })
                 .child(
+                    Button::new("toggle-scratchpad-panel")
+                        .ghost()
+                        .icon(IconName::PanelRight)
+                        .tooltip("Toggle Scratchpad (Right Panel)")
+                        .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        })
+                        .on_click(cx.listener(|_, _, window, cx| {
+                            window.dispatch_action(Box::new(crate::actions::ToggleRightPanel), cx);
+                        })),
+                )
+                .child(
                     Button::new("settings")
                         .ghost()
                         .icon(IconName::Settings)

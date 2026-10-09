@@ -131,6 +131,9 @@ pub struct ToggleSyncScroll;
 #[derive(Clone, PartialEq, Action)]
 pub struct ToggleLeftPanel;
 
+#[derive(Clone, PartialEq, Debug, Action)]
+pub struct ToggleRightPanel;
+
 #[derive(Clone, PartialEq, Action)]
 pub struct OpenSettings;
 

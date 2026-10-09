@@ -38,6 +38,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(primary_key!("s"), crate::actions::Save, None),
         // Panels & Views
         KeyBinding::new(primary_key!("b"), crate::actions::ToggleLeftPanel, None),
+        KeyBinding::new(alt_primary_key!("b"), crate::actions::ToggleRightPanel, None),
         KeyBinding::new(primary_key!("shift-f"), crate::actions::ToggleSearchPanel, None),
         // Tab switching
         KeyBinding::new("ctrl-tab", crate::actions::ActivateNextTab, None),

@@ -736,17 +736,15 @@ impl Workspace {
 
     pub(crate) fn on_action_new_scratchpad(&mut self, _: &crate::actions::NewScratchpad, window: &mut Window, cx: &mut Context<Self>) {
         use crate::service::ScratchService;
-        use crate::ui::views::scratchpad_view::{DEFAULT_SCRATCHPAD_CONTENT, ScratchpadView};
+        use crate::ui::views::scratchpad_view::DEFAULT_SCRATCHPAD_CONTENT;
 
-        let open_ids: Vec<usize> = self.all_open_scratchpads(cx).iter().map(|s| s.read(cx).id()).collect();
+        let open_ids = vec![self.scratchpad_panel.read(cx).id()];
         let id = ScratchService::next_available_id(&open_ids);
         let path = ScratchService::scratch_file_path(id).unwrap_or_else(|| PathBuf::from(format!("scratch_{id}.md")));
-        let scratchpad_view = cx.new(|cx| ScratchpadView::new_with_file(id, path, DEFAULT_SCRATCHPAD_CONTENT.to_string(), window, cx));
-        let content = TabContent::new(scratchpad_view);
-        self.pane_tree.update(cx, |tree, cx| {
-            tree.open_tab(content, window, cx);
+        self.scratchpad_panel.update(cx, |sp, cx| {
+            sp.load_file(id, path, DEFAULT_SCRATCHPAD_CONTENT.to_string(), window, cx);
         });
-        self.sync_active_editor(window, cx);
+        self.set_right_panel_visible(true, window, cx);
         cx.notify();
     }
 
@@ -760,7 +758,7 @@ impl Workspace {
 
         let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
 
-        // Check if already open
+        // Check if already open in central pane tree
         for group in self.pane_tree.read(cx).all_groups() {
             let g = group.read(cx);
             for (tab_ix, tab) in g.tabs.iter().enumerate() {
@@ -784,16 +782,14 @@ impl Workspace {
 
         let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let id = ScratchService::extract_id_from_filename(filename).unwrap_or_else(|| {
-            let open_ids: Vec<usize> = self.all_open_scratchpads(cx).iter().map(|s| s.read(cx).id()).collect();
+            let open_ids = vec![self.scratchpad_panel.read(cx).id()];
             ScratchService::next_available_id(&open_ids)
         });
         let content = ScratchService::load_scratch(&path).unwrap_or_else(|_| DEFAULT_SCRATCHPAD_CONTENT.to_string());
-        let scratchpad_view = cx.new(|cx| ScratchpadView::new_with_file(id, path, content, window, cx));
-        let tab_content = TabContent::new(scratchpad_view);
-        self.pane_tree.update(cx, |tree, cx| {
-            tree.open_tab(tab_content, window, cx);
+        self.scratchpad_panel.update(cx, |sp, cx| {
+            sp.load_file(id, path, content, window, cx);
         });
-        self.sync_active_editor(window, cx);
+        self.set_right_panel_visible(true, window, cx);
         cx.notify();
     }
 
@@ -855,6 +851,7 @@ impl Workspace {
         };
 
         if let Some(scratchpad) = self.any_scratchpad(cx) {
+            self.set_right_panel_visible(true, window, cx);
             scratchpad.update(cx, |sp, cx| {
                 sp.insert_text(&link_text, window, cx);
             });
@@ -870,6 +867,10 @@ impl Workspace {
 
     pub(crate) fn on_action_toggle_left_panel(&mut self, _: &ToggleLeftPanel, window: &mut Window, cx: &mut Context<Self>) {
         self.set_left_panel_visible(!self.is_left_panel_visible, window, cx);
+    }
+
+    pub(crate) fn on_action_toggle_right_panel(&mut self, _: &crate::actions::ToggleRightPanel, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_right_panel_visible(!self.is_right_panel_visible, window, cx);
     }
 
     pub(crate) fn on_action_toggle_search_panel(&mut self, _: &crate::actions::ToggleSearchPanel, window: &mut Window, cx: &mut Context<Self>) {

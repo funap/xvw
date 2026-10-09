@@ -13,7 +13,7 @@ use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
-use gpui_kit::component::{Root, WindowExt};
+use gpui_kit::component::{ActiveTheme, Root, WindowExt};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -39,6 +39,8 @@ pub struct Workspace {
     pub recent_definition_history: crate::core::structure::DefinitionHistory,
     pub recent_file_history: crate::core::structure::FileHistory,
     pub is_left_panel_visible: bool,
+    pub scratchpad_panel: Entity<crate::ui::views::scratchpad_view::ScratchpadView>,
+    pub is_right_panel_visible: bool,
     pub new_file_modal: Option<Entity<crate::ui::dialogs::new_file_modal::NewFileModal>>,
     pub fill_selection_modal: Option<Entity<crate::ui::dialogs::fill_selection_modal::FillSelectionModal>>,
     pub untitled_count: usize,
@@ -83,6 +85,12 @@ pub fn init(cx: &mut App) {
     cx.on_action::<crate::actions::NewEmptyFile>(|_, cx| {
         defer_in_active_workspace(cx, |workspace, window, cx| {
             workspace.on_action_new_empty_file(&crate::actions::NewEmptyFile, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::ToggleRightPanel>(|action, cx| {
+        let action = action.clone();
+        defer_in_active_workspace(cx, move |workspace, window, cx| {
+            workspace.on_action_toggle_right_panel(&action, window, cx);
         });
     });
     cx.on_action::<crate::actions::NewScratchpad>(|_, cx| {
@@ -445,6 +453,18 @@ impl Workspace {
         let recent_history = cx.global::<crate::settings::RecentHistoryState>().clone();
         let recent_definition_paths = recent_history.definitions.paths().to_vec();
         let recent_file_entries = recent_history.files.entries().to_vec();
+        let scratchpad_panel = cx.new(|cx| {
+            let recent = crate::service::ScratchService::list_scratches();
+            if let Some(entry) = recent.first() {
+                let content = crate::service::ScratchService::load_scratch(&entry.path)
+                    .unwrap_or_else(|_| crate::ui::views::scratchpad_view::DEFAULT_SCRATCHPAD_CONTENT.to_string());
+                let id = entry.id.unwrap_or(1);
+                crate::ui::views::scratchpad_view::ScratchpadView::new_with_file(id, entry.path.clone(), content, window, cx)
+            } else {
+                crate::ui::views::scratchpad_view::ScratchpadView::new(1, window, cx)
+            }
+        });
+
         let workspace = Self {
             pane_tree,
             title_bar,
@@ -454,6 +474,8 @@ impl Workspace {
             recent_definition_history: recent_history.definitions,
             recent_file_history: recent_history.files,
             is_left_panel_visible: true,
+            scratchpad_panel,
+            is_right_panel_visible: false,
             new_file_modal: None,
             fill_selection_modal: None,
             untitled_count: 0,
@@ -537,6 +559,9 @@ impl Workspace {
     }
 
     pub fn active_scratchpad(&self, cx: &App) -> Option<Entity<crate::ui::views::scratchpad_view::ScratchpadView>> {
+        if self.is_right_panel_visible {
+            return Some(self.scratchpad_panel.clone());
+        }
         self.pane_tree
             .read(cx)
             .active_tab_as::<Entity<crate::ui::views::scratchpad_view::ScratchpadView>>(cx)
@@ -559,17 +584,24 @@ impl Workspace {
                 }
             }
         }
-        None
+        Some(self.scratchpad_panel.clone())
     }
 
+    #[allow(dead_code)]
     pub fn all_open_scratchpads(&self, cx: &App) -> Vec<Entity<crate::ui::views::scratchpad_view::ScratchpadView>> {
         let mut scratches = Vec::new();
+        if self.is_right_panel_visible {
+            scratches.push(self.scratchpad_panel.clone());
+        }
         for group in self.pane_tree.read(cx).all_groups() {
             for tab in &group.read(cx).tabs {
                 if let Some(sp) = tab.content.downcast::<Entity<crate::ui::views::scratchpad_view::ScratchpadView>>() {
                     scratches.push(sp);
                 }
             }
+        }
+        if scratches.is_empty() {
+            scratches.push(self.scratchpad_panel.clone());
         }
         scratches
     }
@@ -739,6 +771,19 @@ impl Workspace {
         }
 
         self.sync_activity_bar(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn set_right_panel_visible(&mut self, visible: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.is_right_panel_visible = visible;
+
+        if visible {
+            let focus_handle = self.scratchpad_panel.read(cx).focus_handle(cx);
+            focus_handle.focus(window, cx);
+        } else {
+            self.focus_handle.focus(window, cx);
+        }
+
         cx.notify();
     }
 
@@ -1115,8 +1160,10 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
         div()
             .id("workspace")
+            .on_action(cx.listener(Self::on_action_toggle_right_panel))
             .on_action(cx.listener(Self::on_action_new_file))
             .on_action(cx.listener(Self::on_action_new_empty_file))
             .on_action(cx.listener(Self::on_action_new_scratchpad))
@@ -1277,6 +1324,18 @@ impl Render for Workspace {
                                 )
                                 .child(
                                     resizable_panel().child(div().relative().size_full().min_w_0().min_h_0().overflow_hidden().child(self.pane_tree.clone())),
+                                )
+                                .child(
+                                    resizable_panel().visible(self.is_right_panel_visible).size(px(340.)).child(
+                                        div()
+                                            .size_full()
+                                            .min_w_0()
+                                            .min_h_0()
+                                            .overflow_hidden()
+                                            .border_l_1()
+                                            .border_color(theme.border)
+                                            .child(self.scratchpad_panel.clone()),
+                                    ),
                                 ),
                         ),
                     ),

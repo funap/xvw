@@ -98,3 +98,9 @@ fn test_resolve_effective_item_returns_none_when_no_editors_open() {
     let res = resolve_effective_item::<usize>(None, None, |_| false, || None);
     assert_eq!(res, None);
 }
+
+#[test]
+fn test_toggle_right_panel_action_exists() {
+    let action = crate::actions::ToggleRightPanel;
+    assert_eq!(action, crate::actions::ToggleRightPanel);
+}

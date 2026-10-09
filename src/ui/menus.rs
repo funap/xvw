@@ -308,6 +308,7 @@ fn build_view_menu() -> MenuDef {
         name: "View",
         items: vec![
             MenuItemDef::action("Toggle Left Panel", crate::actions::ToggleLeftPanel),
+            MenuItemDef::action("Toggle Right Panel (Scratchpad)", crate::actions::ToggleRightPanel),
             MenuItemDef::submenu(
                 "Panels",
                 vec![
@@ -438,6 +439,8 @@ fn build_scratch_menu() -> MenuDef {
     MenuDef {
         name: "Scratch",
         items: vec![
+            MenuItemDef::action("Toggle Scratchpad Panel", crate::actions::ToggleRightPanel),
+            MenuItemDef::separator(),
             MenuItemDef::action("New Scratchpad", crate::actions::NewScratchpad),
             MenuItemDef::action("Open Scratchpad...", crate::actions::OpenScratchpadDialog),
             MenuItemDef::submenu("Recent Scratches", recent_items),

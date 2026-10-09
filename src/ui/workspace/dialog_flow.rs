@@ -1148,12 +1148,30 @@ impl Workspace {
             window
                 .update(|window, cx| {
                     workspace.update(cx, |this, cx| {
+                        let is_right_panel = this.is_right_panel_visible && this.active_scratchpad(cx) == Some(this.scratchpad_panel.clone());
                         if let Some(sp) = this.active_scratchpad(cx) {
                             sp.update(cx, |s, _| s.mark_deleted());
                         }
-                        this.pane_tree.update(cx, |tree, cx| {
-                            tree.close_active_tab(window, cx);
-                        });
+                        if is_right_panel {
+                            let recent = crate::service::ScratchService::list_scratches();
+                            if let Some(entry) = recent.first() {
+                                let content = crate::service::ScratchService::load_scratch(&entry.path)
+                                    .unwrap_or_else(|_| crate::ui::views::scratchpad_view::DEFAULT_SCRATCHPAD_CONTENT.to_string());
+                                let id = entry.id.unwrap_or(1);
+                                this.scratchpad_panel.update(cx, |s, cx| {
+                                    s.load_file(id, entry.path.clone(), content, window, cx);
+                                });
+                            } else {
+                                let path = crate::service::ScratchService::scratch_file_path(1).unwrap_or_else(|| std::path::PathBuf::from("scratch_1.md"));
+                                this.scratchpad_panel.update(cx, |s, cx| {
+                                    s.load_file(1, path, crate::ui::views::scratchpad_view::DEFAULT_SCRATCHPAD_CONTENT.to_string(), window, cx);
+                                });
+                            }
+                        } else {
+                            this.pane_tree.update(cx, |tree, cx| {
+                                tree.close_active_tab(window, cx);
+                            });
+                        }
                         this.sync_active_editor(window, cx);
                         window.push_notification(notification::info(format!("Deleted scratchpad \"{title}\"")), cx);
                         cx.notify();
