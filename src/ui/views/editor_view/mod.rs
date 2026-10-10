@@ -12,9 +12,9 @@ use gpui_kit::{
 use crate::actions::{
     AddCustomBreak, BookmarkBlue, BookmarkCyan, BookmarkGreen, BookmarkOrange, BookmarkPink, BookmarkPurple, BookmarkRed, BookmarkYellow, ClearAllBookmarks,
     ClearAllCustomBreaks, ClearBookmark, Copy, CopyAsBase64, CopyAsBinary, CopyAsCppArray, CopyAsEscapedString, CopyAsHexDump, CopyAsHexSpaces,
-    CopyAsHexStream, CopyAsJsonArray, CopyAsOffsetLink, CopyAsPrintableText, CopyAsRustArray, Cut, FocusHexView, GoToBeginning, GoToEnd, HideAllBookmarks,
-    JoinLine, Paste, Redo, RemoveCustomBreakBackward, RemoveCustomBreakForward, SearchNext, SearchPrev, SelectAll, ShowAllBookmarks, ToggleGoToAddress,
-    ToggleHideUnbookmarked, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
+    CopyAsHexStream, CopyAsJsonArray, CopyAsPrintableText, CopyAsRustArray, Cut, FocusHexView, GoToBeginning, GoToEnd, HideAllBookmarks, JoinLine, Paste, Redo,
+    RemoveCustomBreakBackward, RemoveCustomBreakForward, SearchNext, SearchPrev, SelectAll, ShowAllBookmarks, ToggleGoToAddress, ToggleHideUnbookmarked,
+    ToggleSearch, Undo, UnfoldBookmarkAtCursor,
 };
 use crate::app_state::{AppState, InsertModeState};
 use crate::core::editor::Editor;
@@ -698,10 +698,6 @@ impl EditorView {
 
     pub fn unfold_bookmark_at_cursor(&mut self, action: &UnfoldBookmarkAtCursor, window: &mut Window, cx: &mut Context<Self>) {
         self.hex_view.update(cx, |hv, cx| hv.unfold_bookmark_at_cursor(action, window, cx));
-    }
-
-    pub fn copy_as_offset_link(&mut self, action: &CopyAsOffsetLink, window: &mut Window, cx: &mut Context<Self>) {
-        self.hex_view.update(cx, |hv, cx| hv.copy_as_offset_link(action, window, cx));
     }
 
     /// Jumps the editor to a specific byte offset, optionally extending current selection.

@@ -26,10 +26,10 @@ pub use types::*;
 use crate::actions::{
     AddCustomBreak, BookmarkBlue, BookmarkCyan, BookmarkGreen, BookmarkOrange, BookmarkPink, BookmarkPurple, BookmarkRed, BookmarkYellow, ClearAllBookmarks,
     ClearAllCustomBreaks, ClearBookmark, ClearStructureDefinition, Copy, CopyAsBase64, CopyAsBinary, CopyAsCppArray, CopyAsEscapedString, CopyAsHexDump,
-    CopyAsHexSpaces, CopyAsHexStream, CopyAsJsonArray, CopyAsOffsetLink, CopyAsPrintableText, CopyAsRustArray, Cut, ExportBookmarks, FillSelection,
-    HideAllBookmarks, ImportBookmarks, JoinLine, LoadStructureDefinition, Paste, Redo, RemoveCustomBreakBackward, RemoveCustomBreakForward, SearchNext,
-    SearchPrev, SelectAll as AppSelectAll, SetByteOrderBigEndian, SetByteOrderLittleEndian, SetGroupSize1, SetGroupSize2, SetGroupSize4, SetGroupSize8,
-    SetRadixBin, SetRadixDec, SetRadixHex, SetRadixOct, ShowAllBookmarks, ShowBookmarksTab, ShowOnlyBookmarkBlue, ShowOnlyBookmarkCyan, ShowOnlyBookmarkGreen,
+    CopyAsHexSpaces, CopyAsHexStream, CopyAsJsonArray, CopyAsPrintableText, CopyAsRustArray, Cut, ExportBookmarks, FillSelection, HideAllBookmarks,
+    ImportBookmarks, JoinLine, LoadStructureDefinition, Paste, Redo, RemoveCustomBreakBackward, RemoveCustomBreakForward, SearchNext, SearchPrev,
+    SelectAll as AppSelectAll, SetByteOrderBigEndian, SetByteOrderLittleEndian, SetGroupSize1, SetGroupSize2, SetGroupSize4, SetGroupSize8, SetRadixBin,
+    SetRadixDec, SetRadixHex, SetRadixOct, ShowAllBookmarks, ShowBookmarksTab, ShowOnlyBookmarkBlue, ShowOnlyBookmarkCyan, ShowOnlyBookmarkGreen,
     ShowOnlyBookmarkOrange, ShowOnlyBookmarkPink, ShowOnlyBookmarkPurple, ShowOnlyBookmarkRed, ShowOnlyBookmarkYellow, ShowStructureTab, ToggleBookmarkBlue,
     ToggleBookmarkCyan, ToggleBookmarkGreen, ToggleBookmarkOrange, ToggleBookmarkPink, ToggleBookmarkPurple, ToggleBookmarkRed, ToggleBookmarkYellow,
     ToggleByteOrder, ToggleHideUnbookmarked, ToggleInlineStructureView, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
@@ -2016,11 +2016,6 @@ impl HexView {
         self.copy_formatted(CopyFormat::JsonArray, window, cx);
     }
 
-    pub fn copy_as_offset_link(&mut self, _: &CopyAsOffsetLink, window: &mut Window, cx: &mut Context<Self>) {
-        let range = self.copy_range(cx);
-        ClipboardHandler::copy_offset_link(&self.editor, &self.focus_handle, range, window, cx);
-    }
-
     fn apply_bookmark(&mut self, color: Option<Hsla>, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_handle.focus(window, cx);
         self.editor.update(cx, |editor, cx| {
@@ -3115,7 +3110,6 @@ impl Render for HexView {
             .on_action(cx.listener(Self::copy_as_binary))
             .on_action(cx.listener(Self::copy_as_rust_array))
             .on_action(cx.listener(Self::copy_as_json_array))
-            .on_action(cx.listener(Self::copy_as_offset_link))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::undo))
@@ -3695,7 +3689,6 @@ impl Render for HexView {
                                 .menu_with_disabled("as Binary", Box::new(CopyAsBinary), !can_copy)
                                 .menu_with_disabled("as Rust Array", Box::new(CopyAsRustArray), !can_copy)
                                 .menu_with_disabled("as JSON Array", Box::new(CopyAsJsonArray), !can_copy)
-                                .menu_with_disabled("as Offset Link", Box::new(CopyAsOffsetLink), !can_copy)
                         })
                         .menu_with_disabled("Paste", Box::new(Paste), is_read_only)
                         .menu_with_disabled("Fill Selection...", Box::new(FillSelection), is_read_only || !has_selection)
@@ -3704,7 +3697,6 @@ impl Render for HexView {
                             menu.menu_with_icon("as Offset", IconName::Hash, Box::new(crate::actions::InsertActiveOffsetOnly))
                                 .menu_with_icon("as Hex Bytes", IconName::Binary, Box::new(crate::actions::InsertActiveHexBytes))
                                 .menu_with_icon("as Text / String", IconName::FileText, Box::new(crate::actions::InsertActiveText))
-                                .menu_with_icon("as Offset Link", IconName::ExternalLink, Box::new(crate::actions::InsertActiveOffsetLink))
                         })
                         .separator()
                         .submenu("Bookmark", window, cx, move |menu, _window, _cx| {

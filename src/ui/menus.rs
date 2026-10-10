@@ -214,7 +214,6 @@ fn build_edit_menu() -> MenuDef {
                     MenuItemDef::action_with_condition("as C++ Array", crate::actions::CopyAsCppArray, |s| s.can_copy),
                     MenuItemDef::action_with_condition("as Rust Array", crate::actions::CopyAsRustArray, |s| s.can_copy),
                     MenuItemDef::action_with_condition("as JSON Array", crate::actions::CopyAsJsonArray, |s| s.can_copy),
-                    MenuItemDef::action_with_condition("as Offset Link", crate::actions::CopyAsOffsetLink, |s| s.can_copy),
                 ],
             ),
             MenuItemDef::action_with_condition("Select All", crate::actions::SelectAll, |s| s.has_doc),
@@ -458,7 +457,6 @@ fn build_scratch_menu() -> MenuDef {
                     MenuItemDef::action_with_condition("as Offset", crate::actions::InsertActiveOffsetOnly, |s| s.has_scratch),
                     MenuItemDef::action_with_condition("as Hex Bytes", crate::actions::InsertActiveHexBytes, |s| s.has_scratch),
                     MenuItemDef::action_with_condition("as Text / String", crate::actions::InsertActiveText, |s| s.has_scratch),
-                    MenuItemDef::action_with_condition("as Offset Link", crate::actions::InsertActiveOffsetLink, |s| s.has_scratch),
                 ],
             ),
             MenuItemDef::action_with_condition("Export Scratchpad As...", crate::actions::ExportScratchpadAs, |s| s.has_scratch),
@@ -535,12 +533,12 @@ mod tests {
                 _ => None,
             })
             .expect("Insert into Scratchpad submenu found");
-        assert_eq!(insert_submenu.len(), 4);
-        let link_item = insert_submenu
+        assert_eq!(insert_submenu.len(), 3);
+        let offset_item = insert_submenu
             .iter()
-            .find(|item| matches!(item, MenuItemDef::Action { label, .. } if label.as_ref() == "as Offset Link"))
-            .expect("as Offset Link item found");
-        if let MenuItemDef::Action { is_enabled: Some(cond), .. } = link_item {
+            .find(|item| matches!(item, MenuItemDef::Action { label, .. } if label.as_ref() == "as Offset"))
+            .expect("as Offset item found");
+        if let MenuItemDef::Action { is_enabled: Some(cond), .. } = offset_item {
             assert!(cond(&MenuEditorState {
                 has_scratch: true,
                 ..Default::default()
@@ -550,7 +548,7 @@ mod tests {
                 ..Default::default()
             }));
         } else {
-            panic!("as Offset Link item must have condition");
+            panic!("as Offset item must have condition");
         }
 
         let export_item = scratch_menu
@@ -670,7 +668,7 @@ mod tests {
             })
             .expect("Copy As submenu found");
 
-        assert_eq!(copy_as_submenu.len(), 11);
+        assert_eq!(copy_as_submenu.len(), 10);
         for item in copy_as_submenu {
             match item {
                 MenuItemDef::Action { is_enabled: Some(f), .. } => {

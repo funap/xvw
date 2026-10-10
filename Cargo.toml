@@ -29,6 +29,7 @@ image = "0.25.10"
 sha2 = "0.11.0"
 encoding_rs = "0.8.42"
 getrandom = "0.4.3"
+lsp-types = "0.97.0"
 
 [profile.test]
 # Keep test builds fast enough for IDE test-runner timeouts. The tests cover

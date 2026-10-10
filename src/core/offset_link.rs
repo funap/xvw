@@ -79,54 +79,15 @@ fn parse_range_spec(s: &str) -> Option<OffsetLinkTarget> {
     parse_number(s).map(OffsetLinkTarget::Offset)
 }
 
-/// Parses a potential offset link URL or shorthand expression into an `OffsetLinkTarget`.
+/// Parses a potential offset or shorthand expression into an `OffsetLinkTarget`.
 ///
 /// Supported formats:
-/// - `xvw://goto/0x1040`
-/// - `xvw://goto/0x1040?len=64` or `?len=0x40`
-/// - `xvw://goto/0x1000?end=0x1040`
-/// - `xvw://goto/0x1000..0x1040`
-/// - `xvw://offset/0x1040`
-/// - `xvw://range/0x1000..0x1040`
-/// - Shorthands: `#0x1040`, `@0x1040`, `0x1040`, `0x1000..0x1040`
+/// - Shorthands: `#0x1040`, `@0x1040`
+/// - Direct hex: `0x1040`, `0x1000..0x1040`, `0x1000-0x1040`, `0x1000..+64`
 pub fn parse_offset_link(url: &str) -> Option<OffsetLinkTarget> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return None;
-    }
-
-    // Standard xvw URI scheme: `xvw://...`
-    if let Some(rest) = trimmed.strip_prefix("xvw://") {
-        let (path_part, query_part) = match rest.find('?') {
-            Some(idx) => (&rest[..idx], Some(&rest[idx + 1..])),
-            None => (rest, None),
-        };
-
-        let target_str = path_part
-            .strip_prefix("goto/")
-            .or_else(|| path_part.strip_prefix("offset/"))
-            .or_else(|| path_part.strip_prefix("range/"))
-            .unwrap_or(path_part)
-            .trim_matches('/');
-
-        // Check query parameters: `len=...` or `end=...`
-        if let Some(query) = query_part {
-            let start = parse_number(target_str)?;
-            for param in query.split('&') {
-                if let Some(len_str) = param.strip_prefix("len=")
-                    && let Some(len) = parse_number(len_str)
-                {
-                    return Some(OffsetLinkTarget::Range(start..start + len));
-                } else if let Some(end_str) = param.strip_prefix("end=")
-                    && let Some(end) = parse_number(end_str)
-                {
-                    let r = if end >= start { start..end } else { end..start };
-                    return Some(OffsetLinkTarget::Range(r));
-                }
-            }
-        }
-
-        return parse_range_spec(target_str);
     }
 
     // Shorthand with leading `#` or `@`
@@ -142,24 +103,67 @@ pub fn parse_offset_link(url: &str) -> Option<OffsetLinkTarget> {
     None
 }
 
-/// Computes the URL for an offset or range link.
-pub fn format_offset_url(offset: usize, length: Option<usize>) -> String {
-    match length {
-        Some(len) if len > 0 => format!("xvw://goto/0x{:X}?len={}", offset, len),
-        _ => format!("xvw://goto/0x{:X}", offset),
-    }
+fn is_token_delimiter(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '[' | ']' | '(' | ')' | '{' | '}' | '<' | '>' | ',' | ';')
 }
 
-/// Formats a byte size into a concise human-readable string (e.g. `64 B`, `1.2 KiB`).
-fn format_size_human(bytes: usize) -> String {
-    if bytes < 1024 {
-        format!("{bytes} B")
-    } else if bytes < 1024 * 1024 {
-        let kib = bytes as f64 / 1024.0;
-        format!("{kib:.1} KiB")
+/// Finds an offset-like token at `offset` in `text`, returning its byte range and parsed target.
+pub fn find_offset_token_at(text: &str, offset: usize) -> Option<(std::ops::Range<usize>, OffsetLinkTarget)> {
+    if text.is_empty() || offset > text.len() {
+        return None;
+    }
+
+    let safe_offset = text.floor_char_boundary(offset.min(text.len()));
+
+    let line_start = text[..safe_offset].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+    let line_end = text[safe_offset..].find('\n').map(|idx| safe_offset + idx).unwrap_or(text.len());
+    let line = &text[line_start..line_end];
+    let rel_offset = safe_offset - line_start;
+
+    // Scan backwards from rel_offset for delimiter
+    let mut start = rel_offset;
+    for (i, c) in line[..rel_offset].char_indices().rev() {
+        if is_token_delimiter(c) {
+            start = i + c.len_utf8();
+            break;
+        }
+        start = i;
+    }
+
+    // Scan forwards from rel_offset for delimiter
+    let mut end = rel_offset;
+    for (i, c) in line[rel_offset..].char_indices() {
+        if is_token_delimiter(c) {
+            end = rel_offset + i;
+            break;
+        }
+        end = rel_offset + i + c.len_utf8();
+    }
+
+    if start >= end {
+        return None;
+    }
+
+    let mut raw_token = &line[start..end];
+
+    // Trim trailing punctuation if not part of range syntax (e.g. "0x1000." -> "0x1000", but keep "0x1000..0x2000")
+    if raw_token.ends_with('.') && !raw_token.ends_with("..") {
+        let trimmed_len = raw_token.trim_end_matches('.').len();
+        end = start + trimmed_len;
+        raw_token = &line[start..end];
+    }
+
+    let trimmed_len = raw_token.trim_end_matches([':', ',']).len();
+    end = start + trimmed_len;
+    raw_token = &line[start..end];
+
+    let target = parse_offset_link(raw_token)?;
+    let abs_range = (line_start + start)..(line_start + end);
+
+    if abs_range.contains(&safe_offset) || (safe_offset == abs_range.end && safe_offset > 0) {
+        Some((abs_range, target))
     } else {
-        let mib = bytes as f64 / (1024.0 * 1024.0);
-        format!("{mib:.1} MiB")
+        None
     }
 }
 
@@ -172,29 +176,6 @@ fn hex_padding(total_size: usize, offset: usize) -> usize {
         8
     } else {
         4
-    }
-}
-
-/// Formats a full Markdown link string for an offset or range.
-///
-/// Examples:
-/// - Single offset: `[0x00001040](xvw://goto/0x1040)`
-/// - Range: `[0x00001000..0x0000103F (64 B)](xvw://goto/0x1000?len=64)`
-pub fn format_offset_markdown(offset: usize, length: Option<usize>, total_size: usize) -> String {
-    let pad = hex_padding(total_size, offset);
-    let url = format_offset_url(offset, length);
-
-    match length {
-        Some(len) if len > 1 => {
-            let end_inclusive = offset + len - 1;
-            let size_str = format_size_human(len);
-            let label = format!("0x{:0width$X}..0x{:0width$X} ({})", offset, end_inclusive, size_str, width = pad);
-            format!("[{label}]({url})")
-        }
-        _ => {
-            let label = format!("0x{:0width$X}", offset, width = pad);
-            format!("[{label}]({url})")
-        }
     }
 }
 
@@ -223,22 +204,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_offset_link_goto() {
-        assert_eq!(parse_offset_link("xvw://goto/0x1040"), Some(OffsetLinkTarget::Offset(0x1040)));
-        assert_eq!(parse_offset_link("xvw://goto/4160"), Some(OffsetLinkTarget::Offset(4160)));
-        assert_eq!(parse_offset_link("xvw://goto/0x1000?len=64"), Some(OffsetLinkTarget::Range(0x1000..0x1040)));
-        assert_eq!(parse_offset_link("xvw://goto/0x1000?len=0x40"), Some(OffsetLinkTarget::Range(0x1000..0x1040)));
-        assert_eq!(parse_offset_link("xvw://goto/0x1000?end=0x1080"), Some(OffsetLinkTarget::Range(0x1000..0x1080)));
-        assert_eq!(parse_offset_link("xvw://goto/0x1000..0x1080"), Some(OffsetLinkTarget::Range(0x1000..0x1080)));
-    }
-
-    #[test]
-    fn test_parse_offset_link_other_schemes() {
-        assert_eq!(parse_offset_link("xvw://offset/0x200"), Some(OffsetLinkTarget::Offset(0x200)));
-        assert_eq!(parse_offset_link("xvw://range/0x100..0x200"), Some(OffsetLinkTarget::Range(0x100..0x200)));
-    }
-
-    #[test]
     fn test_parse_offset_link_shorthands() {
         assert_eq!(parse_offset_link("#0x1040"), Some(OffsetLinkTarget::Offset(0x1040)));
         assert_eq!(parse_offset_link("@0x1040"), Some(OffsetLinkTarget::Offset(0x1040)));
@@ -251,21 +216,35 @@ mod tests {
     fn test_parse_offset_link_invalid() {
         assert_eq!(parse_offset_link(""), None);
         assert_eq!(parse_offset_link("https://google.com"), None);
+        assert_eq!(parse_offset_link("xvw://goto/0x1040"), None);
         assert_eq!(parse_offset_link("not-an-address"), None);
     }
 
     #[test]
-    fn test_format_offset_url() {
-        assert_eq!(format_offset_url(0x1040, None), "xvw://goto/0x1040");
-        assert_eq!(format_offset_url(0x1000, Some(64)), "xvw://goto/0x1000?len=64");
-    }
+    fn test_find_offset_token_at() {
+        let text = "Found header at 0x1000 and range 0x2000..0x2040.\nCheck @0x300 here.";
 
-    #[test]
-    fn test_format_offset_markdown() {
-        let md_single = format_offset_markdown(0x1040, None, 0x10000);
-        assert_eq!(md_single, "[0x00001040](xvw://goto/0x1040)");
+        // 0x1000 is at index 16..22
+        let at_16 = find_offset_token_at(text, 16).expect("should find 0x1000 at start");
+        assert_eq!(at_16.0, 16..22);
+        assert_eq!(at_16.1, OffsetLinkTarget::Offset(0x1000));
 
-        let md_range = format_offset_markdown(0x1000, Some(64), 0x10000);
-        assert_eq!(md_range, "[0x00001000..0x0000103F (64 B)](xvw://goto/0x1000?len=64)");
+        let at_19 = find_offset_token_at(text, 19).expect("should find 0x1000 in middle");
+        assert_eq!(at_19.0, 16..22);
+        assert_eq!(at_19.1, OffsetLinkTarget::Offset(0x1000));
+
+        // 0x2000..0x2040 is at index 33..47
+        let at_35 = find_offset_token_at(text, 35).expect("should find range");
+        assert_eq!(at_35.0, 33..47);
+        assert_eq!(at_35.1, OffsetLinkTarget::Range(0x2000..0x2040));
+
+        // @0x300 is at index 55..61
+        let at_56 = find_offset_token_at(text, 56).expect("should find @0x300");
+        assert_eq!(at_56.0, 55..61);
+        assert_eq!(at_56.1, OffsetLinkTarget::Offset(0x300));
+
+        // Regular word should return None
+        assert_eq!(find_offset_token_at(text, 0), None);
+        assert_eq!(find_offset_token_at(text, 7), None);
     }
 }

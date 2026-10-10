@@ -168,17 +168,13 @@ pub struct ExportScratchpadAs;
 #[derive(Clone, PartialEq, Action)]
 pub struct DeleteCurrentScratchpad;
 
-/// Navigates the active binary editor to the offset or range parsed from the URL.
+/// Navigates the active binary editor to the offset or range.
 #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
 #[action(namespace = app)]
 #[serde(deny_unknown_fields)]
-pub struct NavigateToOffsetLink {
-    pub url: String,
+pub struct NavigateToOffset {
+    pub target: String,
 }
-
-/// Inserts an offset hyperlink of the active editor into the active scratchpad.
-#[derive(Clone, PartialEq, Action)]
-pub struct InsertActiveOffsetLink;
 
 /// Inserts the raw offset text (without link format) of the active editor into the active scratchpad.
 #[derive(Clone, PartialEq, Action)]
@@ -518,9 +514,6 @@ pub struct CopyAsRustArray;
 
 #[derive(Clone, PartialEq, Action)]
 pub struct CopyAsJsonArray;
-
-#[derive(Clone, PartialEq, Action)]
-pub struct CopyAsOffsetLink;
 
 #[derive(Clone, PartialEq, Action)]
 pub struct BookmarkRed;

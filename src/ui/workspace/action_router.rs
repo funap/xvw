@@ -13,7 +13,6 @@ use crate::ui::workspace::activity_bar::Activity;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScratchpadInsertMode {
-    OffsetLink,
     OffsetOnly,
     Text,
     HexBytes,
@@ -160,14 +159,6 @@ impl Workspace {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.copy_as_json_array(action, window, cx);
-            });
-        }
-    }
-
-    pub(crate) fn on_action_copy_as_offset_link(&mut self, action: &CopyAsOffsetLink, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(panel) = self.active_editor_view(cx) {
-            panel.update(cx, |panel, cx| {
-                panel.copy_as_offset_link(action, window, cx);
             });
         }
     }
@@ -829,8 +820,8 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn on_action_navigate_to_offset_link(&mut self, action: &crate::actions::NavigateToOffsetLink, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(target) = crate::core::offset_link::parse_offset_link(&action.url) else {
+    pub(crate) fn on_action_navigate_to_offset(&mut self, action: &crate::actions::NavigateToOffset, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = crate::core::offset_link::parse_offset_link(&action.target) else {
             return;
         };
 
@@ -847,10 +838,6 @@ impl Workspace {
             });
             cx.notify();
         }
-    }
-
-    pub(crate) fn on_action_insert_active_offset_link(&mut self, _: &crate::actions::InsertActiveOffsetLink, window: &mut Window, cx: &mut Context<Self>) {
-        self.insert_active_editor_content_into_scratchpad(ScratchpadInsertMode::OffsetLink, window, cx);
     }
 
     pub(crate) fn on_action_insert_active_offset_only(&mut self, _: &crate::actions::InsertActiveOffsetOnly, window: &mut Window, cx: &mut Context<Self>) {
@@ -880,18 +867,6 @@ impl Workspace {
             let cursor = editor.cursor.offset.min(total);
 
             let (text, label) = match mode {
-                ScratchpadInsertMode::OffsetLink => {
-                    let formatted = if let Some(range) = selection {
-                        if range.len() > 1 {
-                            crate::core::offset_link::format_offset_markdown(range.start, Some(range.len()), total)
-                        } else {
-                            crate::core::offset_link::format_offset_markdown(range.start, None, total)
-                        }
-                    } else {
-                        crate::core::offset_link::format_offset_markdown(cursor, None, total)
-                    };
-                    (formatted, "offset link")
-                }
                 ScratchpadInsertMode::OffsetOnly => {
                     let formatted = if let Some(range) = selection {
                         if range.len() > 1 {

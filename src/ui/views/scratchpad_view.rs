@@ -1,17 +1,51 @@
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use gpui_kit::component::{
     ActiveTheme, Icon, Sizable, StyledExt,
     button::{Button, ButtonVariants},
     dock::{Panel, PanelControl, PanelEvent},
-    input::{self, Editor, EditorState, Input, InputState},
+    input::{self, DefinitionProvider, Editor, EditorState, Input, InputState, Rope, RopeExt as _},
     menu::{ContextMenuExt as _, DropdownMenu as _},
     resizable::{h_resizable, resizable_panel},
     text::{FrontmatterPlugin, MarkdownExtensions, RangeHighlight, RenderedText, SelectionFormat, TextView, TextViewState},
 };
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+
+/// Definition provider that recognizes offset-like tokens (e.g. `0x1040`, `0x1000..0x1040`, `@0x300`, `#0x300`)
+/// and provides Go-to-Definition navigation and Cmd-hover pointing hand cursor.
+struct ScratchpadOffsetDefinitionProvider;
+
+impl DefinitionProvider for ScratchpadOffsetDefinitionProvider {
+    fn definitions(&self, text: &Rope, offset: usize, _window: &mut Window, _cx: &mut App) -> Task<anyhow::Result<Vec<lsp_types::LocationLink>>> {
+        let full_text = text.to_string();
+        if let Some((range, target)) = crate::core::offset_link::find_offset_token_at(&full_text, offset) {
+            let start_pos = text.offset_to_position(range.start);
+            let end_pos = text.offset_to_position(range.end);
+            let lsp_range = lsp_types::Range::new(start_pos, end_pos);
+
+            let target_str = match target {
+                crate::core::offset_link::OffsetLinkTarget::Offset(off) => format!("0x{:X}", off),
+                crate::core::offset_link::OffsetLinkTarget::Range(r) => format!("0x{:X}..0x{:X}", r.start, r.end),
+            };
+
+            let uri_str = format!("offset:{}", target_str);
+            if let Ok(target_uri) = uri_str.parse::<lsp_types::Uri>() {
+                let link = lsp_types::LocationLink {
+                    origin_selection_range: Some(lsp_range),
+                    target_uri,
+                    target_range: lsp_range,
+                    target_selection_range: lsp_range,
+                };
+                return Task::ready(Ok(vec![link]));
+            }
+        }
+
+        Task::ready(Ok(vec![]))
+    }
+}
 
 use crate::ui::icon::IconName;
 
@@ -128,6 +162,17 @@ impl ScratchpadView {
         let editor = cx.new(|cx| {
             let mut state = EditorState::new(window, cx).language("markdown");
             state.set_value(content.clone(), window, cx);
+            state.lsp_mut().definition_provider = Some(Rc::new(ScratchpadOffsetDefinitionProvider));
+            state.lsp_mut().show_document = Some(Rc::new(|params, window, cx| {
+                let uri_str = params.uri.to_string();
+                let target = uri_str.strip_prefix("offset:").unwrap_or(&uri_str);
+                if crate::core::offset_link::parse_offset_link(target).is_some() {
+                    window.dispatch_action(Box::new(crate::actions::NavigateToOffset { target: target.to_string() }), cx);
+                    true
+                } else {
+                    false
+                }
+            }));
             state
         });
         let text_view_state = cx.new(|cx| TextViewState::markdown(&content, cx));
@@ -564,7 +609,7 @@ impl ScratchpadView {
             })
             .on_link_click(|url, _event, window, cx| {
                 if crate::core::offset_link::parse_offset_link(url.as_ref()).is_some() {
-                    window.dispatch_action(Box::new(crate::actions::NavigateToOffsetLink { url: url.to_string() }), cx);
+                    window.dispatch_action(Box::new(crate::actions::NavigateToOffset { target: url.to_string() }), cx);
                 } else {
                     cx.open_url(url.as_ref());
                 }
@@ -923,7 +968,6 @@ impl Render for ScratchpadView {
                                     menu.menu_with_icon("as Offset", IconName::Hash, Box::new(crate::actions::InsertActiveOffsetOnly))
                                         .menu_with_icon("as Hex Bytes", IconName::Binary, Box::new(crate::actions::InsertActiveHexBytes))
                                         .menu_with_icon("as Text / String", IconName::FileText, Box::new(crate::actions::InsertActiveText))
-                                        .menu_with_icon("as Offset Link", IconName::ExternalLink, Box::new(crate::actions::InsertActiveOffsetLink))
                                 })
                                 .separator()
                                 .menu_with_icon("Find in Note...", IconName::Search, Box::new(crate::actions::ToggleSearch))
@@ -1139,17 +1183,14 @@ mod tests {
     }
 
     #[test]
-    fn test_scratchpad_offset_link_integration() {
-        use crate::core::offset_link::{OffsetLinkTarget, format_offset_markdown, parse_offset_link};
+    fn test_scratchpad_offset_token_navigation_target() {
+        use crate::core::offset_link::{OffsetLinkTarget, parse_offset_link};
 
-        // 1. Generate link markdown from an editor offset
-        let md = format_offset_markdown(0x200, Some(32), 0x1000);
-        assert_eq!(md, "[0x0200..0x021F (32 B)](xvw://goto/0x200?len=32)");
-
-        // 2. Extract link URL target and verify it parses back to the expected range
-        let url = "xvw://goto/0x200?len=32";
-        let target = parse_offset_link(url).expect("link must parse");
+        let target = parse_offset_link("0x200..0x220").expect("range must parse");
         assert_eq!(target, OffsetLinkTarget::Range(0x200..0x220));
+
+        let single = parse_offset_link("0x1040").expect("offset must parse");
+        assert_eq!(single, OffsetLinkTarget::Offset(0x1040));
     }
 
     #[test]
@@ -1160,5 +1201,27 @@ mod tests {
         assert_eq!(calculate_text_stats("Hello world"), (1, 2, 11));
         assert_eq!(calculate_text_stats("Line 1\nLine 2\nLine 3"), (3, 6, 20));
         assert_eq!(calculate_text_stats("# Title\n\n- item 1\n- item 2"), (4, 8, 26));
+    }
+
+    #[test]
+    fn test_scratchpad_offset_token_detection_in_editor_text() {
+        use crate::core::offset_link::{OffsetLinkTarget, find_offset_token_at};
+
+        let note = "# Analysis Note\n\n- Header: 0x00001000\n- Payload: 0x2000..0x2080\n- Marker: @0x300";
+
+        // Hover over 0x00001000
+        let off1 = note.find("0x00001000").unwrap() + 2;
+        let token1 = find_offset_token_at(note, off1).expect("must find token");
+        assert_eq!(token1.1, OffsetLinkTarget::Offset(0x1000));
+
+        // Hover over 0x2000..0x2080
+        let off2 = note.find("0x2000..0x2080").unwrap() + 4;
+        let token2 = find_offset_token_at(note, off2).expect("must find range token");
+        assert_eq!(token2.1, OffsetLinkTarget::Range(0x2000..0x2080));
+
+        // Hover over @0x300
+        let off3 = note.find("@0x300").unwrap() + 1;
+        let token3 = find_offset_token_at(note, off3).expect("must find @ token");
+        assert_eq!(token3.1, OffsetLinkTarget::Offset(0x300));
     }
 }

@@ -124,15 +124,10 @@ pub fn init(cx: &mut App) {
             workspace.on_action_delete_current_scratchpad(&crate::actions::DeleteCurrentScratchpad, window, cx);
         });
     });
-    cx.on_action::<crate::actions::NavigateToOffsetLink>(|action, cx| {
+    cx.on_action::<crate::actions::NavigateToOffset>(|action, cx| {
         let action = action.clone();
         defer_in_active_workspace(cx, move |workspace, window, cx| {
-            workspace.on_action_navigate_to_offset_link(&action, window, cx);
-        });
-    });
-    cx.on_action::<crate::actions::InsertActiveOffsetLink>(|_, cx| {
-        defer_in_active_workspace(cx, |workspace, window, cx| {
-            workspace.on_action_insert_active_offset_link(&crate::actions::InsertActiveOffsetLink, window, cx);
+            workspace.on_action_navigate_to_offset(&action, window, cx);
         });
     });
     cx.on_action::<crate::actions::InsertActiveOffsetOnly>(|_, cx| {
@@ -148,11 +143,6 @@ pub fn init(cx: &mut App) {
     cx.on_action::<crate::actions::InsertActiveHexBytes>(|_, cx| {
         defer_in_active_workspace(cx, |workspace, window, cx| {
             workspace.on_action_insert_active_hex_bytes(&crate::actions::InsertActiveHexBytes, window, cx);
-        });
-    });
-    cx.on_action::<crate::actions::CopyAsOffsetLink>(|_, cx| {
-        defer_in_active_workspace(cx, |workspace, window, cx| {
-            workspace.on_action_copy_as_offset_link(&crate::actions::CopyAsOffsetLink, window, cx);
         });
     });
     cx.on_action::<crate::actions::FillSelection>(|_, cx| {
@@ -1187,8 +1177,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_action_reveal_scratches_in_explorer))
             .on_action(cx.listener(Self::on_action_export_scratchpad_as))
             .on_action(cx.listener(Self::on_action_delete_current_scratchpad))
-            .on_action(cx.listener(Self::on_action_navigate_to_offset_link))
-            .on_action(cx.listener(Self::on_action_insert_active_offset_link))
+            .on_action(cx.listener(Self::on_action_navigate_to_offset))
             .on_action(cx.listener(Self::on_action_open_file))
             .on_action(cx.listener(Self::on_action_save))
             .on_action(cx.listener(Self::on_action_save_as))
@@ -1215,7 +1204,6 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_action_copy_as_binary))
             .on_action(cx.listener(Self::on_action_copy_as_rust_array))
             .on_action(cx.listener(Self::on_action_copy_as_json_array))
-            .on_action(cx.listener(Self::on_action_copy_as_offset_link))
             .on_action(cx.listener(Self::on_action_bookmark_red))
             .on_action(cx.listener(Self::on_action_bookmark_orange))
             .on_action(cx.listener(Self::on_action_bookmark_yellow))

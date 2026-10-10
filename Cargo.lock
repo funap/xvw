@@ -8744,6 +8744,7 @@ dependencies = [
  "getrandom 0.4.3",
  "gpui-kit",
  "image",
+ "lsp-types",
  "memmap2",
  "rust-embed",
  "schemars",
