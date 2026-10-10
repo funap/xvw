@@ -249,4 +249,26 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_sequential_scratch_creation_and_title_handling() {
+        let temp_dir = std::env::temp_dir().join(format!("xvw_test_seq_scratch_{}", std::process::id()));
+        let file1 = temp_dir.join("scratch_1.md");
+        let file2 = temp_dir.join("scratch_2.md");
+
+        // Both have the same default title "# Scratchpad"
+        let default_content = "# Scratchpad\n\nNotes";
+        assert!(ScratchService::save_scratch_atomic(&file1, default_content).is_ok());
+        assert!(ScratchService::save_scratch_atomic(&file2, default_content).is_ok());
+
+        assert_eq!(ScratchService::extract_title(default_content), Some("Scratchpad".to_string()));
+        assert_eq!(ScratchService::extract_id_from_filename("scratch_1.md"), Some(1));
+        assert_eq!(ScratchService::extract_id_from_filename("scratch_2.md"), Some(2));
+
+        // When open_ids has [1, 2], next_available_id should be at least 3
+        let next_id = ScratchService::next_available_id(&[1, 2]);
+        assert!(next_id >= 3);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
 }

@@ -154,7 +154,9 @@ impl ScratchpadView {
                     cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
                     if let Some(this) = this.upgrade() {
                         this.update(cx, |this, cx| {
-                            this.save_sync();
+                            if this.save_sync() {
+                                crate::ui::menus::update_application_menus(cx);
+                            }
                             cx.notify();
                         });
                     }
@@ -221,7 +223,9 @@ impl ScratchpadView {
 
     /// Loads a new scratchpad file into the active view, saving any unsaved changes first.
     pub fn load_file(&mut self, id: usize, file_path: PathBuf, content: String, window: &mut Window, cx: &mut Context<Self>) {
-        self.save_sync();
+        if self.save_sync() {
+            crate::ui::menus::update_application_menus(cx);
+        }
         self.id = id;
         self.file_path = file_path;
         self.title = crate::service::ScratchService::extract_title(&content).unwrap_or_else(|| format!("Scratchpad {id}"));
@@ -258,14 +262,16 @@ impl ScratchpadView {
         self.is_dirty
     }
 
-    pub fn save_sync(&mut self) {
+    pub fn save_sync(&mut self) -> bool {
         if !self.is_dirty {
-            return;
+            return false;
         }
         if let Err(e) = crate::service::ScratchService::save_scratch_atomic(&self.file_path, &self.cached_content) {
             eprintln!("Failed to save scratchpad to {}: {}", self.file_path.display(), e);
+            false
         } else {
             self.is_dirty = false;
+            true
         }
     }
 
@@ -317,7 +323,9 @@ impl ScratchpadView {
             cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
             if let Some(this) = this.upgrade() {
                 this.update(cx, |this, cx| {
-                    this.save_sync();
+                    if this.save_sync() {
+                        crate::ui::menus::update_application_menus(cx);
+                    }
                     cx.notify();
                 });
             }

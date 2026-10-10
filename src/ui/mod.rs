@@ -36,5 +36,5 @@ pub fn init(cx: &mut gpui_kit::App) {
     views::scratchpad_view::init(cx);
 
     // Register top application menu bar
-    cx.set_menus(menus::application_menus().iter().map(|menu| menu.to_gpui_menu()));
+    menus::update_application_menus(cx);
 }

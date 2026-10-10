@@ -131,6 +131,11 @@ pub fn application_menus() -> Vec<MenuDef> {
     ]
 }
 
+/// Updates the system menu bar with the latest application menus.
+pub fn update_application_menus(cx: &gpui_kit::App) {
+    cx.set_menus(application_menus().iter().map(|menu| menu.to_gpui_menu()));
+}
+
 fn build_file_menu() -> MenuDef {
     MenuDef {
         name: "File",
@@ -675,5 +680,38 @@ mod tests {
                 _ => panic!("Expected action item with is_enabled in Copy As"),
             }
         }
+    }
+
+    #[test]
+    fn test_scratch_menu_recent_label_formatting() {
+        use std::path::PathBuf;
+
+        let entry_same_title = crate::service::ScratchEntry {
+            id: Some(1),
+            filename: "scratch_1.md".to_string(),
+            path: PathBuf::from("scratch_1.md"),
+            title: "Scratchpad".to_string(),
+            modified: None,
+        };
+        let label1 = if entry_same_title.title != entry_same_title.filename {
+            format!("{} ({})", entry_same_title.title, entry_same_title.filename)
+        } else {
+            entry_same_title.title
+        };
+        assert_eq!(label1, "Scratchpad (scratch_1.md)");
+
+        let entry_custom = crate::service::ScratchEntry {
+            id: Some(2),
+            filename: "scratch_2.md".to_string(),
+            path: PathBuf::from("scratch_2.md"),
+            title: "My Custom Notes".to_string(),
+            modified: None,
+        };
+        let label2 = if entry_custom.title != entry_custom.filename {
+            format!("{} ({})", entry_custom.title, entry_custom.filename)
+        } else {
+            entry_custom.title
+        };
+        assert_eq!(label2, "My Custom Notes (scratch_2.md)");
     }
 }

@@ -1173,6 +1173,7 @@ impl Workspace {
                             });
                         }
                         this.sync_active_editor(window, cx);
+                        crate::ui::menus::update_application_menus(cx);
                         window.push_notification(notification::info(format!("Deleted scratchpad \"{title}\"")), cx);
                         cx.notify();
                     });

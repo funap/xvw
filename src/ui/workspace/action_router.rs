@@ -746,12 +746,26 @@ impl Workspace {
         use crate::service::ScratchService;
         use crate::ui::views::scratchpad_view::DEFAULT_SCRATCHPAD_CONTENT;
 
-        let open_ids = vec![self.scratchpad_panel.read(cx).id()];
-        let id = ScratchService::next_available_id(&open_ids);
-        let path = ScratchService::scratch_file_path(id).unwrap_or_else(|| PathBuf::from(format!("scratch_{id}.md")));
+        let current_path = self.scratchpad_panel.read(cx).file_path().to_path_buf();
+        let (id, path) = if !current_path.exists() {
+            let id = self.scratchpad_panel.read(cx).id();
+            (id, current_path)
+        } else {
+            let open_ids: Vec<usize> = self.all_open_scratchpads(cx).iter().map(|sp| sp.read(cx).id()).collect();
+            let id = ScratchService::next_available_id(&open_ids);
+            let path = ScratchService::scratch_file_path(id).unwrap_or_else(|| PathBuf::from(format!("scratch_{id}.md")));
+            (id, path)
+        };
+
+        // Persist initial scratch file immediately so it appears on disk and in menus
+        if let Err(e) = ScratchService::save_scratch_atomic(&path, DEFAULT_SCRATCHPAD_CONTENT) {
+            eprintln!("Failed to save initial scratchpad to {}: {}", path.display(), e);
+        }
+
         self.scratchpad_panel.update(cx, |sp, cx| {
             sp.load_file(id, path, DEFAULT_SCRATCHPAD_CONTENT.to_string(), window, cx);
         });
+        crate::ui::menus::update_application_menus(cx);
         self.set_right_panel_visible(true, window, cx);
         cx.notify();
     }
