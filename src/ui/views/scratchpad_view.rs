@@ -653,7 +653,7 @@ impl Render for ScratchpadView {
             )
             .child(
                 Button::new("mode-split")
-                    .icon(IconName::Split)
+                    .icon(IconName::SplitPreview)
                     .tooltip("Split (Editor & Preview)")
                     .xsmall()
                     .when(mode == ScratchpadMode::Split, |btn| btn.primary())
