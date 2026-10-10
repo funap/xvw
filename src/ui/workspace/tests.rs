@@ -104,3 +104,25 @@ fn test_toggle_right_panel_action_exists() {
     let action = crate::actions::ToggleRightPanel;
     assert_eq!(action, crate::actions::ToggleRightPanel);
 }
+
+#[test]
+fn test_active_file_name_extraction_from_document_path() {
+    let doc = Document::new(PathBuf::from("/path/to/firmware.bin"), Buffer::new(vec![]));
+    let filename = doc.path().file_name().and_then(|n| n.to_str()).filter(|s| !s.trim().is_empty());
+    assert_eq!(filename, Some("firmware.bin"));
+
+    let content = crate::ui::views::scratchpad_view::default_content_for(filename);
+    assert_eq!(content, "# firmware.bin\n");
+    assert_eq!(crate::service::ScratchService::extract_title(&content), Some("firmware.bin".to_string()));
+}
+
+#[test]
+fn test_active_file_name_extraction_empty_or_none_fallback() {
+    let empty_path = PathBuf::new();
+    let filename = empty_path.file_name().and_then(|n| n.to_str()).filter(|s| !s.trim().is_empty());
+    assert_eq!(filename, None);
+
+    let content = crate::ui::views::scratchpad_view::default_content_for(filename);
+    assert_eq!(content, "# Scratchpad\n");
+    assert_eq!(crate::service::ScratchService::extract_title(&content), Some("Scratchpad".to_string()));
+}

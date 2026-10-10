@@ -678,6 +678,32 @@ impl Workspace {
         let last = self.last_active_editor_view.borrow().as_ref().and_then(|w| w.upgrade());
         resolve_effective_item(current, last, |view| self.is_editor_view_open(view, cx), || self.any_open_editor_view(cx))
     }
+
+    /// Returns the file name of the currently active or effective editor document, if any.
+    pub fn active_file_name(&self, cx: &App) -> Option<String> {
+        let editor = self.effective_editor(cx)?;
+        let doc = editor.read(cx).document.read().ok()?;
+        let path = doc.path();
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.to_string())
+    }
+
+    /// Updates the scratchpad panel to use the active file's name in its heading
+    /// if the scratchpad has not yet been edited or saved to disk.
+    pub(crate) fn update_scratchpad_for_active_file_if_untouched(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.scratchpad_panel.read(cx).is_untouched()
+            && let Some(target_name) = self.active_file_name(cx)
+        {
+            let id = self.scratchpad_panel.read(cx).id();
+            let path = self.scratchpad_panel.read(cx).file_path().to_path_buf();
+            let content = crate::ui::views::scratchpad_view::default_content_for(Some(&target_name));
+            self.scratchpad_panel.update(cx, |sp, cx| {
+                sp.load_file(id, path, content, window, cx);
+            });
+        }
+    }
 }
 
 /// Resolves the effective target item (e.g. Editor or EditorView) for panel inspection and navigation.
@@ -887,6 +913,7 @@ impl Workspace {
         });
 
         self.sync_active_editor(window, cx);
+        self.update_scratchpad_for_active_file_if_untouched(window, cx);
         cx.notify();
     }
 

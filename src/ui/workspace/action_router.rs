@@ -735,7 +735,6 @@ impl Workspace {
 
     pub(crate) fn on_action_new_scratchpad(&mut self, _: &crate::actions::NewScratchpad, window: &mut Window, cx: &mut Context<Self>) {
         use crate::service::ScratchService;
-        use crate::ui::views::scratchpad_view::DEFAULT_SCRATCHPAD_CONTENT;
 
         let current_path = self.scratchpad_panel.read(cx).file_path().to_path_buf();
         let (id, path) = if !current_path.exists() {
@@ -748,13 +747,16 @@ impl Workspace {
             (id, path)
         };
 
+        let active_file_name = self.active_file_name(cx);
+        let content = crate::ui::views::scratchpad_view::default_content_for(active_file_name.as_deref());
+
         // Persist initial scratch file immediately so it appears on disk and in menus
-        if let Err(e) = ScratchService::save_scratch_atomic(&path, DEFAULT_SCRATCHPAD_CONTENT) {
+        if let Err(e) = ScratchService::save_scratch_atomic(&path, &content) {
             eprintln!("Failed to save initial scratchpad to {}: {}", path.display(), e);
         }
 
         self.scratchpad_panel.update(cx, |sp, cx| {
-            sp.load_file(id, path, DEFAULT_SCRATCHPAD_CONTENT.to_string(), window, cx);
+            sp.load_file(id, path, content, window, cx);
         });
         crate::ui::menus::update_application_menus(cx);
         self.set_right_panel_visible(true, window, cx);
@@ -945,6 +947,9 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_toggle_right_panel(&mut self, _: &crate::actions::ToggleRightPanel, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_right_panel_visible {
+            self.update_scratchpad_for_active_file_if_untouched(window, cx);
+        }
         self.set_right_panel_visible(!self.is_right_panel_visible, window, cx);
     }
 

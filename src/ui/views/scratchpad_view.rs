@@ -51,7 +51,17 @@ use crate::ui::icon::IconName;
 
 const CONTEXT: &str = "ScratchpadView";
 const SEARCH_CONTEXT: &str = "ScratchpadSearch";
-pub const DEFAULT_SCRATCHPAD_CONTENT: &str = "# Scratchpad\n\nTake quick notes, draft structures, or record findings here.\n\n## Notes\n- \n";
+pub const DEFAULT_SCRATCHPAD_CONTENT: &str = "# Scratchpad\n";
+
+/// Returns default scratchpad markdown content for the given file name,
+/// or falls back to `# Scratchpad\n` if no file name is provided.
+pub fn default_content_for(file_name: Option<&str>) -> String {
+    if let Some(name) = file_name.map(str::trim).filter(|s| !s.is_empty()) {
+        format!("# {name}\n")
+    } else {
+        DEFAULT_SCRATCHPAD_CONTENT.to_string()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ScratchpadMode {
@@ -146,11 +156,15 @@ pub struct ScratchpadView {
 impl ScratchpadView {
     #[allow(dead_code)]
     pub fn new(id: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_target_file(id, None, window, cx)
+    }
+
+    pub fn new_with_target_file(id: usize, target_file: Option<&str>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let file_path = crate::service::ScratchService::scratch_file_path(id).unwrap_or_else(|| PathBuf::from(format!("scratch_{id}.md")));
         let content = if file_path.exists() {
-            crate::service::ScratchService::load_scratch(&file_path).unwrap_or_else(|_| DEFAULT_SCRATCHPAD_CONTENT.to_string())
+            crate::service::ScratchService::load_scratch(&file_path).unwrap_or_else(|_| default_content_for(target_file))
         } else {
-            DEFAULT_SCRATCHPAD_CONTENT.to_string()
+            default_content_for(target_file)
         };
         Self::new_with_file(id, file_path, content, window, cx)
     }
@@ -305,6 +319,11 @@ impl ScratchpadView {
     #[allow(dead_code)]
     pub fn is_dirty(&self) -> bool {
         self.is_dirty
+    }
+
+    /// Returns true if this scratchpad has not been modified and has not been saved to disk.
+    pub fn is_untouched(&self) -> bool {
+        !self.is_dirty && !self.file_path.exists()
     }
 
     pub fn save_sync(&mut self) -> bool {
@@ -1091,8 +1110,22 @@ mod tests {
 
     #[test]
     fn test_default_scratchpad_content() {
-        assert!(DEFAULT_SCRATCHPAD_CONTENT.contains("# Scratchpad"));
-        assert!(DEFAULT_SCRATCHPAD_CONTENT.contains("## Notes"));
+        assert_eq!(DEFAULT_SCRATCHPAD_CONTENT, "# Scratchpad\n");
+        let heading_count = DEFAULT_SCRATCHPAD_CONTENT.lines().filter(|line| line.trim_start().starts_with('#')).count();
+        assert_eq!(heading_count, 1);
+        assert_eq!(
+            crate::service::ScratchService::extract_title(DEFAULT_SCRATCHPAD_CONTENT),
+            Some("Scratchpad".to_string())
+        );
+
+        assert_eq!(super::default_content_for(Some("sample.bin")), "# sample.bin\n");
+        assert_eq!(
+            crate::service::ScratchService::extract_title(&super::default_content_for(Some("sample.bin"))),
+            Some("sample.bin".to_string())
+        );
+        assert_eq!(super::default_content_for(None), "# Scratchpad\n");
+        assert_eq!(super::default_content_for(Some("")), "# Scratchpad\n");
+        assert_eq!(super::default_content_for(Some("   ")), "# Scratchpad\n");
     }
 
     #[test]
