@@ -1,3 +1,6 @@
+use std::path::PathBuf;
+
+use gpui_kit::component::WindowExt;
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -7,6 +10,13 @@ use crate::core::encoding::Encoding;
 use crate::ui::pane::{SplitDirection, TabContent};
 use crate::ui::panels::left_panel::LeftPanelTab;
 use crate::ui::workspace::activity_bar::Activity;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScratchpadInsertMode {
+    OffsetOnly,
+    Text,
+    HexBytes,
+}
 
 impl Workspace {
     pub(crate) fn on_action_select_all(&mut self, action: &SelectAll, window: &mut Window, cx: &mut Context<Self>) {
@@ -723,12 +733,219 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(crate) fn on_action_new_scratchpad(&mut self, _: &crate::actions::NewScratchpad, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::service::ScratchService;
+        use crate::ui::views::scratchpad_view::DEFAULT_SCRATCHPAD_CONTENT;
+
+        let current_path = self.scratchpad_panel.read(cx).file_path().to_path_buf();
+        let (id, path) = if !current_path.exists() {
+            let id = self.scratchpad_panel.read(cx).id();
+            (id, current_path)
+        } else {
+            let open_ids: Vec<usize> = self.all_open_scratchpads(cx).iter().map(|sp| sp.read(cx).id()).collect();
+            let id = ScratchService::next_available_id(&open_ids);
+            let path = ScratchService::scratch_file_path(id).unwrap_or_else(|| PathBuf::from(format!("scratch_{id}.md")));
+            (id, path)
+        };
+
+        // Persist initial scratch file immediately so it appears on disk and in menus
+        if let Err(e) = ScratchService::save_scratch_atomic(&path, DEFAULT_SCRATCHPAD_CONTENT) {
+            eprintln!("Failed to save initial scratchpad to {}: {}", path.display(), e);
+        }
+
+        self.scratchpad_panel.update(cx, |sp, cx| {
+            sp.load_file(id, path, DEFAULT_SCRATCHPAD_CONTENT.to_string(), window, cx);
+        });
+        crate::ui::menus::update_application_menus(cx);
+        self.set_right_panel_visible(true, window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn on_action_open_scratchpad_file(&mut self, action: &crate::actions::OpenScratchpadFile, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_scratchpad_file(action.path.clone(), window, cx);
+    }
+
+    pub(crate) fn open_scratchpad_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::service::ScratchService;
+        use crate::ui::views::scratchpad_view::{DEFAULT_SCRATCHPAD_CONTENT, ScratchpadView};
+
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+
+        // Check if already open in central pane tree
+        for group in self.pane_tree.read(cx).all_groups() {
+            let g = group.read(cx);
+            for (tab_ix, tab) in g.tabs.iter().enumerate() {
+                if let Some(sp) = tab.content.downcast::<Entity<ScratchpadView>>() {
+                    let sp_path = sp.read(cx).file_path().canonicalize().unwrap_or_else(|_| sp.read(cx).file_path().to_path_buf());
+                    if sp_path == canonical {
+                        let group_id = g.id;
+                        group.update(cx, |g, cx| {
+                            g.activate_tab(tab_ix, window, cx);
+                        });
+                        self.pane_tree.update(cx, |tree, cx| {
+                            tree.set_active_group(group_id, cx);
+                        });
+                        self.sync_active_editor(window, cx);
+                        cx.notify();
+                        return;
+                    }
+                }
+            }
+        }
+
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let id = ScratchService::extract_id_from_filename(filename).unwrap_or_else(|| {
+            let open_ids = vec![self.scratchpad_panel.read(cx).id()];
+            ScratchService::next_available_id(&open_ids)
+        });
+        let content = ScratchService::load_scratch(&path).unwrap_or_else(|_| DEFAULT_SCRATCHPAD_CONTENT.to_string());
+        self.scratchpad_panel.update(cx, |sp, cx| {
+            sp.load_file(id, path, content, window, cx);
+        });
+        self.set_right_panel_visible(true, window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn on_action_reveal_scratches_in_explorer(&mut self, _: &crate::actions::RevealScratchesInExplorer, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(active_scratch) = self.active_scratchpad(cx) {
+            let path = active_scratch.read(cx).file_path().to_path_buf();
+            if path.exists() {
+                reveal_in_file_explorer(&path);
+                return;
+            }
+        }
+
+        if let Ok(dir) = crate::service::ScratchService::ensure_scratches_dir() {
+            reveal_directory_in_explorer(&dir);
+        }
+    }
+
+    pub(crate) fn on_action_navigate_to_offset(&mut self, action: &crate::actions::NavigateToOffset, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = crate::core::offset_link::parse_offset_link(&action.target) else {
+            return;
+        };
+
+        if let Some(editor_view) = self.find_or_activate_editor_view(window, cx) {
+            let focus_handle = editor_view.read(cx).focus_handle(cx);
+            focus_handle.focus(window, cx);
+            editor_view.update(cx, |view, cx| match target {
+                crate::core::offset_link::OffsetLinkTarget::Offset(off) => {
+                    view.jump_to_offset(off, false, cx);
+                }
+                crate::core::offset_link::OffsetLinkTarget::Range(range) => {
+                    view.jump_to_range(range, cx);
+                }
+            });
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn on_action_insert_active_offset_only(&mut self, _: &crate::actions::InsertActiveOffsetOnly, window: &mut Window, cx: &mut Context<Self>) {
+        self.insert_active_editor_content_into_scratchpad(ScratchpadInsertMode::OffsetOnly, window, cx);
+    }
+
+    pub(crate) fn on_action_insert_active_text(&mut self, _: &crate::actions::InsertActiveText, window: &mut Window, cx: &mut Context<Self>) {
+        self.insert_active_editor_content_into_scratchpad(ScratchpadInsertMode::Text, window, cx);
+    }
+
+    pub(crate) fn on_action_insert_active_hex_bytes(&mut self, _: &crate::actions::InsertActiveHexBytes, window: &mut Window, cx: &mut Context<Self>) {
+        self.insert_active_editor_content_into_scratchpad(ScratchpadInsertMode::HexBytes, window, cx);
+    }
+
+    pub(crate) fn insert_active_editor_content_into_scratchpad(&mut self, mode: ScratchpadInsertMode, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor_view) = self.effective_editor_view(cx).or_else(|| self.any_editor_view(cx)) else {
+            window.push_notification(crate::ui::notification::warning("No open binary editor to link from"), cx);
+            return;
+        };
+
+        let (inserted_text, label) = {
+            let ed_view = editor_view.read(cx);
+            let editor = ed_view.editor().read(cx);
+            let doc = editor.document.read().expect("document read lock");
+            let total = doc.buffer.len();
+            let selection = editor.cursor.selection_range(total);
+            let cursor = editor.cursor.offset.min(total);
+
+            let (text, label) = match mode {
+                ScratchpadInsertMode::OffsetOnly => {
+                    let formatted = if let Some(range) = selection {
+                        if range.len() > 1 {
+                            crate::core::offset_link::format_offset_plain(range.start, Some(range.len()), total)
+                        } else {
+                            crate::core::offset_link::format_offset_plain(range.start, None, total)
+                        }
+                    } else {
+                        crate::core::offset_link::format_offset_plain(cursor, None, total)
+                    };
+                    (formatted, "offset")
+                }
+                ScratchpadInsertMode::Text => {
+                    let (start, len) = if let Some(range) = selection {
+                        (range.start, range.len())
+                    } else if cursor < total {
+                        (cursor, 1)
+                    } else {
+                        (0, 0)
+                    };
+                    let text = if len == 0 {
+                        String::new()
+                    } else {
+                        let slice = doc.buffer.get_range(start, len);
+                        if let Some(enc_rs) = editor.options.encoding.encoding_rs_ref() {
+                            let (decoded, _, _) = enc_rs.decode(slice);
+                            decoded.into_owned()
+                        } else {
+                            String::from_utf8_lossy(slice).into_owned()
+                        }
+                    };
+                    (text, "text")
+                }
+                ScratchpadInsertMode::HexBytes => {
+                    let (start, len) = if let Some(range) = selection {
+                        (range.start, range.len())
+                    } else if cursor < total {
+                        (cursor, 1)
+                    } else {
+                        (0, 0)
+                    };
+                    let text = if len == 0 {
+                        String::new()
+                    } else {
+                        let slice = doc.buffer.get_range(start, len);
+                        crate::core::format::format_hex_spaces(slice)
+                    };
+                    (text, "hex bytes")
+                }
+            };
+            (text, label)
+        };
+
+        if inserted_text.is_empty() {
+            window.push_notification(crate::ui::notification::warning("No content to insert into Scratchpad"), cx);
+            return;
+        }
+
+        if let Some(scratchpad) = self.any_scratchpad(cx) {
+            self.set_right_panel_visible(true, window, cx);
+            scratchpad.update(cx, |sp, cx| {
+                sp.insert_text(&inserted_text, window, cx);
+            });
+            window.push_notification(crate::ui::notification::info(format!("Inserted {label} into Scratchpad")), cx);
+        } else {
+            window.push_notification(crate::ui::notification::warning("No open scratchpad to insert into"), cx);
+        }
+    }
+
     pub(crate) fn on_action_open_visual_map(&mut self, _: &OpenVisualMap, window: &mut Window, cx: &mut Context<Self>) {
         self.select_activity(Activity::Map, window, cx);
     }
 
     pub(crate) fn on_action_toggle_left_panel(&mut self, _: &ToggleLeftPanel, window: &mut Window, cx: &mut Context<Self>) {
         self.set_left_panel_visible(!self.is_left_panel_visible, window, cx);
+    }
+
+    pub(crate) fn on_action_toggle_right_panel(&mut self, _: &crate::actions::ToggleRightPanel, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_right_panel_visible(!self.is_right_panel_visible, window, cx);
     }
 
     pub(crate) fn on_action_toggle_search_panel(&mut self, _: &crate::actions::ToggleSearchPanel, window: &mut Window, cx: &mut Context<Self>) {
@@ -805,5 +1022,21 @@ fn reveal_in_file_explorer(path: &std::path::Path) {
     {
         let parent = path.parent().unwrap_or(path);
         let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
+    }
+}
+
+/// Reveals a directory in the platform's native file explorer.
+fn reveal_directory_in_explorer(dir: &std::path::Path) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer").arg(dir).spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(dir).spawn();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
     }
 }

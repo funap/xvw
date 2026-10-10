@@ -131,6 +131,9 @@ pub struct ToggleSyncScroll;
 #[derive(Clone, PartialEq, Action)]
 pub struct ToggleLeftPanel;
 
+#[derive(Clone, PartialEq, Debug, Action)]
+pub struct ToggleRightPanel;
+
 #[derive(Clone, PartialEq, Action)]
 pub struct OpenSettings;
 
@@ -142,6 +145,48 @@ pub struct NewFile;
 
 #[derive(Clone, PartialEq, Action)]
 pub struct NewEmptyFile;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct NewScratchpad;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct OpenScratchpadDialog;
+
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[action(namespace = app)]
+#[serde(deny_unknown_fields)]
+pub struct OpenScratchpadFile {
+    pub path: std::path::PathBuf,
+}
+
+#[derive(Clone, PartialEq, Action)]
+pub struct RevealScratchesInExplorer;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct ExportScratchpadAs;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct DeleteCurrentScratchpad;
+
+/// Navigates the active binary editor to the offset or range.
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[action(namespace = app)]
+#[serde(deny_unknown_fields)]
+pub struct NavigateToOffset {
+    pub target: String,
+}
+
+/// Inserts the raw offset text (without link format) of the active editor into the active scratchpad.
+#[derive(Clone, PartialEq, Action)]
+pub struct InsertActiveOffsetOnly;
+
+/// Inserts the decoded string/text of the active editor selection into the active scratchpad.
+#[derive(Clone, PartialEq, Action)]
+pub struct InsertActiveText;
+
+/// Inserts the hex byte representation of the active editor selection into the active scratchpad.
+#[derive(Clone, PartialEq, Action)]
+pub struct InsertActiveHexBytes;
 
 #[derive(Clone, PartialEq, Action)]
 pub struct OpenFileDialog;

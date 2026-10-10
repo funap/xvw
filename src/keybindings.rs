@@ -31,12 +31,14 @@ pub fn init(cx: &mut App) {
     cx.bind_keys([
         // File / Folder dialogs
         KeyBinding::new(primary_key!("n"), crate::actions::NewFile, None),
+        KeyBinding::new(primary_key!("shift-n"), crate::actions::NewScratchpad, None),
         KeyBinding::new(primary_key!("o"), crate::actions::OpenFileDialog, None),
         KeyBinding::new(primary_key!("shift-o"), crate::actions::OpenFolder, None),
         // Save
         KeyBinding::new(primary_key!("s"), crate::actions::Save, None),
         // Panels & Views
         KeyBinding::new(primary_key!("b"), crate::actions::ToggleLeftPanel, None),
+        KeyBinding::new(alt_primary_key!("b"), crate::actions::ToggleRightPanel, None),
         KeyBinding::new(primary_key!("shift-f"), crate::actions::ToggleSearchPanel, None),
         // Tab switching
         KeyBinding::new("ctrl-tab", crate::actions::ActivateNextTab, None),

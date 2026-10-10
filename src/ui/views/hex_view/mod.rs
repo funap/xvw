@@ -41,6 +41,7 @@ use crate::core::format::CopyFormat;
 use crate::core::radix::{ByteGroupSize, DisplayRadix};
 
 use crate::core::structure::{IndexedField, ParseResult};
+use crate::ui::icon::IconName;
 use gpui_kit::component::menu::ContextMenuExt;
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_kit::component::{ActiveTheme, StyledExt, h_flex};
@@ -3691,6 +3692,12 @@ impl Render for HexView {
                         })
                         .menu_with_disabled("Paste", Box::new(Paste), is_read_only)
                         .menu_with_disabled("Fill Selection...", Box::new(FillSelection), is_read_only || !has_selection)
+                        .separator()
+                        .submenu("Scratchpad", window, cx, move |menu, _window, _cx| {
+                            menu.menu_with_icon("as Offset", IconName::Hash, Box::new(crate::actions::InsertActiveOffsetOnly))
+                                .menu_with_icon("as Hex Bytes", IconName::Binary, Box::new(crate::actions::InsertActiveHexBytes))
+                                .menu_with_icon("as Text / String", IconName::FileText, Box::new(crate::actions::InsertActiveText))
+                        })
                         .separator()
                         .submenu("Bookmark", window, cx, move |menu, _window, _cx| {
                             menu.menu("Red", Box::new(BookmarkRed))

@@ -59,6 +59,19 @@ impl Render for AppTitleBar {
                     cx.stop_propagation();
                 })
                 .child(
+                    Button::new("toggle-scratchpad-panel")
+                        .ghost()
+                        .icon(IconName::PanelRight)
+                        .tooltip("Toggle Scratchpad (Right Panel)")
+                        .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        })
+                        .on_click(cx.listener(|_, _, window, cx| {
+                            window.dispatch_action(Box::new(crate::actions::ToggleRightPanel), cx);
+                        })),
+                )
+                .child(
                     Button::new("settings")
                         .ghost()
                         .icon(IconName::Settings)
@@ -192,6 +205,7 @@ impl AppMenu {
     fn query_editor_state(&self, cx: &mut Context<Self>) -> MenuEditorState {
         if let Some(workspace) = self.workspace.upgrade() {
             let ws = workspace.read(cx);
+            let has_scratch = ws.active_scratchpad(cx).is_some();
             if let Some(editor) = ws.active_editor(cx) {
                 let ed = editor.read(cx);
                 let is_ro = ed.is_read_only();
@@ -223,10 +237,12 @@ impl AppMenu {
                     can_close_others: can_o,
                     can_close_right: can_r_tab,
                     has_saved: has_s,
+                    has_scratch,
                 }
             } else {
                 MenuEditorState {
                     is_read_only: true,
+                    has_scratch,
                     ..Default::default()
                 }
             }
