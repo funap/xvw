@@ -47,6 +47,8 @@ Engineered to be snappy, intuitive, and versatile for reverse engineering, firmw
   Render byte values as a 2D bitmap with grayscale, byte-category, and rainbow color modes to visually identify code segments, compressed sections, and encrypted payloads.
 - ⚖️ **Synchronized Side-by-Side Diff**  
   Compare two binary files side by side with synchronized scrolling, difference counters, and clear delta highlights.
+- 📝 **Integrated Scratchpad**  
+  Jot down thoughts, track findings, and take notes directly alongside binary data without leaving your analysis workspace.
 - 🌐 **40+ Text Encodings**  
   Decode and search strings across UTF-8, UTF-16, Shift-JIS, EUC-JP, GB18030, Big5, ISO-8859 variants, Windows code pages, and legacy character sets.
 - 📋 **Rich "Copy As" Exports**  
