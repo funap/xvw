@@ -28,7 +28,10 @@ impl DefinitionProvider for ScratchpadOffsetDefinitionProvider {
 
             let target_str = match target {
                 crate::core::offset_link::OffsetLinkTarget::Offset(off) => format!("0x{:X}", off),
-                crate::core::offset_link::OffsetLinkTarget::Range(r) => format!("0x{:X}..0x{:X}", r.start, r.end),
+                crate::core::offset_link::OffsetLinkTarget::Range(r) => {
+                    let end_inclusive = r.end.saturating_sub(1);
+                    format!("0x{:X}..0x{:X}", r.start, end_inclusive)
+                }
             };
 
             let uri_str = format!("offset:{}", target_str);
@@ -1217,13 +1220,23 @@ mod tests {
 
     #[test]
     fn test_scratchpad_offset_token_navigation_target() {
-        use crate::core::offset_link::{OffsetLinkTarget, parse_offset_link};
+        use crate::core::offset_link::{OffsetLinkTarget, format_offset_plain, parse_offset_link};
 
+        // Address range 0x200..0x220 includes byte 0x220, so buffer range is 0x200..0x221
         let target = parse_offset_link("0x200..0x220").expect("range must parse");
-        assert_eq!(target, OffsetLinkTarget::Range(0x200..0x220));
+        assert_eq!(target, OffsetLinkTarget::Range(0x200..0x221));
 
         let single = parse_offset_link("0x1040").expect("offset must parse");
         assert_eq!(single, OffsetLinkTarget::Offset(0x1040));
+
+        // When inserting a 32-byte selection [0x200..0x220) into scratchpad as offset,
+        // it formats as 0x0200..0x021F. Jumping back to it via Command+Click must select
+        // all 32 bytes [0x200..0x220) without being 1 byte short.
+        let formatted = format_offset_plain(0x200, Some(32), 0x1000);
+        assert_eq!(formatted, "0x0200..0x021F");
+        let parsed = parse_offset_link(&formatted).expect("must parse formatted plain offset");
+        assert_eq!(parsed, OffsetLinkTarget::Range(0x200..0x220));
+        assert_eq!(parsed.as_range().unwrap().len(), 32);
     }
 
     #[test]
@@ -1247,10 +1260,10 @@ mod tests {
         let token1 = find_offset_token_at(note, off1).expect("must find token");
         assert_eq!(token1.1, OffsetLinkTarget::Offset(0x1000));
 
-        // Hover over 0x2000..0x2080
+        // Hover over 0x2000..0x2080 (inclusive of 0x2080, so buffer range is 0x2000..0x2081)
         let off2 = note.find("0x2000..0x2080").unwrap() + 4;
         let token2 = find_offset_token_at(note, off2).expect("must find range token");
-        assert_eq!(token2.1, OffsetLinkTarget::Range(0x2000..0x2080));
+        assert_eq!(token2.1, OffsetLinkTarget::Range(0x2000..0x2081));
 
         // Hover over @0x300
         let off3 = note.find("@0x300").unwrap() + 1;

@@ -48,20 +48,19 @@ fn parse_number(s: &str) -> Option<usize> {
 
 /// Helper to parse a range string like `0x1000..0x1040`, `0x1000..+64`, `0x1000-0x1040`.
 fn parse_range_spec(s: &str) -> Option<OffsetLinkTarget> {
-    // Check for `..` or `...`
+    // Check for `..` or `...` or `..=`
     if let Some(pos) = s.find("..") {
         let start_str = &s[..pos];
-        let end_part = s[pos + 2..].trim_start_matches('.');
+        let end_part = s[pos + 2..].trim_start_matches(['.', '=']);
         let start = parse_number(start_str)?;
         if let Some(len_str) = end_part.strip_prefix('+') {
             let len = parse_number(len_str)?;
-            return Some(OffsetLinkTarget::Range(start..start + len));
+            return Some(OffsetLinkTarget::Range(start..start.saturating_add(len)));
         }
         let end = parse_number(end_part)?;
-        if end >= start {
-            return Some(OffsetLinkTarget::Range(start..end));
-        }
-        return Some(OffsetLinkTarget::Range(end..start));
+        let min_offset = start.min(end);
+        let max_offset = start.max(end);
+        return Some(OffsetLinkTarget::Range(min_offset..max_offset.saturating_add(1)));
     }
 
     // Check for `-` (with boundary checks)
@@ -70,10 +69,9 @@ fn parse_range_spec(s: &str) -> Option<OffsetLinkTarget> {
         let end_str = &s[pos + 1..];
         let start = parse_number(start_str)?;
         let end = parse_number(end_str)?;
-        if end >= start {
-            return Some(OffsetLinkTarget::Range(start..end));
-        }
-        return Some(OffsetLinkTarget::Range(end..start));
+        let min_offset = start.min(end);
+        let max_offset = start.max(end);
+        return Some(OffsetLinkTarget::Range(min_offset..max_offset.saturating_add(1)));
     }
 
     parse_number(s).map(OffsetLinkTarget::Offset)
@@ -84,20 +82,26 @@ fn parse_range_spec(s: &str) -> Option<OffsetLinkTarget> {
 /// Supported formats:
 /// - Shorthands: `#0x1040`, `@0x1040`
 /// - Direct hex: `0x1040`, `0x1000..0x1040`, `0x1000-0x1040`, `0x1000..+64`
+/// - Optional `offset:` URI scheme
 pub fn parse_offset_link(url: &str) -> Option<OffsetLinkTarget> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return None;
     }
 
+    let clean = trimmed.strip_prefix("offset:").unwrap_or(trimmed).trim();
+    if clean.is_empty() {
+        return None;
+    }
+
     // Shorthand with leading `#` or `@`
-    if let Some(rest) = trimmed.strip_prefix('#').or_else(|| trimmed.strip_prefix('@')) {
+    if let Some(rest) = clean.strip_prefix('#').or_else(|| clean.strip_prefix('@')) {
         return parse_range_spec(rest);
     }
 
     // Direct hex pattern: e.g. "0x1000" or "0x1000..0x1040"
-    if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
-        return parse_range_spec(trimmed);
+    if clean.starts_with("0x") || clean.starts_with("0X") {
+        return parse_range_spec(clean);
     }
 
     None
@@ -208,8 +212,18 @@ mod tests {
         assert_eq!(parse_offset_link("#0x1040"), Some(OffsetLinkTarget::Offset(0x1040)));
         assert_eq!(parse_offset_link("@0x1040"), Some(OffsetLinkTarget::Offset(0x1040)));
         assert_eq!(parse_offset_link("0x1040"), Some(OffsetLinkTarget::Offset(0x1040)));
-        assert_eq!(parse_offset_link("0x1000..0x1040"), Some(OffsetLinkTarget::Range(0x1000..0x1040)));
+        // Inclusive range: 0x1000..0x1040 includes byte 0x1040, so half-open buffer range is 0x1000..0x1041
+        assert_eq!(parse_offset_link("0x1000..0x1040"), Some(OffsetLinkTarget::Range(0x1000..0x1041)));
+        assert_eq!(parse_offset_link("0x1000..=0x1040"), Some(OffsetLinkTarget::Range(0x1000..0x1041)));
+        assert_eq!(parse_offset_link("0x1000...0x1040"), Some(OffsetLinkTarget::Range(0x1000..0x1041)));
+        assert_eq!(parse_offset_link("0x1000-0x1040"), Some(OffsetLinkTarget::Range(0x1000..0x1041)));
+        assert_eq!(parse_offset_link("offset:0x1000..0x1040"), Some(OffsetLinkTarget::Range(0x1000..0x1041)));
+        // format_offset_plain round-trip: 16 bytes starting at 0x10 formatted as 0x0010..0x001F
+        assert_eq!(parse_offset_link("0x0010..0x001F"), Some(OffsetLinkTarget::Range(0x10..0x20)));
+        // Relative length: +32 bytes from 0x1000
         assert_eq!(parse_offset_link("@0x1000..+32"), Some(OffsetLinkTarget::Range(0x1000..0x1020)));
+        // Single byte range
+        assert_eq!(parse_offset_link("0x1000..0x1000"), Some(OffsetLinkTarget::Range(0x1000..0x1001)));
     }
 
     #[test]
@@ -233,10 +247,10 @@ mod tests {
         assert_eq!(at_19.0, 16..22);
         assert_eq!(at_19.1, OffsetLinkTarget::Offset(0x1000));
 
-        // 0x2000..0x2040 is at index 33..47
+        // 0x2000..0x2040 is at index 33..47 (inclusive of 0x2040, so buffer range is 0x2000..0x2041)
         let at_35 = find_offset_token_at(text, 35).expect("should find range");
         assert_eq!(at_35.0, 33..47);
-        assert_eq!(at_35.1, OffsetLinkTarget::Range(0x2000..0x2040));
+        assert_eq!(at_35.1, OffsetLinkTarget::Range(0x2000..0x2041));
 
         // @0x300 is at index 55..61
         let at_56 = find_offset_token_at(text, 56).expect("should find @0x300");
