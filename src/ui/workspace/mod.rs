@@ -135,6 +135,21 @@ pub fn init(cx: &mut App) {
             workspace.on_action_insert_active_offset_link(&crate::actions::InsertActiveOffsetLink, window, cx);
         });
     });
+    cx.on_action::<crate::actions::InsertActiveOffsetOnly>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_insert_active_offset_only(&crate::actions::InsertActiveOffsetOnly, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::InsertActiveText>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_insert_active_text(&crate::actions::InsertActiveText, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::InsertActiveHexBytes>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_insert_active_hex_bytes(&crate::actions::InsertActiveHexBytes, window, cx);
+        });
+    });
     cx.on_action::<crate::actions::CopyAsOffsetLink>(|_, cx| {
         defer_in_active_workspace(cx, |workspace, window, cx| {
             workspace.on_action_copy_as_offset_link(&crate::actions::CopyAsOffsetLink, window, cx);

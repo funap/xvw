@@ -6,7 +6,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     dock::{Panel, PanelControl, PanelEvent},
     input::{self, Editor, EditorState, Input, InputState},
-    menu::DropdownMenu as _,
+    menu::{ContextMenuExt as _, DropdownMenu as _},
     resizable::{h_resizable, resizable_panel},
     text::{FrontmatterPlugin, MarkdownExtensions, RangeHighlight, RenderedText, SelectionFormat, TextView, TextViewState},
 };
@@ -22,8 +22,8 @@ pub const DEFAULT_SCRATCHPAD_CONTENT: &str = "# Scratchpad\n\nTake quick notes, 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ScratchpadMode {
     #[default]
-    Split,
     Edit,
+    Split,
     Preview,
 }
 
@@ -208,7 +208,7 @@ impl ScratchpadView {
             search_matches: Vec::new(),
             current_match_index: 0,
             last_searched_text: None,
-            mode: ScratchpadMode::Split,
+            mode: ScratchpadMode::Edit,
             _subscriptions: subscriptions,
         }
     }
@@ -293,7 +293,7 @@ impl ScratchpadView {
     /// syncing cached content, preview, and triggering debounced auto-save.
     pub fn insert_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.mode == ScratchpadMode::Preview {
-            self.mode = ScratchpadMode::Split;
+            self.mode = ScratchpadMode::Edit;
         }
 
         self.editor.update(cx, |ed, cx| {
@@ -679,16 +679,6 @@ impl Render for ScratchpadView {
             .items_center()
             .gap_0p5()
             .child(
-                Button::new("insert-offset-link")
-                    .icon(IconName::ExternalLink)
-                    .tooltip("Insert offset link from active binary editor")
-                    .ghost()
-                    .xsmall()
-                    .on_click(cx.listener(|_this, _, window, cx| {
-                        window.dispatch_action(Box::new(crate::actions::InsertActiveOffsetLink), cx);
-                    })),
-            )
-            .child(
                 Button::new("toggle-search")
                     .icon(IconName::Search)
                     .tooltip("Search in note (Cmd/Ctrl+F)")
@@ -806,7 +796,7 @@ impl Render for ScratchpadView {
                                     .min_w_0()
                                     .min_h_0()
                                     .overflow_hidden()
-                                    .child(Editor::new(&self.editor).size_full().bordered(false)),
+                                    .child(Editor::new(&self.editor).size_full().bordered(false).context_menu(|menu, _, _| menu)),
                             ),
                         )
                         .child(
@@ -829,7 +819,7 @@ impl Render for ScratchpadView {
                 .min_w_0()
                 .min_h_0()
                 .overflow_hidden()
-                .child(Editor::new(&self.editor).size_full().bordered(false))
+                .child(Editor::new(&self.editor).size_full().bordered(false).context_menu(|menu, _, _| menu))
                 .into_any_element(),
             ScratchpadMode::Preview => div()
                 .id("scratchpad_preview")
@@ -910,7 +900,36 @@ impl Render for ScratchpadView {
             }))
             .child(toolbar)
             .children(search_bar)
-            .child(content_view)
+            .child(
+                div()
+                    .flex_1()
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .context_menu({
+                        let focus_handle = self.focus_handle.clone();
+                        move |menu, window, cx| {
+                            menu.action_context(focus_handle.clone())
+                                .submenu("Insert from Active Editor", window, cx, move |menu, _window, _cx| {
+                                    menu.menu_with_icon("as Offset", IconName::Hash, Box::new(crate::actions::InsertActiveOffsetOnly))
+                                        .menu_with_icon("as Hex Bytes", IconName::Binary, Box::new(crate::actions::InsertActiveHexBytes))
+                                        .menu_with_icon("as Text / String", IconName::FileText, Box::new(crate::actions::InsertActiveText))
+                                        .menu_with_icon("as Offset Link", IconName::ExternalLink, Box::new(crate::actions::InsertActiveOffsetLink))
+                                })
+                                .separator()
+                                .menu_with_icon("Find in Note...", IconName::Search, Box::new(crate::actions::ToggleSearch))
+                                .separator()
+                                .menu_with_icon("New Scratchpad", IconName::Plus, Box::new(crate::actions::NewScratchpad))
+                                .menu_with_icon(
+                                    "Export Scratchpad As...",
+                                    IconName::HardDriveDownload,
+                                    Box::new(crate::actions::ExportScratchpadAs),
+                                )
+                        }
+                    })
+                    .child(content_view),
+            )
             .child(footer)
     }
 }
@@ -1059,7 +1078,7 @@ mod tests {
 
     #[test]
     fn test_scratchpad_mode_default_and_variants() {
-        assert_eq!(ScratchpadMode::default(), ScratchpadMode::Split);
+        assert_eq!(ScratchpadMode::default(), ScratchpadMode::Edit);
         assert_ne!(ScratchpadMode::Split, ScratchpadMode::Edit);
         assert_ne!(ScratchpadMode::Split, ScratchpadMode::Preview);
         assert_ne!(ScratchpadMode::Edit, ScratchpadMode::Preview);

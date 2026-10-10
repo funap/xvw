@@ -11,6 +11,14 @@ use crate::ui::pane::{SplitDirection, TabContent};
 use crate::ui::panels::left_panel::LeftPanelTab;
 use crate::ui::workspace::activity_bar::Activity;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScratchpadInsertMode {
+    OffsetLink,
+    OffsetOnly,
+    Text,
+    HexBytes,
+}
+
 impl Workspace {
     pub(crate) fn on_action_select_all(&mut self, action: &SelectAll, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(panel) = self.active_editor_view(cx) {
@@ -828,36 +836,114 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_insert_active_offset_link(&mut self, _: &crate::actions::InsertActiveOffsetLink, window: &mut Window, cx: &mut Context<Self>) {
+        self.insert_active_editor_content_into_scratchpad(ScratchpadInsertMode::OffsetLink, window, cx);
+    }
+
+    pub(crate) fn on_action_insert_active_offset_only(&mut self, _: &crate::actions::InsertActiveOffsetOnly, window: &mut Window, cx: &mut Context<Self>) {
+        self.insert_active_editor_content_into_scratchpad(ScratchpadInsertMode::OffsetOnly, window, cx);
+    }
+
+    pub(crate) fn on_action_insert_active_text(&mut self, _: &crate::actions::InsertActiveText, window: &mut Window, cx: &mut Context<Self>) {
+        self.insert_active_editor_content_into_scratchpad(ScratchpadInsertMode::Text, window, cx);
+    }
+
+    pub(crate) fn on_action_insert_active_hex_bytes(&mut self, _: &crate::actions::InsertActiveHexBytes, window: &mut Window, cx: &mut Context<Self>) {
+        self.insert_active_editor_content_into_scratchpad(ScratchpadInsertMode::HexBytes, window, cx);
+    }
+
+    pub(crate) fn insert_active_editor_content_into_scratchpad(&mut self, mode: ScratchpadInsertMode, window: &mut Window, cx: &mut Context<Self>) {
         let Some(editor_view) = self.effective_editor_view(cx).or_else(|| self.any_editor_view(cx)) else {
-            window.push_notification(crate::ui::notification::warning("No open binary editor to link offset from"), cx);
+            window.push_notification(crate::ui::notification::warning("No open binary editor to link from"), cx);
             return;
         };
 
-        let link_text = {
+        let (inserted_text, label) = {
             let ed_view = editor_view.read(cx);
             let editor = ed_view.editor().read(cx);
             let doc = editor.document.read().expect("document read lock");
             let total = doc.buffer.len();
-            if let Some(range) = editor.cursor.selection_range(total) {
-                if range.len() > 1 {
-                    crate::core::offset_link::format_offset_markdown(range.start, Some(range.len()), total)
-                } else {
-                    crate::core::offset_link::format_offset_markdown(range.start, None, total)
+            let selection = editor.cursor.selection_range(total);
+            let cursor = editor.cursor.offset.min(total);
+
+            let (text, label) = match mode {
+                ScratchpadInsertMode::OffsetLink => {
+                    let formatted = if let Some(range) = selection {
+                        if range.len() > 1 {
+                            crate::core::offset_link::format_offset_markdown(range.start, Some(range.len()), total)
+                        } else {
+                            crate::core::offset_link::format_offset_markdown(range.start, None, total)
+                        }
+                    } else {
+                        crate::core::offset_link::format_offset_markdown(cursor, None, total)
+                    };
+                    (formatted, "offset link")
                 }
-            } else {
-                let cursor = editor.cursor.offset.min(total);
-                crate::core::offset_link::format_offset_markdown(cursor, None, total)
-            }
+                ScratchpadInsertMode::OffsetOnly => {
+                    let formatted = if let Some(range) = selection {
+                        if range.len() > 1 {
+                            crate::core::offset_link::format_offset_plain(range.start, Some(range.len()), total)
+                        } else {
+                            crate::core::offset_link::format_offset_plain(range.start, None, total)
+                        }
+                    } else {
+                        crate::core::offset_link::format_offset_plain(cursor, None, total)
+                    };
+                    (formatted, "offset")
+                }
+                ScratchpadInsertMode::Text => {
+                    let (start, len) = if let Some(range) = selection {
+                        (range.start, range.len())
+                    } else if cursor < total {
+                        (cursor, 1)
+                    } else {
+                        (0, 0)
+                    };
+                    let text = if len == 0 {
+                        String::new()
+                    } else {
+                        let slice = doc.buffer.get_range(start, len);
+                        if let Some(enc_rs) = editor.options.encoding.encoding_rs_ref() {
+                            let (decoded, _, _) = enc_rs.decode(slice);
+                            decoded.into_owned()
+                        } else {
+                            String::from_utf8_lossy(slice).into_owned()
+                        }
+                    };
+                    (text, "text")
+                }
+                ScratchpadInsertMode::HexBytes => {
+                    let (start, len) = if let Some(range) = selection {
+                        (range.start, range.len())
+                    } else if cursor < total {
+                        (cursor, 1)
+                    } else {
+                        (0, 0)
+                    };
+                    let text = if len == 0 {
+                        String::new()
+                    } else {
+                        let slice = doc.buffer.get_range(start, len);
+                        crate::core::format::format_hex_spaces(slice)
+                    };
+                    (text, "hex bytes")
+                }
+            };
+            (text, label)
         };
+
+        if inserted_text.is_empty() {
+            window.push_notification(crate::ui::notification::warning("No content to insert into Scratchpad"), cx);
+            return;
+        }
 
         if let Some(scratchpad) = self.any_scratchpad(cx) {
             self.set_right_panel_visible(true, window, cx);
             scratchpad.update(cx, |sp, cx| {
-                sp.insert_text(&link_text, window, cx);
+                sp.insert_text(&inserted_text, window, cx);
             });
-            window.push_notification(crate::ui::notification::info(format!("Inserted offset link: {link_text}")), cx);
+            window.push_notification(crate::ui::notification::info(format!("Inserted {label} into Scratchpad")), cx);
         } else {
-            window.push_notification(crate::ui::notification::warning("No open scratchpad to insert link into"), cx);
+            window.push_notification(crate::ui::notification::warning("No open scratchpad to insert into"), cx);
         }
     }
 

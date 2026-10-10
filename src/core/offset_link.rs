@@ -198,9 +198,29 @@ pub fn format_offset_markdown(offset: usize, length: Option<usize>, total_size: 
     }
 }
 
+/// Formats an offset or range as plain text (e.g. `0x00001040` or `0x00001000..0x0000103F`).
+pub fn format_offset_plain(offset: usize, length: Option<usize>, total_size: usize) -> String {
+    let pad = hex_padding(total_size, offset);
+    match length {
+        Some(len) if len > 1 => {
+            let end_inclusive = offset + len - 1;
+            format!("0x{:0width$X}..0x{:0width$X}", offset, end_inclusive, width = pad)
+        }
+        _ => {
+            format!("0x{:0width$X}", offset, width = pad)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_format_offset_plain() {
+        assert_eq!(format_offset_plain(0x10, None, 0x100), "0x0010");
+        assert_eq!(format_offset_plain(0x10, Some(16), 0x100), "0x0010..0x001F");
+    }
 
     #[test]
     fn test_parse_offset_link_goto() {

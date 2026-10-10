@@ -447,7 +447,15 @@ fn build_scratch_menu() -> MenuDef {
             MenuItemDef::separator(),
             MenuItemDef::action("Reveal in File Manager", crate::actions::RevealScratchesInExplorer),
             MenuItemDef::separator(),
-            MenuItemDef::action_with_condition("Insert Offset Link", crate::actions::InsertActiveOffsetLink, |s| s.has_scratch),
+            MenuItemDef::submenu(
+                "Insert into Scratchpad",
+                vec![
+                    MenuItemDef::action_with_condition("as Offset", crate::actions::InsertActiveOffsetOnly, |s| s.has_scratch),
+                    MenuItemDef::action_with_condition("as Hex Bytes", crate::actions::InsertActiveHexBytes, |s| s.has_scratch),
+                    MenuItemDef::action_with_condition("as Text / String", crate::actions::InsertActiveText, |s| s.has_scratch),
+                    MenuItemDef::action_with_condition("as Offset Link", crate::actions::InsertActiveOffsetLink, |s| s.has_scratch),
+                ],
+            ),
             MenuItemDef::action_with_condition("Export Scratchpad As...", crate::actions::ExportScratchpadAs, |s| s.has_scratch),
             MenuItemDef::action_with_condition("Delete Current Scratchpad", crate::actions::DeleteCurrentScratchpad, |s| s.has_scratch),
         ],
@@ -514,11 +522,19 @@ mod tests {
         assert!(has_open);
         assert!(has_recent);
 
-        let link_item = scratch_menu
+        let insert_submenu = scratch_menu
             .items
             .iter()
-            .find(|item| matches!(item, MenuItemDef::Action { label, .. } if label.as_ref() == "Insert Offset Link"))
-            .expect("Insert Offset Link item found");
+            .find_map(|item| match item {
+                MenuItemDef::Submenu { label, items } if label.as_ref() == "Insert into Scratchpad" => Some(items),
+                _ => None,
+            })
+            .expect("Insert into Scratchpad submenu found");
+        assert_eq!(insert_submenu.len(), 4);
+        let link_item = insert_submenu
+            .iter()
+            .find(|item| matches!(item, MenuItemDef::Action { label, .. } if label.as_ref() == "as Offset Link"))
+            .expect("as Offset Link item found");
         if let MenuItemDef::Action { is_enabled: Some(cond), .. } = link_item {
             assert!(cond(&MenuEditorState {
                 has_scratch: true,
@@ -529,7 +545,7 @@ mod tests {
                 ..Default::default()
             }));
         } else {
-            panic!("Insert Offset Link item must have condition");
+            panic!("as Offset Link item must have condition");
         }
 
         let export_item = scratch_menu

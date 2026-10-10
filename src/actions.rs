@@ -180,6 +180,18 @@ pub struct NavigateToOffsetLink {
 #[derive(Clone, PartialEq, Action)]
 pub struct InsertActiveOffsetLink;
 
+/// Inserts the raw offset text (without link format) of the active editor into the active scratchpad.
+#[derive(Clone, PartialEq, Action)]
+pub struct InsertActiveOffsetOnly;
+
+/// Inserts the decoded string/text of the active editor selection into the active scratchpad.
+#[derive(Clone, PartialEq, Action)]
+pub struct InsertActiveText;
+
+/// Inserts the hex byte representation of the active editor selection into the active scratchpad.
+#[derive(Clone, PartialEq, Action)]
+pub struct InsertActiveHexBytes;
+
 #[derive(Clone, PartialEq, Action)]
 pub struct OpenFileDialog;
 
