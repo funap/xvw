@@ -2,13 +2,14 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use crate::settings::{DEFAULT_SCRATCHPAD_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, MAX_SPLIT_RATIO, MIN_SPLIT_RATIO, ScratchpadSettings};
 use gpui_kit::component::{
     ActiveTheme, Icon, Sizable, StyledExt,
     button::{Button, ButtonVariants},
     dock::{Panel, PanelControl, PanelEvent},
     input::{self, DefinitionProvider, Editor, EditorState, Input, InputState, Rope, RopeExt as _},
     menu::{ContextMenuExt as _, DropdownMenu as _},
-    resizable::{h_resizable, resizable_panel},
+    resizable::{ResizablePanelEvent, ResizableState, h_resizable, resizable_panel},
     text::{FrontmatterPlugin, MarkdownExtensions, RangeHighlight, RenderedText, SelectionFormat, TextView, TextViewState},
 };
 use gpui_kit::prelude::*;
@@ -66,7 +67,10 @@ pub fn default_content_for(file_name: Option<&str>) -> String {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ScratchpadMode {
     #[default]
     Edit,
@@ -153,6 +157,9 @@ pub struct ScratchpadView {
     current_match_index: usize,
     last_searched_text: Option<RenderedText>,
     mode: ScratchpadMode,
+    split_state: Entity<ResizableState>,
+    split_ratio: f32,
+    split_width: Option<f32>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -257,6 +264,38 @@ impl ScratchpadView {
         });
         subscriptions.push(sub_tv);
 
+        let (initial_mode, initial_split_ratio, initial_split_width) = if cx.has_global::<ScratchpadSettings>() {
+            let settings = cx.global::<ScratchpadSettings>();
+            (settings.mode, settings.split_ratio, settings.split_width)
+        } else {
+            (ScratchpadMode::default(), DEFAULT_SPLIT_RATIO, None)
+        };
+        let split_state = cx.new(|_| ResizableState::default());
+
+        let sub_split = cx.subscribe(&split_state, |this, state, _: &ResizablePanelEvent, cx| {
+            let sizes = state.read(cx).sizes();
+            if sizes.len() >= 2 {
+                let left = sizes[0].as_f32();
+                let right = sizes[1].as_f32();
+                let total = left + right;
+                if total > 0.0 {
+                    let ratio = (left / total).clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
+                    this.on_split_resized(ratio, left, cx);
+                }
+            }
+        });
+        subscriptions.push(sub_split);
+
+        if cx.has_global::<ScratchpadSettings>() {
+            let current = cx.global::<ScratchpadSettings>().last_open_file.clone();
+            if current.as_ref() != Some(&file_path) {
+                cx.update_global::<ScratchpadSettings, _>(|settings, _| {
+                    settings.set_last_open_file(Some(file_path.clone()));
+                });
+                crate::settings::save_current(cx);
+            }
+        }
+
         Self {
             id,
             file_path,
@@ -272,7 +311,10 @@ impl ScratchpadView {
             search_matches: Vec::new(),
             current_match_index: 0,
             last_searched_text: None,
-            mode: ScratchpadMode::Edit,
+            mode: initial_mode,
+            split_state,
+            split_ratio: initial_split_ratio,
+            split_width: initial_split_width,
             _subscriptions: subscriptions,
         }
     }
@@ -289,7 +331,7 @@ impl ScratchpadView {
             crate::ui::menus::update_application_menus(cx);
         }
         self.id = id;
-        self.file_path = file_path;
+        self.file_path = file_path.clone();
         self.title = crate::service::ScratchService::extract_title(&content).unwrap_or_else(|| format!("Scratchpad {id}"));
         self.cached_content = content.clone();
         self.is_dirty = false;
@@ -300,6 +342,14 @@ impl ScratchpadView {
         self.text_view_state.update(cx, |tv, cx| {
             tv.set_text(&content, cx);
         });
+
+        if cx.has_global::<ScratchpadSettings>() {
+            cx.update_global::<ScratchpadSettings, _>(|settings, _| {
+                settings.set_last_open_file(Some(file_path));
+            });
+            crate::settings::save_current(cx);
+        }
+
         if self.is_search_open {
             self.update_search(cx);
         }
@@ -352,9 +402,40 @@ impl ScratchpadView {
         self.mode
     }
 
+    #[allow(dead_code)]
+    pub fn split_ratio(&self) -> f32 {
+        self.split_ratio
+    }
+
+    #[allow(dead_code)]
+    pub fn split_width(&self) -> Option<f32> {
+        self.split_width
+    }
+
+    pub fn on_split_resized(&mut self, ratio: f32, left_px: f32, cx: &mut Context<Self>) {
+        if (self.split_ratio - ratio).abs() < 1e-4 && self.split_width == Some(left_px) {
+            return;
+        }
+        self.split_ratio = ratio;
+        self.split_width = Some(left_px);
+        if cx.has_global::<ScratchpadSettings>() {
+            cx.update_global::<ScratchpadSettings, _>(|settings, _| {
+                settings.set_split_ratio(ratio, Some(left_px));
+            });
+            crate::settings::save_current(cx);
+        }
+        cx.notify();
+    }
+
     pub fn set_mode(&mut self, mode: ScratchpadMode, cx: &mut Context<Self>) {
         if self.mode != mode {
             self.mode = mode;
+            if cx.has_global::<ScratchpadSettings>() {
+                cx.update_global::<ScratchpadSettings, _>(|settings, _| {
+                    settings.set_mode(mode);
+                });
+                crate::settings::save_current(cx);
+            }
             if self.is_search_open {
                 self.update_search(cx);
             }
@@ -366,7 +447,7 @@ impl ScratchpadView {
     /// syncing cached content, preview, and triggering debounced auto-save.
     pub fn insert_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.mode == ScratchpadMode::Preview {
-            self.mode = ScratchpadMode::Edit;
+            self.set_mode(ScratchpadMode::Edit, cx);
         }
 
         self.editor.update(cx, |ed, cx| {
@@ -855,6 +936,19 @@ impl Render for ScratchpadView {
             None
         };
 
+        let left_panel_size = if let Some(w) = self.split_width {
+            px(w.clamp(50.0, 10000.0))
+        } else if self.split_state.read(cx).container_size().as_f32() > 0.0 {
+            let container = self.split_state.read(cx).container_size().as_f32();
+            px((container * self.split_ratio).clamp(50.0, (container - 50.0).max(50.0)))
+        } else {
+            let panel_w = cx
+                .try_global::<ScratchpadSettings>()
+                .map(|s| s.panel_width)
+                .unwrap_or(DEFAULT_SCRATCHPAD_PANEL_WIDTH);
+            px((panel_w * self.split_ratio).clamp(50.0, (panel_w - 50.0).max(50.0)))
+        };
+
         let content_view: AnyElement = match mode {
             ScratchpadMode::Split => div()
                 .flex_1()
@@ -864,8 +958,36 @@ impl Render for ScratchpadView {
                 .overflow_hidden()
                 .child(
                     h_resizable("scratchpad-split")
+                        .with_state(&self.split_state)
+                        .on_resize({
+                            let view = cx.entity().clone();
+                            move |resizable_state, _window, cx| {
+                                let (ratio, left_px) = {
+                                    let state = resizable_state.read(cx);
+                                    let sizes = state.sizes();
+                                    if sizes.len() >= 2 {
+                                        let left = sizes[0].as_f32();
+                                        let right = sizes[1].as_f32();
+                                        let total = left + right;
+                                        if total > 0.0 {
+                                            let ratio = (left / total).clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
+                                            (Some(ratio), Some(left))
+                                        } else {
+                                            (None, None)
+                                        }
+                                    } else {
+                                        (None, None)
+                                    }
+                                };
+                                if let (Some(ratio), Some(left_px)) = (ratio, left_px) {
+                                    view.update(cx, |this, cx| {
+                                        this.on_split_resized(ratio, left_px, cx);
+                                    });
+                                }
+                            }
+                        })
                         .child(
-                            resizable_panel().size(px(200.)).child(
+                            resizable_panel().size(left_panel_size).child(
                                 div()
                                     .size_full()
                                     .min_w_0()
@@ -1170,6 +1292,17 @@ mod tests {
         assert_ne!(ScratchpadMode::Split, ScratchpadMode::Edit);
         assert_ne!(ScratchpadMode::Split, ScratchpadMode::Preview);
         assert_ne!(ScratchpadMode::Edit, ScratchpadMode::Preview);
+    }
+
+    #[test]
+    fn test_scratchpad_mode_serde() {
+        assert_eq!(serde_json::to_string(&ScratchpadMode::Edit).unwrap(), "\"edit\"");
+        assert_eq!(serde_json::to_string(&ScratchpadMode::Split).unwrap(), "\"split\"");
+        assert_eq!(serde_json::to_string(&ScratchpadMode::Preview).unwrap(), "\"preview\"");
+
+        assert_eq!(serde_json::from_str::<ScratchpadMode>("\"edit\"").unwrap(), ScratchpadMode::Edit);
+        assert_eq!(serde_json::from_str::<ScratchpadMode>("\"split\"").unwrap(), ScratchpadMode::Split);
+        assert_eq!(serde_json::from_str::<ScratchpadMode>("\"preview\"").unwrap(), ScratchpadMode::Preview);
     }
 
     #[test]
