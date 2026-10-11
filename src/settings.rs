@@ -4,6 +4,7 @@ use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
 pub use crate::core::structure::{DEFAULT_STRUCTURE_YAML_INCLUDE_OFFSETS, DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD, MAX_STRUCTURE_YAML_SHA_THRESHOLD};
 use crate::core::structure::{DefinitionHistory, FileHistory, RecentFileEntry};
 use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
+pub use crate::ui::views::scratchpad_view::ScratchpadMode;
 use gpui_kit::App;
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use serde::{Deserialize, Serialize};
@@ -49,6 +50,78 @@ pub struct Settings {
     pub recent_definition_paths: Vec<PathBuf>,
     pub recent_file_paths: Vec<PathBuf>,
     pub recent_files: Vec<RecentFileEntry>,
+    #[serde(default)]
+    pub scratchpad: ScratchpadSettings,
+}
+
+pub const DEFAULT_SPLIT_RATIO: f32 = 0.5;
+pub const MIN_SPLIT_RATIO: f32 = 0.1;
+pub const MAX_SPLIT_RATIO: f32 = 0.9;
+#[allow(dead_code)]
+pub const DEFAULT_SPLIT_FALLBACK_WIDTH: f32 = 200.0;
+pub const DEFAULT_SCRATCHPAD_PANEL_WIDTH: f32 = 340.0;
+pub const MIN_SCRATCHPAD_PANEL_WIDTH: f32 = 180.0;
+pub const MAX_SCRATCHPAD_PANEL_WIDTH: f32 = 1600.0;
+
+fn default_split_ratio() -> f32 {
+    DEFAULT_SPLIT_RATIO
+}
+
+fn default_panel_width() -> f32 {
+    DEFAULT_SCRATCHPAD_PANEL_WIDTH
+}
+
+/// Scratchpad layout and display mode settings persisted between launches.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScratchpadSettings {
+    #[serde(default, alias = "last_mode")]
+    pub mode: ScratchpadMode,
+    #[serde(default = "default_split_ratio")]
+    pub split_ratio: f32,
+    #[serde(default)]
+    pub split_width: Option<f32>,
+    #[serde(default = "default_panel_width", alias = "right_panel_width")]
+    pub panel_width: f32,
+    #[serde(default, alias = "last_file", alias = "last_opened_file")]
+    pub last_open_file: Option<PathBuf>,
+}
+
+impl gpui_kit::Global for ScratchpadSettings {}
+
+impl Default for ScratchpadSettings {
+    fn default() -> Self {
+        Self {
+            mode: ScratchpadMode::Edit,
+            split_ratio: DEFAULT_SPLIT_RATIO,
+            split_width: None,
+            panel_width: DEFAULT_SCRATCHPAD_PANEL_WIDTH,
+            last_open_file: None,
+        }
+    }
+}
+
+impl ScratchpadSettings {
+    /// Sets the global display mode.
+    pub fn set_mode(&mut self, mode: ScratchpadMode) {
+        self.mode = mode;
+    }
+
+    /// Sets the global split ratio and optional cached width.
+    pub fn set_split_ratio(&mut self, ratio: f32, width: Option<f32>) {
+        self.split_ratio = ratio.clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
+        self.split_width = width;
+    }
+
+    /// Sets the scratchpad right panel width in workspace.
+    pub fn set_panel_width(&mut self, width: f32) {
+        self.panel_width = width.clamp(MIN_SCRATCHPAD_PANEL_WIDTH, MAX_SCRATCHPAD_PANEL_WIDTH);
+    }
+
+    /// Sets the last opened scratchpad file path.
+    pub fn set_last_open_file(&mut self, path: Option<PathBuf>) {
+        self.last_open_file = path;
+    }
 }
 
 fn default_bytes_per_row() -> usize {
@@ -104,6 +177,7 @@ impl Default for Settings {
             recent_definition_paths: Vec::new(),
             recent_file_paths: Vec::new(),
             recent_files: Vec::new(),
+            scratchpad: ScratchpadSettings::default(),
         }
     }
 }
@@ -154,6 +228,7 @@ impl Settings {
             recent_definition_paths: recent_history.definitions.paths().to_vec(),
             recent_file_paths: recent_history.files.paths(),
             recent_files: recent_history.files.entries().to_vec(),
+            scratchpad: cx.try_global::<ScratchpadSettings>().cloned().unwrap_or_default(),
         }
     }
 
@@ -224,6 +299,17 @@ impl Settings {
         };
         self.recent_files = history.entries().to_vec();
         self.recent_file_paths = history.paths();
+        if !self.scratchpad.split_ratio.is_finite() || !(MIN_SPLIT_RATIO..=MAX_SPLIT_RATIO).contains(&self.scratchpad.split_ratio) {
+            self.scratchpad.split_ratio = DEFAULT_SPLIT_RATIO;
+        }
+        if let Some(w) = self.scratchpad.split_width
+            && (!w.is_finite() || w < 20.0 || w > 10000.0)
+        {
+            self.scratchpad.split_width = None;
+        }
+        if !self.scratchpad.panel_width.is_finite() || !(MIN_SCRATCHPAD_PANEL_WIDTH..=MAX_SCRATCHPAD_PANEL_WIDTH).contains(&self.scratchpad.panel_width) {
+            self.scratchpad.panel_width = DEFAULT_SCRATCHPAD_PANEL_WIDTH;
+        }
         self
     }
 }
@@ -343,6 +429,13 @@ mod tests {
             recent_definition_paths: vec![PathBuf::from("definition.ksy")],
             recent_file_paths: vec![PathBuf::from("binary.bin")],
             recent_files: vec![RecentFileEntry::new(PathBuf::from("binary.bin"), None)],
+            scratchpad: ScratchpadSettings {
+                mode: ScratchpadMode::Split,
+                split_ratio: 0.6,
+                split_width: Some(240.0),
+                panel_width: 380.0,
+                last_open_file: Some(PathBuf::from("/tmp/saved_scratch.md")),
+            },
         };
 
         settings.save_to(&file.path).expect("save settings");
@@ -467,5 +560,79 @@ mod tests {
 
         let settings = Settings::load_from(&file.path).expect("load settings");
         assert!(!settings.structure_yaml_include_offsets);
+    }
+
+    #[test]
+    fn scratchpad_settings_toml_round_trip() {
+        let file = TestSettingsFile::new("scratchpad-round-trip");
+        let toml_str = r#"
+[scratchpad]
+mode = "split"
+split_ratio = 0.65
+split_width = 220.0
+panel_width = 420.0
+last_open_file = "/tmp/test_scratch.md"
+"#;
+        fs::write(&file.path, toml_str).expect("write settings");
+
+        let settings = Settings::load_from(&file.path).expect("load settings");
+        assert_eq!(settings.scratchpad.mode, ScratchpadMode::Split);
+        assert!((settings.scratchpad.split_ratio - 0.65).abs() < 1e-5);
+        assert_eq!(settings.scratchpad.split_width, Some(220.0));
+        assert_eq!(settings.scratchpad.panel_width, 420.0);
+        assert_eq!(settings.scratchpad.last_open_file, Some(PathBuf::from("/tmp/test_scratch.md")));
+    }
+
+    #[test]
+    fn scratchpad_settings_legacy_alias_and_mutation() {
+        let file = TestSettingsFile::new("scratchpad-alias");
+        let toml_str = r#"
+[scratchpad]
+last_mode = "preview"
+right_panel_width = 380.0
+last_opened_file = "/tmp/old_scratch.md"
+"#;
+        fs::write(&file.path, toml_str).expect("write settings");
+        let settings = Settings::load_from(&file.path).expect("load settings");
+        assert_eq!(settings.scratchpad.mode, ScratchpadMode::Preview);
+        assert_eq!(settings.scratchpad.panel_width, 380.0);
+        assert_eq!(settings.scratchpad.last_open_file, Some(PathBuf::from("/tmp/old_scratch.md")));
+
+        let mut sp = ScratchpadSettings::default();
+        assert_eq!(sp.mode, ScratchpadMode::Edit);
+        assert_eq!(sp.split_ratio, DEFAULT_SPLIT_RATIO);
+        assert_eq!(sp.split_width, None);
+        assert_eq!(sp.panel_width, DEFAULT_SCRATCHPAD_PANEL_WIDTH);
+        assert_eq!(sp.last_open_file, None);
+
+        sp.set_mode(ScratchpadMode::Split);
+        assert_eq!(sp.mode, ScratchpadMode::Split);
+
+        sp.set_split_ratio(0.72, Some(250.0));
+        assert!((sp.split_ratio - 0.72).abs() < 1e-5);
+        assert_eq!(sp.split_width, Some(250.0));
+
+        sp.set_panel_width(500.0);
+        assert_eq!(sp.panel_width, 500.0);
+
+        sp.set_last_open_file(Some(PathBuf::from("/tmp/another.md")));
+        assert_eq!(sp.last_open_file, Some(PathBuf::from("/tmp/another.md")));
+    }
+
+    #[test]
+    fn scratchpad_invalid_values_sanitized() {
+        let file = TestSettingsFile::new("scratchpad-sanitize");
+        let toml_str = r#"
+[scratchpad]
+split_ratio = 999.0
+split_width = -100.0
+panel_width = 99999.0
+"#;
+        fs::write(&file.path, toml_str).expect("write settings");
+
+        let settings = Settings::load_from(&file.path).expect("load settings");
+        assert_eq!(settings.scratchpad.split_ratio, DEFAULT_SPLIT_RATIO);
+        assert_eq!(settings.scratchpad.split_width, None);
+        assert_eq!(settings.scratchpad.panel_width, DEFAULT_SCRATCHPAD_PANEL_WIDTH);
     }
 }

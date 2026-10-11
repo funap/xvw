@@ -12,7 +12,7 @@ use crate::app_state::{AppState, InsertModeState};
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
-use gpui_kit::component::resizable::{h_resizable, resizable_panel};
+use gpui_kit::component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_kit::component::{ActiveTheme, Root, WindowExt};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -40,6 +40,7 @@ pub struct Workspace {
     pub recent_file_history: crate::core::structure::FileHistory,
     pub is_left_panel_visible: bool,
     pub scratchpad_panel: Entity<crate::ui::views::scratchpad_view::ScratchpadView>,
+    pub workspace_resizable_state: Entity<ResizableState>,
     pub is_right_panel_visible: bool,
     pub new_file_modal: Option<Entity<crate::ui::dialogs::new_file_modal::NewFileModal>>,
     pub fill_selection_modal: Option<Entity<crate::ui::dialogs::fill_selection_modal::FillSelectionModal>>,
@@ -459,16 +460,41 @@ impl Workspace {
         let recent_definition_paths = recent_history.definitions.paths().to_vec();
         let recent_file_entries = recent_history.files.entries().to_vec();
         let scratchpad_panel = cx.new(|cx| {
-            let recent = crate::service::ScratchService::list_scratches();
-            if let Some(entry) = recent.first() {
-                let content = crate::service::ScratchService::load_scratch(&entry.path)
-                    .unwrap_or_else(|_| crate::ui::views::scratchpad_view::DEFAULT_SCRATCHPAD_CONTENT.to_string());
-                let id = entry.id.unwrap_or(1);
-                crate::ui::views::scratchpad_view::ScratchpadView::new_with_file(id, entry.path.clone(), content, window, cx)
+            let scratchpad_settings = cx.try_global::<crate::settings::ScratchpadSettings>().cloned().unwrap_or_default();
+            let target_entry = if let Some(last_path) = &scratchpad_settings.last_open_file {
+                if last_path.exists() {
+                    let id = crate::service::ScratchService::extract_id_from_filename(last_path.file_name().and_then(|n| n.to_str()).unwrap_or(""));
+                    Some((id.unwrap_or(1), last_path.clone()))
+                } else {
+                    None
+                }
             } else {
-                crate::ui::views::scratchpad_view::ScratchpadView::new(1, window, cx)
-            }
+                None
+            };
+
+            let (id, path, content) = if let Some((id, path)) = target_entry {
+                let content = crate::service::ScratchService::load_scratch(&path)
+                    .unwrap_or_else(|_| crate::ui::views::scratchpad_view::DEFAULT_SCRATCHPAD_CONTENT.to_string());
+                (id, path, content)
+            } else {
+                let recent = crate::service::ScratchService::list_scratches();
+                if let Some(entry) = recent.first() {
+                    let content = crate::service::ScratchService::load_scratch(&entry.path)
+                        .unwrap_or_else(|_| crate::ui::views::scratchpad_view::DEFAULT_SCRATCHPAD_CONTENT.to_string());
+                    let id = entry.id.unwrap_or(1);
+                    (id, entry.path.clone(), content)
+                } else {
+                    let id = 1;
+                    let path = crate::service::ScratchService::scratch_file_path(id).unwrap_or_else(|| PathBuf::from(format!("scratch_{id}.md")));
+                    let content = crate::ui::views::scratchpad_view::DEFAULT_SCRATCHPAD_CONTENT.to_string();
+                    (id, path, content)
+                }
+            };
+
+            crate::ui::views::scratchpad_view::ScratchpadView::new_with_file(id, path, content, window, cx)
         });
+
+        let workspace_resizable_state = cx.new(|_| ResizableState::default());
 
         let workspace = Self {
             pane_tree,
@@ -480,6 +506,7 @@ impl Workspace {
             recent_file_history: recent_history.files,
             is_left_panel_visible: true,
             scratchpad_panel,
+            workspace_resizable_state,
             is_right_panel_visible: false,
             new_file_modal: None,
             fill_selection_modal: None,
@@ -1343,32 +1370,66 @@ impl Render for Workspace {
                     .min_h_0()
                     .overflow_hidden()
                     .child(self.activity_bar.clone())
-                    .child(
+                    .child({
+                        let scratchpad_panel_width = cx
+                            .try_global::<crate::settings::ScratchpadSettings>()
+                            .map(|s| s.panel_width)
+                            .unwrap_or(crate::settings::DEFAULT_SCRATCHPAD_PANEL_WIDTH);
+
                         div().flex().flex_col().flex_1().size_full().min_w_0().min_h_0().overflow_hidden().child(
                             h_resizable("workspace-h-resize")
+                                .with_state(&self.workspace_resizable_state)
+                                .on_resize({
+                                    let is_right_visible = self.is_right_panel_visible;
+                                    move |state, _window, cx| {
+                                        if !is_right_visible {
+                                            return;
+                                        }
+                                        let sizes = state.read(cx).sizes();
+                                        if let Some(right_size) = sizes.last() {
+                                            let w = right_size.as_f32();
+                                            if (crate::settings::MIN_SCRATCHPAD_PANEL_WIDTH..=crate::settings::MAX_SCRATCHPAD_PANEL_WIDTH).contains(&w)
+                                                && cx.has_global::<crate::settings::ScratchpadSettings>()
+                                            {
+                                                let current_w = cx.global::<crate::settings::ScratchpadSettings>().panel_width;
+                                                if (current_w - w).abs() > 1.0 {
+                                                    cx.update_global::<crate::settings::ScratchpadSettings, _>(|settings, _| {
+                                                        settings.set_panel_width(w);
+                                                    });
+                                                    crate::settings::save_current(cx);
+                                                }
+                                            }
+                                        }
+                                    }
+                                })
                                 .child(
                                     resizable_panel()
                                         .visible(self.is_left_panel_visible)
                                         .size(px(250.))
+                                        .flex_none()
                                         .child(div().size_full().min_w_0().min_h_0().overflow_hidden().child(self.left_panel.clone())),
                                 )
                                 .child(
                                     resizable_panel().child(div().relative().size_full().min_w_0().min_h_0().overflow_hidden().child(self.pane_tree.clone())),
                                 )
                                 .child(
-                                    resizable_panel().visible(self.is_right_panel_visible).size(px(340.)).child(
-                                        div()
-                                            .size_full()
-                                            .min_w_0()
-                                            .min_h_0()
-                                            .overflow_hidden()
-                                            .border_l_1()
-                                            .border_color(theme.border)
-                                            .child(self.scratchpad_panel.clone()),
-                                    ),
+                                    resizable_panel()
+                                        .visible(self.is_right_panel_visible)
+                                        .size(px(scratchpad_panel_width))
+                                        .flex_none()
+                                        .child(
+                                            div()
+                                                .size_full()
+                                                .min_w_0()
+                                                .min_h_0()
+                                                .overflow_hidden()
+                                                .border_l_1()
+                                                .border_color(theme.border)
+                                                .child(self.scratchpad_panel.clone()),
+                                        ),
                                 ),
-                        ),
-                    ),
+                        )
+                    }),
             )
             .child(self.status_bar.clone())
             .when_some(self.new_file_modal.clone(), |el, modal| {

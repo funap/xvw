@@ -788,6 +788,12 @@ impl Workspace {
                             tree.set_active_group(group_id, cx);
                         });
                         self.sync_active_editor(window, cx);
+                        if cx.has_global::<crate::settings::ScratchpadSettings>() {
+                            cx.update_global::<crate::settings::ScratchpadSettings, _>(|settings, _| {
+                                settings.set_last_open_file(Some(canonical));
+                            });
+                            crate::settings::save_current(cx);
+                        }
                         cx.notify();
                         return;
                     }
