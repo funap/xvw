@@ -168,6 +168,30 @@ pub struct ExportScratchpadAs;
 #[derive(Clone, PartialEq, Action)]
 pub struct DeleteCurrentScratchpad;
 
+/// Toggles the Scratchpad view mode (Edit -> Split -> Preview -> Edit).
+#[derive(Clone, PartialEq, Action)]
+pub struct ToggleScratchpadMode;
+
+/// Opens the Quick Open / file switcher palette.
+#[derive(Clone, PartialEq, Action)]
+pub struct QuickOpen;
+
+/// Opens the Scratchpad note switcher / quick palette (alias for QuickOpen).
+#[derive(Clone, PartialEq, Action)]
+pub struct OpenScratchpadPalette;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct PaletteSelectNext;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct PaletteSelectPrev;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct PaletteConfirm;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct PaletteCancel;
+
 /// Navigates the active binary editor to the offset or range.
 #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
 #[action(namespace = app)]

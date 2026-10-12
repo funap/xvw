@@ -142,6 +142,7 @@ fn build_file_menu() -> MenuDef {
         items: vec![
             MenuItemDef::action("New File...", crate::actions::NewFile),
             MenuItemDef::action("Open File...", crate::actions::OpenFileDialog),
+            MenuItemDef::action("Quick Open...", crate::actions::QuickOpen),
             MenuItemDef::action("Open Folder...", crate::actions::OpenFolder),
             MenuItemDef::action("Close Folder", crate::actions::CloseFolder),
             MenuItemDef::separator(),
@@ -447,7 +448,10 @@ fn build_scratch_menu() -> MenuDef {
             MenuItemDef::separator(),
             MenuItemDef::action("New Scratchpad", crate::actions::NewScratchpad),
             MenuItemDef::action("Open Scratchpad...", crate::actions::OpenScratchpadDialog),
+            MenuItemDef::action_with_condition("Switch Note Palette...", crate::actions::QuickOpen, |s| s.has_scratch),
             MenuItemDef::submenu("Recent Scratches", recent_items),
+            MenuItemDef::separator(),
+            MenuItemDef::action_with_condition("Toggle View Mode", crate::actions::ToggleScratchpadMode, |s| s.has_scratch),
             MenuItemDef::separator(),
             MenuItemDef::action("Reveal in File Manager", crate::actions::RevealScratchesInExplorer),
             MenuItemDef::separator(),

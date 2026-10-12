@@ -734,6 +734,10 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_new_scratchpad(&mut self, _: &crate::actions::NewScratchpad, window: &mut Window, cx: &mut Context<Self>) {
+        self.create_new_scratchpad(None, window, cx);
+    }
+
+    pub(crate) fn create_new_scratchpad(&mut self, custom_title: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
         use crate::service::ScratchService;
 
         let current_path = self.scratchpad_panel.read(cx).file_path().to_path_buf();
@@ -747,8 +751,12 @@ impl Workspace {
             (id, path)
         };
 
-        let active_file_name = self.active_file_name(cx);
-        let content = crate::ui::views::scratchpad_view::default_content_for(active_file_name.as_deref());
+        let content = if let Some(title) = custom_title {
+            format!("# {title}\n")
+        } else {
+            let active_file_name = self.active_file_name(cx);
+            crate::ui::views::scratchpad_view::default_content_for(active_file_name.as_deref())
+        };
 
         // Persist initial scratch file immediately so it appears on disk and in menus
         if let Err(e) = ScratchService::save_scratch_atomic(&path, &content) {
@@ -760,11 +768,31 @@ impl Workspace {
         });
         crate::ui::menus::update_application_menus(cx);
         self.set_right_panel_visible(true, window, cx);
+        self.scratchpad_panel.update(cx, |sp, cx| {
+            sp.focus(window, cx);
+        });
         cx.notify();
     }
 
     pub(crate) fn on_action_open_scratchpad_file(&mut self, action: &crate::actions::OpenScratchpadFile, window: &mut Window, cx: &mut Context<Self>) {
         self.open_scratchpad_file(action.path.clone(), window, cx);
+    }
+
+    pub(crate) fn on_action_quick_open(&mut self, _: &crate::actions::QuickOpen, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_quick_open(window, cx);
+    }
+
+    pub(crate) fn on_action_open_scratchpad_palette(&mut self, _: &crate::actions::OpenScratchpadPalette, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_quick_open(window, cx);
+    }
+
+    pub(crate) fn on_action_toggle_scratchpad_mode(&mut self, _: &crate::actions::ToggleScratchpadMode, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(scratchpad) = self.active_scratchpad(cx) {
+            scratchpad.update(cx, |sp, cx| {
+                sp.cycle_mode(cx);
+            });
+            cx.notify();
+        }
     }
 
     pub(crate) fn open_scratchpad_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -794,6 +822,9 @@ impl Workspace {
                             });
                             crate::settings::save_current(cx);
                         }
+                        sp.update(cx, |sp, cx| {
+                            sp.focus(window, cx);
+                        });
                         cx.notify();
                         return;
                     }
@@ -811,6 +842,9 @@ impl Workspace {
             sp.load_file(id, path, content, window, cx);
         });
         self.set_right_panel_visible(true, window, cx);
+        self.scratchpad_panel.update(cx, |sp, cx| {
+            sp.focus(window, cx);
+        });
         cx.notify();
     }
 

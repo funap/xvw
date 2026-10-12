@@ -78,6 +78,17 @@ pub enum ScratchpadMode {
     Preview,
 }
 
+impl ScratchpadMode {
+    /// Cycles to the next scratchpad mode (Edit -> Split -> Preview -> Edit).
+    pub fn next(self) -> Self {
+        match self {
+            Self::Edit => Self::Split,
+            Self::Split => Self::Preview,
+            Self::Preview => Self::Edit,
+        }
+    }
+}
+
 /// Pure helper for finding non-overlapping, case-insensitive substring matches.
 ///
 /// Returns byte ranges referencing valid UTF-8 boundaries in `text`.
@@ -443,6 +454,12 @@ impl ScratchpadView {
         }
     }
 
+    /// Cycles the scratchpad mode between Edit, Split, and Preview.
+    pub fn cycle_mode(&mut self, cx: &mut Context<Self>) {
+        let next_mode = self.mode.next();
+        self.set_mode(next_mode, cx);
+    }
+
     /// Inserts text at the editor's current cursor position or replaces active selection,
     /// syncing cached content, preview, and triggering debounced auto-save.
     pub fn insert_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -452,7 +469,7 @@ impl ScratchpadView {
 
         self.editor.update(cx, |ed, cx| {
             ed.insert(text, window, cx);
-            ed.focus_handle(cx).focus(window, cx);
+            ed.focus(window, cx);
         });
         let content = self.editor.read(cx).value().to_string();
         self.cached_content = content.clone();
@@ -490,7 +507,9 @@ impl ScratchpadView {
         if self.mode == ScratchpadMode::Preview {
             self.focus_handle.focus(window, cx);
         } else {
-            self.editor.read(cx).focus_handle(cx).focus(window, cx);
+            self.editor.update(cx, |ed, cx| {
+                ed.focus(window, cx);
+            });
         }
     }
 
@@ -761,7 +780,10 @@ impl Render for ScratchpadView {
             )
             .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
                 let recent = crate::service::ScratchService::list_scratches();
-                let mut menu = menu.menu_with_icon("New Scratchpad", IconName::Plus, Box::new(crate::actions::NewScratchpad));
+                let mut menu = menu
+                    .menu_with_icon("Switch Note Palette... (Cmd/Ctrl+P)", IconName::Search, Box::new(crate::actions::QuickOpen))
+                    .separator()
+                    .menu_with_icon("New Scratchpad", IconName::Plus, Box::new(crate::actions::NewScratchpad));
                 menu = menu.separator();
                 if recent.is_empty() {
                     menu = menu.menu_with_icon("No Saved Scratches", IconName::FileText, Box::new(crate::actions::NewScratchpad));
@@ -1095,6 +1117,9 @@ impl Render for ScratchpadView {
                     this.prev_match(cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &crate::actions::ToggleScratchpadMode, _, cx| {
+                this.cycle_mode(cx);
+            }))
             .child(toolbar)
             .children(search_bar)
             .child(
@@ -1137,6 +1162,14 @@ pub fn init(cx: &mut App) {
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-f", crate::actions::ToggleSearch, Some(CONTEXT)),
         KeyBinding::new("escape", crate::actions::ToggleSearch, Some(SEARCH_CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-e", crate::actions::ToggleScratchpadMode, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-e", crate::actions::ToggleScratchpadMode, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-p", crate::actions::QuickOpen, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-p", crate::actions::QuickOpen, Some(CONTEXT)),
     ]);
 }
 
@@ -1292,6 +1325,13 @@ mod tests {
         assert_ne!(ScratchpadMode::Split, ScratchpadMode::Edit);
         assert_ne!(ScratchpadMode::Split, ScratchpadMode::Preview);
         assert_ne!(ScratchpadMode::Edit, ScratchpadMode::Preview);
+    }
+
+    #[test]
+    fn test_scratchpad_mode_cycle() {
+        assert_eq!(ScratchpadMode::Edit.next(), ScratchpadMode::Split);
+        assert_eq!(ScratchpadMode::Split.next(), ScratchpadMode::Preview);
+        assert_eq!(ScratchpadMode::Preview.next(), ScratchpadMode::Edit);
     }
 
     #[test]

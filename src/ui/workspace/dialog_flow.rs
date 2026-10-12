@@ -70,6 +70,11 @@ impl Workspace {
                         tree.set_active_group(group.read(cx).id, cx);
                     });
                     self.sync_active_editor(window, cx);
+                    if let Some(editor_view) = self.effective_editor_view(cx) {
+                        editor_view.update(cx, |view, cx| {
+                            view.hex_view().read(cx).focus_handle(cx).focus(window, cx);
+                        });
+                    }
                     if action.record_recent {
                         self.record_recent_file(path.clone(), action.format, cx);
                     }
