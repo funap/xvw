@@ -49,15 +49,15 @@ impl ScratchService {
         let text = content.strip_prefix('\u{feff}').unwrap_or(content);
         let mut lines = text.split_inclusive('\n');
         let first_line = lines.next()?;
-        let trimmed_first = first_line.trim_end_matches(['\r', '\n']).trim();
-        if trimmed_first != "---" {
+        let delimiter_first = first_line.trim_end_matches(['\r', '\n']);
+        if delimiter_first != "---" {
             return None;
         }
 
         let mut current_offset = first_line.len();
         for line in lines {
-            let trimmed = line.trim_end_matches(['\r', '\n']).trim();
-            if trimmed == "---" || trimmed == "..." {
+            let delimiter = line.trim_end_matches(['\r', '\n']);
+            if delimiter == "---" || delimiter == "..." {
                 let yaml = &text[first_line.len()..current_offset];
                 let body_offset = current_offset + line.len();
                 let body = &text[body_offset..];
@@ -114,8 +114,12 @@ impl ScratchService {
         };
 
         if let Some(target) = target_file.filter(|p| !p.as_os_str().is_empty()) {
-            let target_str = target.to_string_lossy();
-            format!("---\ntarget_file: {target_str}\n---\n# {heading}\n")
+            #[derive(serde::Serialize)]
+            struct Frontmatter<'a> {
+                target_file: &'a Path,
+            }
+            let yaml = serde_yaml::to_string(&Frontmatter { target_file: target }).unwrap_or_else(|_| format!("target_file: \"{}\"\n", target.display()));
+            format!("---\n{yaml}---\n# {heading}\n")
         } else {
             format!("# {heading}\n")
         }
@@ -123,6 +127,9 @@ impl ScratchService {
 
     /// Returns true if two file paths refer to the same target file.
     pub fn is_same_target_file(path_a: &Path, path_b: &Path) -> bool {
+        if path_a.as_os_str().is_empty() || path_b.as_os_str().is_empty() {
+            return false;
+        }
         if path_a == path_b {
             return true;
         }
@@ -397,6 +404,10 @@ mod tests {
         assert_eq!(ScratchService::split_frontmatter_and_body("# Plain markdown"), None);
         assert_eq!(ScratchService::split_frontmatter_and_body("---\nUnclosed frontmatter"), None);
         assert_eq!(ScratchService::split_frontmatter_and_body(""), None);
+
+        // Indented delimiters should not be treated as frontmatter
+        assert_eq!(ScratchService::split_frontmatter_and_body("   ---\ntarget_file: a.bin\n---\n# Notes"), None);
+        assert_eq!(ScratchService::split_frontmatter_and_body("---\ntarget_file: a.bin\n   ---\n# Notes"), None);
     }
 
     #[test]
@@ -449,6 +460,12 @@ mod tests {
 
         let formatted_default = ScratchService::format_scratch_content(None, None);
         assert_eq!(formatted_default, "# Scratchpad\n");
+
+        // Special characters in path (e.g., hash, spaces) must round-trip correctly
+        let special_path = Path::new("/path/with space/#1/firmware.bin");
+        let formatted_special = ScratchService::format_scratch_content(Some(special_path), None);
+        let extracted_special = ScratchService::extract_target_file(&formatted_special);
+        assert_eq!(extracted_special, Some(special_path.to_path_buf()));
     }
 
     #[test]
@@ -472,5 +489,10 @@ mod tests {
             Path::new("/foo/bar/other.bin")
         ));
         assert!(!ScratchService::is_same_target_file(Path::new("other.bin"), Path::new("/foo/bar/firmware.bin")));
+
+        // Empty paths must return false
+        assert!(!ScratchService::is_same_target_file(Path::new(""), Path::new("/foo/bar/firmware.bin")));
+        assert!(!ScratchService::is_same_target_file(Path::new("/foo/bar/firmware.bin"), Path::new("")));
+        assert!(!ScratchService::is_same_target_file(Path::new(""), Path::new("")));
     }
 }

@@ -707,6 +707,13 @@ impl Render for QuickOpenModal {
                                 .into_any_element()
                         };
 
+                        let target_name_opt = entry
+                            .target_file
+                            .as_ref()
+                            .and_then(|p| p.file_name())
+                            .and_then(|n| n.to_str())
+                            .map(|s| s.to_string());
+
                         h_flex()
                             .id(SharedString::from(format!("palette-item-{idx}")))
                             .items_center()
@@ -728,7 +735,19 @@ impl Render for QuickOpenModal {
                                     .overflow_hidden()
                                     .child(Icon::new(IconName::FileText).size(px(14.0)).text_color(theme.muted_foreground))
                                     .child(div().text_sm().child(title_element))
-                                    .child(filename_element),
+                                    .child(filename_element)
+                                    .when_some(target_name_opt, |el, target_name| {
+                                        el.child(
+                                            div()
+                                                .px_1()
+                                                .py_0p5()
+                                                .rounded_md()
+                                                .bg(theme.primary.opacity(0.15))
+                                                .text_xs()
+                                                .text_color(theme.primary)
+                                                .child(target_name),
+                                        )
+                                    }),
                             )
                             .child(
                                 h_flex()

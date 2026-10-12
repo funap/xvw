@@ -65,6 +65,7 @@ pub fn default_content_for_target(target_file: Option<&Path>, custom_title: Opti
 
 /// Returns default scratchpad markdown content for the given file name,
 /// or falls back to `# Scratchpad\n` if no file name is provided.
+#[allow(dead_code)]
 pub fn default_content_for(file_name: Option<&str>) -> String {
     if let Some(name) = file_name.map(str::trim).filter(|s| !s.is_empty()) {
         format!("# {name}\n")
@@ -162,6 +163,7 @@ pub struct ScratchpadView {
     id: usize,
     file_path: PathBuf,
     title: String,
+    target_file: Option<PathBuf>,
     cached_content: String,
     debounce_task: Option<Task<()>>,
     is_dirty: bool,
@@ -183,21 +185,28 @@ pub struct ScratchpadView {
 impl ScratchpadView {
     #[allow(dead_code)]
     pub fn new(id: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_with_target_file(id, None, window, cx)
+        Self::new_with_target_path(id, None, window, cx)
     }
 
-    pub fn new_with_target_file(id: usize, target_file: Option<&str>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new_with_target_path(id: usize, target_path: Option<&Path>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let file_path = crate::service::ScratchService::scratch_file_path(id).unwrap_or_else(|| PathBuf::from(format!("scratch_{id}.md")));
         let content = if file_path.exists() {
-            crate::service::ScratchService::load_scratch(&file_path).unwrap_or_else(|_| default_content_for(target_file))
+            crate::service::ScratchService::load_scratch(&file_path).unwrap_or_else(|_| default_content_for_target(target_path, None))
         } else {
-            default_content_for(target_file)
+            default_content_for_target(target_path, None)
         };
         Self::new_with_file(id, file_path, content, window, cx)
     }
 
+    #[deprecated(note = "Use new_with_target_path instead")]
+    #[allow(dead_code)]
+    pub fn new_with_target_file(id: usize, target_file: Option<&str>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_target_path(id, target_file.map(Path::new), window, cx)
+    }
+
     pub fn new_with_file(id: usize, file_path: PathBuf, content: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let title = crate::service::ScratchService::extract_title(&content).unwrap_or_else(|| format!("Scratchpad {id}"));
+        let target_file = crate::service::ScratchService::extract_target_file(&content);
         let cached_content = content.clone();
         let focus_handle = cx.focus_handle();
         let scratchpad_weak = cx.weak_entity();
@@ -235,6 +244,7 @@ impl ScratchpadView {
                 let content = editor.read(cx).value().to_string();
                 this.cached_content = content.clone();
                 this.title = crate::service::ScratchService::extract_title(&content).unwrap_or_else(|| format!("Scratchpad {}", this.id));
+                this.target_file = crate::service::ScratchService::extract_target_file(&content);
                 this.is_dirty = true;
                 this.text_view_state.update(cx, |tv, cx| {
                     tv.set_text(&content, cx);
@@ -326,6 +336,7 @@ impl ScratchpadView {
             id,
             file_path,
             title,
+            target_file,
             cached_content,
             debounce_task: None,
             is_dirty: false,
@@ -359,6 +370,7 @@ impl ScratchpadView {
         self.id = id;
         self.file_path = file_path.clone();
         self.title = crate::service::ScratchService::extract_title(&content).unwrap_or_else(|| format!("Scratchpad {id}"));
+        self.target_file = crate::service::ScratchService::extract_target_file(&content);
         self.cached_content = content.clone();
         self.is_dirty = false;
         self.debounce_task = None;
@@ -397,7 +409,12 @@ impl ScratchpadView {
 
     /// Returns the target binary file linked to this scratchpad in its YAML frontmatter, if any.
     pub fn target_file(&self) -> Option<PathBuf> {
-        crate::service::ScratchService::extract_target_file(&self.cached_content)
+        self.target_file.clone()
+    }
+
+    /// Returns a reference to the target binary file path linked to this scratchpad, if any.
+    pub fn target_file_path(&self) -> Option<&Path> {
+        self.target_file.as_deref()
     }
 
     #[allow(dead_code)]
@@ -774,13 +791,9 @@ impl Render for ScratchpadView {
         let filename_str = self.file_path.file_name().and_then(|n| n.to_str()).unwrap_or("scratch.md").to_string();
 
         let title_str = self.title.clone();
-        let target_file_opt = self.target_file();
-        let target_file_name = target_file_opt
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .map(|s| s.to_string());
-        let target_file_tooltip = target_file_opt.as_ref().map(|p| format!("Linked binary: {}", p.display()));
+        let target_file_opt = self.target_file_path();
+        let target_file_name = target_file_opt.and_then(|p| p.file_name()).and_then(|n| n.to_str()).map(|s| s.to_string());
+        let target_file_tooltip = target_file_opt.map(|p| format!("Linked binary: {}", p.display()));
 
         let mut switcher = Button::new("scratchpad-switcher").ghost().xsmall();
         if let Some(ref tt) = target_file_tooltip {

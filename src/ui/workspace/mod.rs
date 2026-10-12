@@ -618,6 +618,8 @@ impl Workspace {
     ) -> Option<Entity<EditorView>> {
         use crate::service::ScratchService;
 
+        let effective_target = target_path.canonicalize().unwrap_or_else(|_| target_path.to_path_buf());
+
         // 1. Check if the currently active editor view already matches target_path
         if let Some(view) = self.active_editor_view(cx) {
             let matches = view
@@ -627,7 +629,7 @@ impl Workspace {
                 .document
                 .read()
                 .ok()
-                .is_some_and(|doc| ScratchService::is_same_target_file(doc.path(), target_path));
+                .is_some_and(|doc| ScratchService::is_same_target_file(doc.path(), &effective_target));
             if matches {
                 return Some(view);
             }
@@ -637,9 +639,11 @@ impl Workspace {
         let mut target = None;
         let all_groups = self.pane_tree.read(cx).all_groups();
         for group in all_groups {
-            let tabs = group.read(cx).tabs.clone();
-            for (idx, tab) in tabs.iter().enumerate() {
-                let matches = tab.path(cx).is_some_and(|tab_path| ScratchService::is_same_target_file(&tab_path, target_path));
+            let group_ref = group.read(cx);
+            for (idx, tab) in group_ref.tabs.iter().enumerate() {
+                let matches = tab
+                    .path(cx)
+                    .is_some_and(|tab_path| ScratchService::is_same_target_file(&tab_path, &effective_target));
                 if matches && let Some(view) = tab.content.downcast::<Entity<EditorView>>() {
                     target = Some((group.clone(), idx, view));
                     break;
@@ -795,6 +799,8 @@ impl Workspace {
     }
 
     /// Returns the file name of the currently active or effective editor document, if any.
+    ///
+    /// Maintained primarily for display labels and test assertions; internal routing uses [`Self::active_file_path`].
     #[allow(dead_code)]
     pub fn active_file_name(&self, cx: &App) -> Option<String> {
         let path = self.active_file_path(cx)?;
