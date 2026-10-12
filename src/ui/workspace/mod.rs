@@ -609,6 +609,63 @@ impl Workspace {
         }
     }
 
+    /// Finds and activates an open EditorView matching `target_path` across all pane groups.
+    pub fn find_or_activate_editor_view_for_path(
+        &mut self,
+        target_path: &std::path::Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<EditorView>> {
+        use crate::service::ScratchService;
+
+        // 1. Check if the currently active editor view already matches target_path
+        if let Some(view) = self.active_editor_view(cx) {
+            let matches = view
+                .read(cx)
+                .editor()
+                .read(cx)
+                .document
+                .read()
+                .ok()
+                .is_some_and(|doc| ScratchService::is_same_target_file(doc.path(), target_path));
+            if matches {
+                return Some(view);
+            }
+        }
+
+        // 2. Search all groups and tabs
+        let mut target = None;
+        let all_groups = self.pane_tree.read(cx).all_groups();
+        for group in all_groups {
+            let tabs = group.read(cx).tabs.clone();
+            for (idx, tab) in tabs.iter().enumerate() {
+                let matches = tab.path(cx).is_some_and(|tab_path| ScratchService::is_same_target_file(&tab_path, target_path));
+                if matches && let Some(view) = tab.content.downcast::<Entity<EditorView>>() {
+                    target = Some((group.clone(), idx, view));
+                    break;
+                }
+            }
+            if target.is_some() {
+                break;
+            }
+        }
+
+        if let Some((group, idx, view)) = target {
+            let group_id = group.read(cx).id;
+            group.update(cx, |g, cx| {
+                g.activate_tab(idx, window, cx);
+            });
+            self.pane_tree.update(cx, |tree, cx| {
+                tree.set_active_group(group_id, cx);
+            });
+            self.sync_active_editor(window, cx);
+            cx.notify();
+            Some(view)
+        } else {
+            None
+        }
+    }
+
     pub fn active_scratchpad(&self, cx: &App) -> Option<Entity<crate::ui::views::scratchpad_view::ScratchpadView>> {
         if self.is_right_panel_visible {
             return Some(self.scratchpad_panel.clone());
@@ -725,26 +782,37 @@ impl Workspace {
         resolve_effective_item(current, last, |view| self.is_editor_view_open(view, cx), || self.any_open_editor_view(cx))
     }
 
-    /// Returns the file name of the currently active or effective editor document, if any.
-    pub fn active_file_name(&self, cx: &App) -> Option<String> {
+    /// Returns the file path of the currently active or effective editor document, if any.
+    pub fn active_file_path(&self, cx: &App) -> Option<PathBuf> {
         let editor = self.effective_editor(cx)?;
         let doc = editor.read(cx).document.read().ok()?;
         let path = doc.path();
+        if path.as_os_str().is_empty() {
+            None
+        } else {
+            Some(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+        }
+    }
+
+    /// Returns the file name of the currently active or effective editor document, if any.
+    #[allow(dead_code)]
+    pub fn active_file_name(&self, cx: &App) -> Option<String> {
+        let path = self.active_file_path(cx)?;
         path.file_name()
             .and_then(|n| n.to_str())
             .filter(|s| !s.trim().is_empty())
             .map(|s| s.to_string())
     }
 
-    /// Updates the scratchpad panel to use the active file's name in its heading
+    /// Updates the scratchpad panel to link to the active file in its frontmatter
     /// if the scratchpad has not yet been edited or saved to disk.
     pub(crate) fn update_scratchpad_for_active_file_if_untouched(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.scratchpad_panel.read(cx).is_untouched()
-            && let Some(target_name) = self.active_file_name(cx)
+            && let Some(target_path) = self.active_file_path(cx)
         {
             let id = self.scratchpad_panel.read(cx).id();
             let path = self.scratchpad_panel.read(cx).file_path().to_path_buf();
-            let content = crate::ui::views::scratchpad_view::default_content_for(Some(&target_name));
+            let content = crate::ui::views::scratchpad_view::default_content_for_target(Some(&target_path), None);
             self.scratchpad_panel.update(cx, |sp, cx| {
                 sp.load_file(id, path, content, window, cx);
             });
@@ -936,7 +1004,12 @@ impl Workspace {
         })
     }
 
-    pub(crate) fn open_editor_view(&mut self, document: Arc<RwLock<crate::core::document::Document>>, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_editor_view(
+        &mut self,
+        document: Arc<RwLock<crate::core::document::Document>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<EditorView> {
         let default_encoding = *cx.global::<Encoding>();
         let default_radix = *cx.global::<DisplayRadix>();
         let default_group_size = *cx.global::<ByteGroupSize>();
@@ -953,7 +1026,7 @@ impl Workspace {
         });
 
         let editor_view = cx.new(|cx| EditorView::new(editor, window, cx));
-        let content = TabContent::new(editor_view);
+        let content = TabContent::new(editor_view.clone());
 
         self.pane_tree.update(cx, |tree, cx| {
             tree.open_tab(content, window, cx);
@@ -962,6 +1035,7 @@ impl Workspace {
         self.sync_active_editor(window, cx);
         self.update_scratchpad_for_active_file_if_untouched(window, cx);
         cx.notify();
+        editor_view
     }
 
     pub(crate) fn on_action_new_file(&mut self, _: &NewFile, window: &mut Window, cx: &mut Context<Self>) {

@@ -1168,8 +1168,8 @@ impl Workspace {
                                 });
                             } else {
                                 let path = crate::service::ScratchService::scratch_file_path(1).unwrap_or_else(|| std::path::PathBuf::from("scratch_1.md"));
-                                let active_file_name = this.active_file_name(cx);
-                                let content = crate::ui::views::scratchpad_view::default_content_for(active_file_name.as_deref());
+                                let target_file = this.active_file_path(cx);
+                                let content = crate::ui::views::scratchpad_view::default_content_for_target(target_file.as_deref(), None);
                                 this.scratchpad_panel.update(cx, |s, cx| {
                                     s.load_file(1, path, content, window, cx);
                                 });

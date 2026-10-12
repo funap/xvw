@@ -1,7 +1,7 @@
 use crate::core::format::FileFormat;
 use gpui_kit::Action;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const fn default_record_recent() -> bool {
     true
@@ -193,11 +193,13 @@ pub struct PaletteConfirm;
 pub struct PaletteCancel;
 
 /// Navigates the active binary editor to the offset or range.
-#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema, Action)]
 #[action(namespace = app)]
 #[serde(deny_unknown_fields)]
 pub struct NavigateToOffset {
     pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_file: Option<std::path::PathBuf>,
 }
 
 /// Inserts the raw offset text (without link format) of the active editor into the active scratchpad.

@@ -930,6 +930,7 @@ pub(crate) mod tests {
                 path: PathBuf::from("scratch_1.md"),
                 title: "Rust Notes".to_string(),
                 modified: None,
+                target_file: None,
             }),
         ];
 
@@ -959,6 +960,7 @@ pub(crate) mod tests {
                 path: PathBuf::from("scratch_1.md"),
                 title: "format_table".to_string(),
                 modified: None,
+                target_file: None,
             },
             ScratchEntry {
                 id: Some(2),
@@ -966,6 +968,7 @@ pub(crate) mod tests {
                 path: PathBuf::from("scratch_2.md"),
                 title: "file_management_tool".to_string(),
                 modified: None,
+                target_file: None,
             },
             ScratchEntry {
                 id: Some(3),
@@ -973,6 +976,7 @@ pub(crate) mod tests {
                 path: PathBuf::from("scratch_3.md"),
                 title: "FastMessageThread".to_string(),
                 modified: None,
+                target_file: None,
             },
         ];
 

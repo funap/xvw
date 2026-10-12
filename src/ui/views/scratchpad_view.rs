@@ -57,6 +57,12 @@ const CONTEXT: &str = "ScratchpadView";
 const SEARCH_CONTEXT: &str = "ScratchpadSearch";
 pub const DEFAULT_SCRATCHPAD_CONTENT: &str = "# Scratchpad\n";
 
+/// Returns default scratchpad markdown content linking to `target_file` in its YAML frontmatter,
+/// or simple markdown if `target_file` is None.
+pub fn default_content_for_target(target_file: Option<&Path>, custom_title: Option<&str>) -> String {
+    crate::service::ScratchService::format_scratch_content(target_file, custom_title)
+}
+
 /// Returns default scratchpad markdown content for the given file name,
 /// or falls back to `# Scratchpad\n` if no file name is provided.
 pub fn default_content_for(file_name: Option<&str>) -> String {
@@ -194,15 +200,24 @@ impl ScratchpadView {
         let title = crate::service::ScratchService::extract_title(&content).unwrap_or_else(|| format!("Scratchpad {id}"));
         let cached_content = content.clone();
         let focus_handle = cx.focus_handle();
+        let scratchpad_weak = cx.weak_entity();
         let editor = cx.new(|cx| {
             let mut state = EditorState::new(window, cx).language("markdown");
             state.set_value(content.clone(), window, cx);
             state.lsp_mut().definition_provider = Some(Rc::new(ScratchpadOffsetDefinitionProvider));
-            state.lsp_mut().show_document = Some(Rc::new(|params, window, cx| {
+            let scratchpad_weak = scratchpad_weak.clone();
+            state.lsp_mut().show_document = Some(Rc::new(move |params, window, cx| {
                 let uri_str = params.uri.to_string();
                 let target = uri_str.strip_prefix("offset:").unwrap_or(&uri_str);
                 if crate::core::offset_link::parse_offset_link(target).is_some() {
-                    window.dispatch_action(Box::new(crate::actions::NavigateToOffset { target: target.to_string() }), cx);
+                    let target_file = scratchpad_weak.upgrade().and_then(|sp| sp.read(cx).target_file());
+                    window.dispatch_action(
+                        Box::new(crate::actions::NavigateToOffset {
+                            target: target.to_string(),
+                            target_file,
+                        }),
+                        cx,
+                    );
                     true
                 } else {
                     false
@@ -378,6 +393,11 @@ impl ScratchpadView {
 
     pub fn title_str(&self) -> &str {
         &self.title
+    }
+
+    /// Returns the target binary file linked to this scratchpad in its YAML frontmatter, if any.
+    pub fn target_file(&self) -> Option<PathBuf> {
+        crate::service::ScratchService::extract_target_file(&self.cached_content)
     }
 
     #[allow(dead_code)]
@@ -694,6 +714,7 @@ impl ScratchpadView {
     }
 
     fn render_text_view(&self) -> TextView {
+        let target_file = self.target_file();
         TextView::new(&self.text_view_state)
             .size_full()
             .selectable(true)
@@ -729,9 +750,15 @@ impl ScratchpadView {
                             }),
                     )
             })
-            .on_link_click(|url, _event, window, cx| {
+            .on_link_click(move |url, _event, window, cx| {
                 if crate::core::offset_link::parse_offset_link(url.as_ref()).is_some() {
-                    window.dispatch_action(Box::new(crate::actions::NavigateToOffset { target: url.to_string() }), cx);
+                    window.dispatch_action(
+                        Box::new(crate::actions::NavigateToOffset {
+                            target: url.to_string(),
+                            target_file: target_file.clone(),
+                        }),
+                        cx,
+                    );
                 } else {
                     cx.open_url(url.as_ref());
                 }
@@ -747,10 +774,19 @@ impl Render for ScratchpadView {
         let filename_str = self.file_path.file_name().and_then(|n| n.to_str()).unwrap_or("scratch.md").to_string();
 
         let title_str = self.title.clone();
+        let target_file_opt = self.target_file();
+        let target_file_name = target_file_opt
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string());
+        let target_file_tooltip = target_file_opt.as_ref().map(|p| format!("Linked binary: {}", p.display()));
 
-        let switcher = Button::new("scratchpad-switcher")
-            .ghost()
-            .xsmall()
+        let mut switcher = Button::new("scratchpad-switcher").ghost().xsmall();
+        if let Some(ref tt) = target_file_tooltip {
+            switcher = switcher.tooltip(tt.clone());
+        }
+        let switcher = switcher
             .child(
                 div()
                     .flex()
@@ -766,6 +802,18 @@ impl Render for ScratchpadView {
                             .truncate()
                             .child(title_str),
                     )
+                    .when_some(target_file_name, |el, target_name| {
+                        el.child(
+                            div()
+                                .px_1()
+                                .py_0p5()
+                                .rounded_md()
+                                .bg(theme.primary.opacity(0.15))
+                                .text_xs()
+                                .text_color(theme.primary)
+                                .child(target_name),
+                        )
+                    })
                     .child(
                         div()
                             .px_1()
@@ -1284,6 +1332,45 @@ mod tests {
         assert_eq!(super::default_content_for(None), "# Scratchpad\n");
         assert_eq!(super::default_content_for(Some("")), "# Scratchpad\n");
         assert_eq!(super::default_content_for(Some("   ")), "# Scratchpad\n");
+    }
+
+    #[test]
+    fn test_default_content_for_target_frontmatter() {
+        use std::path::PathBuf;
+
+        let path = PathBuf::from("/path/to/firmware.bin");
+        let content_with_title = super::default_content_for_target(Some(&path), Some("Firmware Bootloader Notes"));
+        assert_eq!(
+            content_with_title,
+            "---\ntarget_file: /path/to/firmware.bin\n---\n# Firmware Bootloader Notes\n"
+        );
+        assert_eq!(
+            crate::service::ScratchService::extract_target_file(&content_with_title),
+            Some(PathBuf::from("/path/to/firmware.bin"))
+        );
+        assert_eq!(
+            crate::service::ScratchService::extract_title(&content_with_title),
+            Some("Firmware Bootloader Notes".to_string())
+        );
+
+        let content_default_title = super::default_content_for_target(Some(&path), None);
+        assert_eq!(content_default_title, "---\ntarget_file: /path/to/firmware.bin\n---\n# firmware.bin\n");
+        assert_eq!(
+            crate::service::ScratchService::extract_target_file(&content_default_title),
+            Some(PathBuf::from("/path/to/firmware.bin"))
+        );
+        assert_eq!(
+            crate::service::ScratchService::extract_title(&content_default_title),
+            Some("firmware.bin".to_string())
+        );
+
+        let content_no_target = super::default_content_for_target(None, None);
+        assert_eq!(content_no_target, "# Scratchpad\n");
+        assert_eq!(crate::service::ScratchService::extract_target_file(&content_no_target), None);
+        assert_eq!(
+            crate::service::ScratchService::extract_title(&content_no_target),
+            Some("Scratchpad".to_string())
+        );
     }
 
     #[test]

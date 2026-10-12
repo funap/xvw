@@ -126,3 +126,48 @@ fn test_active_file_name_extraction_empty_or_none_fallback() {
     assert_eq!(content, "# Scratchpad\n");
     assert_eq!(crate::service::ScratchService::extract_title(&content), Some("Scratchpad".to_string()));
 }
+
+#[test]
+fn test_active_file_path_frontmatter_content() {
+    let doc = Document::new(PathBuf::from("/path/to/firmware.bin"), Buffer::new(vec![]));
+    let path = doc.path();
+    let content = crate::ui::views::scratchpad_view::default_content_for_target(Some(path), Some("Firmware Bootloader Notes"));
+    assert_eq!(content, "---\ntarget_file: /path/to/firmware.bin\n---\n# Firmware Bootloader Notes\n");
+    assert_eq!(
+        crate::service::ScratchService::extract_target_file(&content),
+        Some(PathBuf::from("/path/to/firmware.bin"))
+    );
+    assert_eq!(
+        crate::service::ScratchService::extract_title(&content),
+        Some("Firmware Bootloader Notes".to_string())
+    );
+
+    // Without custom title
+    let content_default = crate::ui::views::scratchpad_view::default_content_for_target(Some(path), None);
+    assert_eq!(content_default, "---\ntarget_file: /path/to/firmware.bin\n---\n# firmware.bin\n");
+    assert_eq!(
+        crate::service::ScratchService::extract_target_file(&content_default),
+        Some(PathBuf::from("/path/to/firmware.bin"))
+    );
+}
+
+#[test]
+fn test_navigate_to_offset_action_with_target_file() {
+    let action = crate::actions::NavigateToOffset {
+        target: "0x1040".to_string(),
+        target_file: Some(PathBuf::from("/path/to/firmware.bin")),
+    };
+    assert_eq!(action.target, "0x1040");
+    assert_eq!(action.target_file, Some(PathBuf::from("/path/to/firmware.bin")));
+
+    // Test serde round-trip
+    let json = serde_json::to_string(&action).expect("must serialize");
+    let deserialized: crate::actions::NavigateToOffset = serde_json::from_str(&json).expect("must deserialize");
+    assert_eq!(deserialized, action);
+
+    // Test backward compatibility without target_file
+    let json_legacy = r#"{"target":"0x2000"}"#;
+    let legacy_action: crate::actions::NavigateToOffset = serde_json::from_str(json_legacy).expect("must deserialize legacy action");
+    assert_eq!(legacy_action.target, "0x2000");
+    assert_eq!(legacy_action.target_file, None);
+}

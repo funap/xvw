@@ -751,12 +751,8 @@ impl Workspace {
             (id, path)
         };
 
-        let content = if let Some(title) = custom_title {
-            format!("# {title}\n")
-        } else {
-            let active_file_name = self.active_file_name(cx);
-            crate::ui::views::scratchpad_view::default_content_for(active_file_name.as_deref())
-        };
+        let target_file = self.active_file_path(cx);
+        let content = crate::ui::views::scratchpad_view::default_content_for_target(target_file.as_deref(), custom_title);
 
         // Persist initial scratch file immediately so it appears on disk and in menus
         if let Err(e) = ScratchService::save_scratch_atomic(&path, &content) {
@@ -866,6 +862,72 @@ impl Workspace {
         let Some(target) = crate::core::offset_link::parse_offset_link(&action.target) else {
             return;
         };
+
+        let target_file = action
+            .target_file
+            .clone()
+            .or_else(|| self.active_scratchpad(cx).and_then(|sp| sp.read(cx).target_file()));
+
+        if let Some(ref target_path) = target_file {
+            if let Some(editor_view) = self.find_or_activate_editor_view_for_path(target_path, window, cx) {
+                let focus_handle = editor_view.read(cx).focus_handle(cx);
+                focus_handle.focus(window, cx);
+                editor_view.update(cx, |view, cx| match target {
+                    crate::core::offset_link::OffsetLinkTarget::Offset(off) => {
+                        view.jump_to_offset(off, false, cx);
+                    }
+                    crate::core::offset_link::OffsetLinkTarget::Range(range) => {
+                        view.jump_to_range(range, cx);
+                    }
+                });
+                cx.notify();
+                return;
+            }
+
+            // Target file is not open in any editor tab; open it anew
+            let view = cx.entity().clone();
+            let target_path_clone = target_path.clone();
+            cx.spawn_in(window, async move |_, window| {
+                let document_service_opt = window.update(|_, cx| crate::app_state::AppState::global(cx).document_service.clone()).ok();
+                if let Some(document_service) = document_service_opt {
+                    match document_service.open_file(target_path_clone.clone()).await {
+                        Ok(document) => {
+                            window
+                                .update(|window, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.record_recent_file(target_path_clone.clone(), Some(crate::core::format::FileFormat::Binary), cx);
+                                        let editor_view = this.open_editor_view(document, window, cx);
+                                        let focus_handle = editor_view.read(cx).focus_handle(cx);
+                                        focus_handle.focus(window, cx);
+                                        editor_view.update(cx, |view, cx| match target {
+                                            crate::core::offset_link::OffsetLinkTarget::Offset(off) => {
+                                                view.jump_to_offset(off, false, cx);
+                                            }
+                                            crate::core::offset_link::OffsetLinkTarget::Range(range) => {
+                                                view.jump_to_range(range, cx);
+                                            }
+                                        });
+                                        cx.notify();
+                                    });
+                                })
+                                .ok();
+                        }
+                        Err(e) => {
+                            window
+                                .update(|window, cx| {
+                                    window.push_notification(
+                                        crate::ui::notification::error(format!("Failed to open target file {}: {}", target_path_clone.display(), e)),
+                                        cx,
+                                    );
+                                })
+                                .ok();
+                        }
+                    }
+                }
+            })
+            .detach();
+            return;
+        }
 
         if let Some(editor_view) = self.find_or_activate_editor_view(window, cx) {
             let focus_handle = editor_view.read(cx).focus_handle(cx);
