@@ -233,6 +233,11 @@ impl FileTreeView {
         }
     }
 
+    /// Returns the currently opened folder root path, if any.
+    pub fn root_path(&self) -> Option<&PathBuf> {
+        self.root_path.as_ref()
+    }
+
     fn load_root(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         cx.spawn(|view: WeakEntity<FileTreeView>, cx: &mut AsyncApp| {
             let mut cx = cx.clone();

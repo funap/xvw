@@ -142,6 +142,7 @@ fn build_file_menu() -> MenuDef {
         items: vec![
             MenuItemDef::action("New File...", crate::actions::NewFile),
             MenuItemDef::action("Open File...", crate::actions::OpenFileDialog),
+            MenuItemDef::action("Quick Open...", crate::actions::QuickOpen),
             MenuItemDef::action("Open Folder...", crate::actions::OpenFolder),
             MenuItemDef::action("Close Folder", crate::actions::CloseFolder),
             MenuItemDef::separator(),
