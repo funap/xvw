@@ -13,6 +13,7 @@ pub mod encoding;
 pub mod entropy;
 pub mod fill;
 pub mod format;
+pub mod fuzzy_matcher;
 pub mod goto;
 pub mod hex_import;
 pub mod history;

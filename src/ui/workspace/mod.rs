@@ -44,6 +44,7 @@ pub struct Workspace {
     pub is_right_panel_visible: bool,
     pub new_file_modal: Option<Entity<crate::ui::dialogs::new_file_modal::NewFileModal>>,
     pub fill_selection_modal: Option<Entity<crate::ui::dialogs::fill_selection_modal::FillSelectionModal>>,
+    pub quick_open_modal: Option<Entity<crate::ui::dialogs::quick_open_modal::QuickOpenModal>>,
     pub untitled_count: usize,
     pub(crate) force_close: bool,
     focus_handle: FocusHandle,
@@ -53,6 +54,8 @@ pub struct Workspace {
 }
 
 pub fn init(cx: &mut App) {
+    crate::ui::dialogs::quick_open_modal::init(cx);
+
     cx.bind_keys([
         KeyBinding::new("shift-escape", gpui_kit::component::dock::ToggleZoom, Some("Workspace")),
         #[cfg(target_os = "macos")]
@@ -123,6 +126,21 @@ pub fn init(cx: &mut App) {
     cx.on_action::<crate::actions::DeleteCurrentScratchpad>(|_, cx| {
         defer_in_active_workspace(cx, |workspace, window, cx| {
             workspace.on_action_delete_current_scratchpad(&crate::actions::DeleteCurrentScratchpad, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::QuickOpen>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_quick_open(&crate::actions::QuickOpen, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::OpenScratchpadPalette>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_open_scratchpad_palette(&crate::actions::OpenScratchpadPalette, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::ToggleScratchpadMode>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_toggle_scratchpad_mode(&crate::actions::ToggleScratchpadMode, window, cx);
         });
     });
     cx.on_action::<crate::actions::NavigateToOffset>(|action, cx| {
@@ -510,6 +528,7 @@ impl Workspace {
             is_right_panel_visible: false,
             new_file_modal: None,
             fill_selection_modal: None,
+            quick_open_modal: None,
             untitled_count: 0,
             force_close: false,
             focus_handle: cx.focus_handle(),
@@ -836,8 +855,9 @@ impl Workspace {
         self.is_right_panel_visible = visible;
 
         if visible {
-            let focus_handle = self.scratchpad_panel.read(cx).focus_handle(cx);
-            focus_handle.focus(window, cx);
+            self.scratchpad_panel.update(cx, |sp, cx| {
+                sp.focus(window, cx);
+            });
         } else {
             self.focus_handle.focus(window, cx);
         }
@@ -1036,6 +1056,49 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(crate) fn open_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quick_open_modal.is_some() {
+            return;
+        }
+
+        use crate::ui::dialogs::quick_open_modal::{QuickOpenEvent, QuickOpenModal};
+
+        let modal = cx.new(|cx| QuickOpenModal::new(window, cx));
+        cx.subscribe_in(&modal, window, |this, _, event: &QuickOpenEvent, window, cx| match event {
+            QuickOpenEvent::OpenFile(path) => {
+                let path = path.clone();
+                this.close_quick_open(window, cx);
+                this.open_scratchpad_file(path, window, cx);
+            }
+            QuickOpenEvent::NewNote(custom_title) => {
+                let custom_title = custom_title.clone();
+                this.close_quick_open(window, cx);
+                this.create_new_scratchpad(custom_title.as_deref(), window, cx);
+            }
+            QuickOpenEvent::Cancel => {
+                this.close_quick_open(window, cx);
+            }
+        })
+        .detach();
+
+        modal.update(cx, |m, cx| {
+            m.focus(window, cx);
+        });
+
+        self.quick_open_modal = Some(modal);
+        cx.notify();
+    }
+
+    pub(crate) fn close_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.quick_open_modal = None;
+        if let Some(scratchpad) = self.active_scratchpad(cx) {
+            scratchpad.update(cx, |sp, cx| {
+                sp.focus(window, cx);
+            });
+        }
+        cx.notify();
+    }
+
     fn execute_fill_selection(
         &mut self,
         editor: &Entity<Editor>,
@@ -1231,6 +1294,9 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_action_reveal_scratches_in_explorer))
             .on_action(cx.listener(Self::on_action_export_scratchpad_as))
             .on_action(cx.listener(Self::on_action_delete_current_scratchpad))
+            .on_action(cx.listener(Self::on_action_quick_open))
+            .on_action(cx.listener(Self::on_action_open_scratchpad_palette))
+            .on_action(cx.listener(Self::on_action_toggle_scratchpad_mode))
             .on_action(cx.listener(Self::on_action_navigate_to_offset))
             .on_action(cx.listener(Self::on_action_open_file))
             .on_action(cx.listener(Self::on_action_save))
@@ -1459,6 +1525,25 @@ impl Render for Workspace {
                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
                             cx.stop_propagation();
                         })
+                        .child(modal),
+                )
+            })
+            .when_some(self.quick_open_modal.clone(), |el, modal| {
+                el.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .bg(rgba(0x00000080))
+                        .flex()
+                        .items_start()
+                        .justify_center()
+                        .pt(px(80.0))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                this.close_quick_open(window, cx);
+                            }),
+                        )
                         .child(modal),
                 )
             })

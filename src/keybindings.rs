@@ -40,6 +40,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(primary_key!("b"), crate::actions::ToggleLeftPanel, None),
         KeyBinding::new(alt_primary_key!("b"), crate::actions::ToggleRightPanel, None),
         KeyBinding::new(primary_key!("shift-f"), crate::actions::ToggleSearchPanel, None),
+        // Scratchpad insertion shortcuts
+        KeyBinding::new(alt_primary_key!("o"), crate::actions::InsertActiveOffsetOnly, None),
+        KeyBinding::new(alt_primary_key!("h"), crate::actions::InsertActiveHexBytes, None),
+        KeyBinding::new(alt_primary_key!("t"), crate::actions::InsertActiveText, None),
         // Tab switching
         KeyBinding::new("ctrl-tab", crate::actions::ActivateNextTab, None),
         KeyBinding::new("ctrl-shift-tab", crate::actions::ActivatePreviousTab, None),
