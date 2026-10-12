@@ -694,6 +694,7 @@ mod tests {
             path: PathBuf::from("scratch_1.md"),
             title: "Scratchpad".to_string(),
             modified: None,
+            target_file: None,
         };
         let label1 = if entry_same_title.title != entry_same_title.filename {
             format!("{} ({})", entry_same_title.title, entry_same_title.filename)
@@ -708,6 +709,7 @@ mod tests {
             path: PathBuf::from("scratch_2.md"),
             title: "My Custom Notes".to_string(),
             modified: None,
+            target_file: None,
         };
         let label2 = if entry_custom.title != entry_custom.filename {
             format!("{} ({})", entry_custom.title, entry_custom.filename)
