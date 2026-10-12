@@ -161,7 +161,14 @@ impl Render for GotoOffsetBar {
             .rounded_lg()
             .shadow_xl()
             .key_context("GotoOffsetBar")
+            .occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .on_mouse_down(MouseButton::Right, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .on_scroll_wheel(|_, _, cx| {
                 cx.stop_propagation();
             })
             .on_action(cx.listener(|this, _: &GotoJump, _, cx| {

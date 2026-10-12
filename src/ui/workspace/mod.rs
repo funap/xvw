@@ -1595,7 +1595,11 @@ impl Render for Workspace {
                         .flex()
                         .items_center()
                         .justify_center()
+                        .occlude()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .on_scroll_wheel(|_, _, cx| {
                             cx.stop_propagation();
                         })
                         .child(modal),
@@ -1610,7 +1614,11 @@ impl Render for Workspace {
                         .flex()
                         .items_center()
                         .justify_center()
+                        .occlude()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .on_scroll_wheel(|_, _, cx| {
                             cx.stop_propagation();
                         })
                         .child(modal),
@@ -1626,12 +1634,16 @@ impl Render for Workspace {
                         .items_start()
                         .justify_center()
                         .pt(px(80.0))
+                        .occlude()
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, _, window, cx| {
                                 this.close_quick_open(window, cx);
                             }),
                         )
+                        .on_scroll_wheel(|_, _, cx| {
+                            cx.stop_propagation();
+                        })
                         .child(modal),
                 )
             })

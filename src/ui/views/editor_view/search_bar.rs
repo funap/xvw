@@ -103,7 +103,14 @@ impl Render for SearchBar {
             .rounded_lg()
             .shadow_xl()
             .key_context("SearchBar")
+            .occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .on_mouse_down(MouseButton::Right, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .on_scroll_wheel(|_, _, cx| {
                 cx.stop_propagation();
             })
             .on_action(cx.listener(|_, _: &crate::actions::SearchNext, _, cx| {

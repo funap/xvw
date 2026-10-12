@@ -905,10 +905,30 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::unfold_bookmark_at_cursor))
             .child(div().size_full().child(self.hex_view.clone()))
             .when(self.is_search_visible, |el| {
-                el.child(div().absolute().top(px(8.0)).right(px(20.0)).child(self.search_bar.clone()))
+                el.child(
+                    div()
+                        .absolute()
+                        .top(px(8.0))
+                        .right(px(20.0))
+                        .occlude()
+                        .on_scroll_wheel(|_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .child(self.search_bar.clone()),
+                )
             })
             .when(self.is_goto_visible, |el| {
-                el.child(div().absolute().top(px(8.0)).right(px(20.0)).child(self.goto_bar.clone()))
+                el.child(
+                    div()
+                        .absolute()
+                        .top(px(8.0))
+                        .right(px(20.0))
+                        .occlude()
+                        .on_scroll_wheel(|_, _, cx| {
+                            cx.stop_propagation();
+                        })
+                        .child(self.goto_bar.clone()),
+                )
             })
     }
 }

@@ -1080,6 +1080,13 @@ impl Render for FillSelectionModal {
             .id("fill-selection-modal")
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .on_scroll_wheel(|_, _, cx| {
+                cx.stop_propagation();
+            })
             .on_action(cx.listener(|this, _: &ConfirmFill, _, cx| {
                 this.submit(cx);
             }))
