@@ -119,6 +119,145 @@ impl MenuDef {
     }
 }
 
+/// A flat command descriptor suitable for display and filtering in the Command Palette.
+#[derive(Clone)]
+pub struct PaletteCommand {
+    pub category: SharedString,
+    pub label: SharedString,
+    pub title: SharedString,
+    pub action: Arc<dyn Fn() -> Box<dyn Action> + Send + Sync>,
+    pub is_enabled: Option<fn(&MenuEditorState) -> bool>,
+    pub shortcut: Option<SharedString>,
+}
+
+impl PaletteCommand {
+    pub fn is_executable(&self, state: &MenuEditorState) -> bool {
+        self.is_enabled.map(|f| f(state)).unwrap_or(true)
+    }
+}
+
+fn shortcut_for_label(category: &str, label: &str) -> Option<&'static str> {
+    #[cfg(target_os = "macos")]
+    {
+        match (category, label) {
+            ("File", "New File...") => Some("⌘N"),
+            ("File", "Open File...") => Some("⌘O"),
+            ("File", "Quick Open...") => Some("⌘P"),
+            ("File", "Open Folder...") => Some("⇧⌘O"),
+            ("File", "Save") => Some("⌘S"),
+            ("File", "Close Tab") => Some("⌘W"),
+            ("File", "Quit") => Some("⌘Q"),
+            ("Edit", "Undo") => Some("⌘Z"),
+            ("Edit", "Redo") => Some("⇧⌘Z"),
+            ("Edit", "Cut") => Some("⌘X"),
+            ("Edit", "Copy") => Some("⌘C"),
+            ("Edit", "Paste") => Some("⌘V"),
+            ("Edit", "as Hex Dump") => Some("⇧⌘C"),
+            ("Edit", "Select All") => Some("⌘A"),
+            ("Edit", "Find") => Some("⌘F"),
+            ("Edit", "Find in File (Scan All)") => Some("⇧⌘F"),
+            ("View", "Toggle Left Panel") => Some("⌘B"),
+            ("View", "Toggle Right Panel (Scratchpad)") => Some("⌥⌘B"),
+            ("View", "Command Palette...") => Some("⇧⌘P"),
+            ("View", "Search") => Some("⇧⌘F"),
+            ("Go", "Go to Beginning") => Some("⌘Home"),
+            ("Go", "Go to End") => Some("⌘End"),
+            ("Analysis", "Load Definition...") => Some("⇧⌘S"),
+            ("Analysis", "Toggle Inline Structure View") => Some("⇧⌘V"),
+            ("Analysis", "Compare Open Files...") => Some("⌥⌘D"),
+            ("Scratch", "New Scratchpad") => Some("⇧⌘N"),
+            ("Scratch", "as Offset") => Some("⌥⌘O"),
+            ("Scratch", "as Hex Bytes") => Some("⌥⌘H"),
+            ("Scratch", "as Text / String") => Some("⌥⌘T"),
+            ("Window", "Split Right") => Some("⌘\\"),
+            ("Window", "Split Down") => Some("⇧⌘D"),
+            ("Window", "Next Tab") => Some("⌃Tab"),
+            ("Window", "Previous Tab") => Some("⌃⇧Tab"),
+            _ => None,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        match (category, label) {
+            ("File", "New File...") => Some("Ctrl+N"),
+            ("File", "Open File...") => Some("Ctrl+O"),
+            ("File", "Quick Open...") => Some("Ctrl+P"),
+            ("File", "Open Folder...") => Some("Ctrl+Shift+O"),
+            ("File", "Save") => Some("Ctrl+S"),
+            ("File", "Close Tab") => Some("Ctrl+W"),
+            ("File", "Quit") => Some("Ctrl+Q"),
+            ("Edit", "Undo") => Some("Ctrl+Z"),
+            ("Edit", "Redo") => Some("Ctrl+Shift+Z"),
+            ("Edit", "Cut") => Some("Ctrl+X"),
+            ("Edit", "Copy") => Some("Ctrl+C"),
+            ("Edit", "Paste") => Some("Ctrl+V"),
+            ("Edit", "as Hex Dump") => Some("Ctrl+Shift+C"),
+            ("Edit", "Select All") => Some("Ctrl+A"),
+            ("Edit", "Find") => Some("Ctrl+F"),
+            ("Edit", "Find in File (Scan All)") => Some("Ctrl+Shift+F"),
+            ("View", "Toggle Left Panel") => Some("Ctrl+B"),
+            ("View", "Toggle Right Panel (Scratchpad)") => Some("Alt+Ctrl+B"),
+            ("View", "Command Palette...") => Some("Ctrl+Shift+P"),
+            ("View", "Search") => Some("Ctrl+Shift+F"),
+            ("Go", "Go to Beginning") => Some("Ctrl+Home"),
+            ("Go", "Go to End") => Some("Ctrl+End"),
+            ("Analysis", "Load Definition...") => Some("Ctrl+Shift+S"),
+            ("Analysis", "Toggle Inline Structure View") => Some("Ctrl+Shift+V"),
+            ("Analysis", "Compare Open Files...") => Some("Alt+Ctrl+D"),
+            ("Scratch", "New Scratchpad") => Some("Ctrl+Shift+N"),
+            ("Scratch", "as Offset") => Some("Alt+Ctrl+O"),
+            ("Scratch", "as Hex Bytes") => Some("Alt+Ctrl+H"),
+            ("Scratch", "as Text / String") => Some("Alt+Ctrl+T"),
+            ("Window", "Split Right") => Some("Ctrl+\\"),
+            ("Window", "Split Down") => Some("Ctrl+Shift+D"),
+            ("Window", "Next Tab") => Some("Ctrl+Tab"),
+            ("Window", "Previous Tab") => Some("Ctrl+Shift+Tab"),
+            _ => None,
+        }
+    }
+}
+
+fn collect_items_into(category: &str, prefix_path: &str, items: &[MenuItemDef], out: &mut Vec<PaletteCommand>) {
+    for item in items {
+        match item {
+            MenuItemDef::Action { label, action, is_enabled } => {
+                let full_title = if prefix_path.is_empty() {
+                    format!("{category}: {label}")
+                } else {
+                    format!("{category}: {prefix_path} > {label}")
+                };
+                let shortcut = shortcut_for_label(category, label.as_ref()).map(SharedString::from);
+                out.push(PaletteCommand {
+                    category: SharedString::from(category.to_string()),
+                    label: label.clone(),
+                    title: SharedString::from(full_title),
+                    action: Arc::clone(action),
+                    is_enabled: *is_enabled,
+                    shortcut,
+                });
+            }
+            MenuItemDef::Submenu { label, items } => {
+                let next_prefix = if prefix_path.is_empty() {
+                    label.to_string()
+                } else {
+                    format!("{prefix_path} > {label}")
+                };
+                collect_items_into(category, &next_prefix, items, out);
+            }
+            MenuItemDef::Separator => {}
+        }
+    }
+}
+
+/// Recursively flattens application menu hierarchies into a list of searchable palette commands.
+pub fn collect_palette_commands(menus: &[MenuDef]) -> Vec<PaletteCommand> {
+    let mut commands = Vec::new();
+    for menu in menus {
+        collect_items_into(menu.name, "", &menu.items, &mut commands);
+    }
+    commands
+}
+
 pub fn application_menus() -> Vec<MenuDef> {
     vec![
         build_file_menu(),
@@ -312,17 +451,21 @@ fn build_view_menu() -> MenuDef {
     MenuDef {
         name: "View",
         items: vec![
+            MenuItemDef::action("Command Palette...", crate::actions::CommandPalette),
+            MenuItemDef::separator(),
             MenuItemDef::action("Toggle Left Panel", crate::actions::ToggleLeftPanel),
             MenuItemDef::action("Toggle Right Panel (Scratchpad)", crate::actions::ToggleRightPanel),
             MenuItemDef::submenu(
                 "Panels",
                 vec![
                     MenuItemDef::action("Files", crate::actions::ShowFilesTab),
+                    MenuItemDef::action("Search", crate::actions::ShowSearchTab),
                     MenuItemDef::action("Strings", crate::actions::ShowStringsTab),
                     MenuItemDef::action("Structure", crate::actions::ShowStructureTab),
-                    MenuItemDef::action("Bookmarks", crate::actions::ShowBookmarksTab),
-                    MenuItemDef::action("Checksum", crate::actions::ShowChecksumTab),
+                    MenuItemDef::action("Inspector", crate::actions::ShowInspectorTab),
                     MenuItemDef::action("2D Visual Map", crate::actions::OpenVisualMap),
+                    MenuItemDef::action("Checksum", crate::actions::ShowChecksumTab),
+                    MenuItemDef::action("Bookmarks", crate::actions::ShowBookmarksTab),
                 ],
             ),
             MenuItemDef::separator(),
@@ -717,5 +860,57 @@ mod tests {
             entry_custom.title
         };
         assert_eq!(label2, "My Custom Notes (scratch_2.md)");
+    }
+
+    #[test]
+    fn test_collect_palette_commands() {
+        let menus = application_menus();
+        let commands = super::collect_palette_commands(&menus);
+        assert!(!commands.is_empty());
+
+        // Check presence of key commands
+        let save_cmd = commands.iter().find(|c| c.title == "File: Save");
+        assert!(save_cmd.is_some());
+        let save_cmd = save_cmd.unwrap();
+        assert_eq!(save_cmd.category.as_ref(), "File");
+        assert_eq!(save_cmd.label.as_ref(), "Save");
+        #[cfg(target_os = "macos")]
+        assert_eq!(save_cmd.shortcut.as_deref(), Some("⌘S"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(save_cmd.shortcut.as_deref(), Some("Ctrl+S"));
+
+        // Check submenu flattening
+        let copy_hex = commands.iter().find(|c| c.title == "Edit: Copy As > as Hex Dump");
+        assert!(copy_hex.is_some());
+
+        // Check that all 8 left panels are available in commands
+        let panel_commands = [
+            "View: Panels > Files",
+            "View: Panels > Search",
+            "View: Panels > Strings",
+            "View: Panels > Structure",
+            "View: Panels > Inspector",
+            "View: Panels > 2D Visual Map",
+            "View: Panels > Checksum",
+            "View: Panels > Bookmarks",
+        ];
+        for title in panel_commands {
+            assert!(commands.iter().any(|c| c.title == title), "missing panel command: {title}");
+        }
+
+        // Check condition evaluation
+        let state_ro = MenuEditorState {
+            is_read_only: true,
+            has_doc: true,
+            ..Default::default()
+        };
+        assert!(!save_cmd.is_executable(&state_ro));
+
+        let state_writable = MenuEditorState {
+            is_read_only: false,
+            has_doc: true,
+            ..Default::default()
+        };
+        assert!(save_cmd.is_executable(&state_writable));
     }
 }

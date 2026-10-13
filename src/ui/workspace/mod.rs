@@ -30,6 +30,40 @@ pub use activity_bar::{Activity, ActivityBar, ActivityBarEvent};
 pub use status_bar::{StatusBar, StatusBarEvent};
 pub use title_bar::{AppTitleBar, AppTitleBarEvent};
 
+/// Kind of palette currently supported in the workspace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaletteKind {
+    QuickOpen,
+    CommandPalette,
+}
+
+/// Mutually exclusive active top palette in the workspace.
+#[derive(Clone)]
+pub enum ActivePalette {
+    QuickOpen(Entity<crate::ui::dialogs::quick_open_modal::QuickOpenModal>),
+    CommandPalette(Entity<crate::ui::dialogs::command_palette_modal::CommandPaletteModal>),
+}
+
+impl ActivePalette {
+    pub fn kind(&self) -> PaletteKind {
+        match self {
+            ActivePalette::QuickOpen(_) => PaletteKind::QuickOpen,
+            ActivePalette::CommandPalette(_) => PaletteKind::CommandPalette,
+        }
+    }
+}
+
+/// Computes the next active palette kind given the current palette and an incoming trigger.
+/// If the same palette kind is already open, it returns None to toggle it closed.
+/// If a different palette kind is active, it replaces it with the incoming kind.
+#[must_use]
+pub fn next_active_palette_kind(current: Option<PaletteKind>, incoming: PaletteKind) -> Option<PaletteKind> {
+    match current {
+        Some(kind) if kind == incoming => None,
+        _ => Some(incoming),
+    }
+}
+
 pub struct Workspace {
     pub pane_tree: Entity<PaneTree>,
     pub title_bar: Entity<AppTitleBar>,
@@ -44,7 +78,7 @@ pub struct Workspace {
     pub is_right_panel_visible: bool,
     pub new_file_modal: Option<Entity<crate::ui::dialogs::new_file_modal::NewFileModal>>,
     pub fill_selection_modal: Option<Entity<crate::ui::dialogs::fill_selection_modal::FillSelectionModal>>,
-    pub quick_open_modal: Option<Entity<crate::ui::dialogs::quick_open_modal::QuickOpenModal>>,
+    pub active_palette: Option<ActivePalette>,
     pub untitled_count: usize,
     pub(crate) force_close: bool,
     focus_handle: FocusHandle,
@@ -55,6 +89,7 @@ pub struct Workspace {
 
 pub fn init(cx: &mut App) {
     crate::ui::dialogs::quick_open_modal::init(cx);
+    crate::ui::dialogs::command_palette_modal::init(cx);
 
     cx.bind_keys([
         KeyBinding::new("shift-escape", gpui_kit::component::dock::ToggleZoom, Some("Workspace")),
@@ -131,6 +166,11 @@ pub fn init(cx: &mut App) {
     cx.on_action::<crate::actions::QuickOpen>(|_, cx| {
         defer_in_active_workspace(cx, |workspace, window, cx| {
             workspace.on_action_quick_open(&crate::actions::QuickOpen, window, cx);
+        });
+    });
+    cx.on_action::<crate::actions::CommandPalette>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_command_palette(&crate::actions::CommandPalette, window, cx);
         });
     });
     cx.on_action::<crate::actions::OpenScratchpadPalette>(|_, cx| {
@@ -316,7 +356,7 @@ impl Workspace {
 
         cx.subscribe_in(&activity_bar, window, |this, _, event: &ActivityBarEvent, window, cx| match event {
             ActivityBarEvent::Select(activity) => {
-                this.select_activity(*activity, window, cx);
+                this.toggle_activity(*activity, window, cx);
             }
             ActivityBarEvent::OpenSettings => {
                 this.open_settings_view(window, cx);
@@ -528,7 +568,7 @@ impl Workspace {
             is_right_panel_visible: false,
             new_file_modal: None,
             fill_selection_modal: None,
-            quick_open_modal: None,
+            active_palette: None,
             untitled_count: 0,
             force_close: false,
             focus_handle: cx.focus_handle(),
@@ -551,6 +591,53 @@ impl Workspace {
 
     pub fn active_editor_view(&self, cx: &App) -> Option<Entity<EditorView>> {
         self.pane_tree.read(cx).active_tab_as::<Entity<EditorView>>(cx)
+    }
+
+    /// Evaluates the current editor state for menu and command enablement.
+    pub fn menu_editor_state(&self, cx: &App) -> crate::ui::menus::MenuEditorState {
+        use crate::ui::menus::MenuEditorState;
+
+        let has_scratch = self.active_scratchpad(cx).is_some();
+        if let Some(editor) = self.active_editor(cx) {
+            let ed = editor.read(cx);
+            let is_ro = ed.is_read_only();
+            let can_u = !is_ro && ed.can_undo();
+            let can_r = !is_ro && ed.can_redo();
+            let has_sel = ed.has_selection();
+            let (can_o, can_r_tab, has_s) = if let Some(group) = self.pane_tree.read(cx).active_group(cx) {
+                let g = group.read(cx);
+                let can_o = g.tabs.len() > 1;
+                let active_ix = g.active_index;
+                let can_r_tab = active_ix + 1 < g.tabs.len();
+                let has_s = g.tabs.iter().any(|t| !t.is_dirty(cx));
+                (can_o, can_r_tab, has_s)
+            } else {
+                (false, false, false)
+            };
+            let can_copy = if let Some(editor_view) = self.active_editor_view(cx) {
+                editor_view.read(cx).hex_view().read(cx).copy_range(cx).is_some()
+            } else {
+                has_sel
+            };
+            MenuEditorState {
+                has_doc: true,
+                is_read_only: is_ro,
+                can_undo: can_u,
+                can_redo: can_r,
+                has_selection: has_sel,
+                can_copy,
+                can_close_others: can_o,
+                can_close_right: can_r_tab,
+                has_saved: has_s,
+                has_scratch,
+            }
+        } else {
+            MenuEditorState {
+                is_read_only: true,
+                has_scratch,
+                ..Default::default()
+            }
+        }
     }
 
     /// Finds any open EditorView across all pane groups, preferring the active group.
@@ -1136,10 +1223,45 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(crate) fn restore_editor_focus(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(scratchpad) = self.active_scratchpad(cx) {
+            scratchpad.update(cx, |sp, cx| {
+                sp.focus(window, cx);
+            });
+        } else if let Some(editor_view) = self.effective_editor_view(cx) {
+            editor_view.update(cx, |view, cx| {
+                view.hex_view().read(cx).focus_handle(cx).focus(window, cx);
+            });
+        }
+    }
+
+    /// Closes any active palette and restores focus to the active editor or scratchpad.
+    pub(crate) fn close_active_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_palette.take().is_some() {
+            self.restore_editor_focus(window, cx);
+            cx.notify();
+        }
+    }
+
+    /// Dismisses active palette without restoring editor focus (used before transitioning to an action/dialog).
+    pub(crate) fn dismiss_active_palette(&mut self, cx: &mut Context<Self>) {
+        if self.active_palette.take().is_some() {
+            cx.notify();
+        }
+    }
+
     pub(crate) fn open_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.quick_open_modal.is_some() {
+        if self.new_file_modal.is_some() || self.fill_selection_modal.is_some() {
             return;
         }
+
+        let current = self.active_palette.as_ref().map(ActivePalette::kind);
+        if next_active_palette_kind(current, PaletteKind::QuickOpen).is_none() {
+            self.close_active_palette(window, cx);
+            return;
+        }
+
+        self.active_palette = None;
 
         use crate::ui::dialogs::quick_open_modal::{QuickOpenCandidate, QuickOpenEvent, QuickOpenModal, collect_workspace_files};
 
@@ -1194,31 +1316,22 @@ impl Workspace {
             QuickOpenEvent::OpenFile { path, format } => {
                 let path = path.clone();
                 let format = *format;
-                this.close_quick_open(window, cx);
+                this.dismiss_active_palette(cx);
                 let action = crate::actions::OpenFile::with_format(path.to_string_lossy().to_string(), format);
                 this.on_action_open_file(&action, window, cx);
             }
             QuickOpenEvent::OpenNote(path) => {
                 let path = path.clone();
-                this.close_quick_open(window, cx);
+                this.dismiss_active_palette(cx);
                 this.open_scratchpad_file(path, window, cx);
             }
             QuickOpenEvent::NewNote(custom_title) => {
                 let custom_title = custom_title.clone();
-                this.close_quick_open(window, cx);
+                this.dismiss_active_palette(cx);
                 this.create_new_scratchpad(custom_title.as_deref(), window, cx);
             }
             QuickOpenEvent::Cancel => {
-                this.close_quick_open(window, cx);
-                if let Some(scratchpad) = this.active_scratchpad(cx) {
-                    scratchpad.update(cx, |sp, cx| {
-                        sp.focus(window, cx);
-                    });
-                } else if let Some(editor_view) = this.effective_editor_view(cx) {
-                    editor_view.update(cx, |view, cx| {
-                        view.hex_view().read(cx).focus_handle(cx).focus(window, cx);
-                    });
-                }
+                this.close_active_palette(window, cx);
             }
         })
         .detach();
@@ -1227,7 +1340,7 @@ impl Workspace {
             m.focus(window, cx);
         });
 
-        self.quick_open_modal = Some(modal.clone());
+        self.active_palette = Some(ActivePalette::QuickOpen(modal.clone()));
         cx.notify();
 
         // 3. Asynchronously scan workspace files in a background thread to prevent UI micro-freeze
@@ -1262,8 +1375,44 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn close_quick_open(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.quick_open_modal = None;
+    pub(crate) fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.new_file_modal.is_some() || self.fill_selection_modal.is_some() {
+            return;
+        }
+
+        let current = self.active_palette.as_ref().map(ActivePalette::kind);
+        if next_active_palette_kind(current, PaletteKind::CommandPalette).is_none() {
+            self.close_active_palette(window, cx);
+            return;
+        }
+
+        self.active_palette = None;
+
+        use crate::ui::dialogs::command_palette_modal::{CommandPaletteEvent, CommandPaletteModal};
+
+        let editor_state = self.menu_editor_state(cx);
+        let menus = crate::ui::menus::application_menus();
+        let commands = crate::ui::menus::collect_palette_commands(&menus);
+
+        let modal = cx.new(|cx| CommandPaletteModal::new(commands, editor_state, window, cx));
+
+        cx.subscribe_in(&modal, window, |this, _, event: &CommandPaletteEvent, window, cx| match event {
+            CommandPaletteEvent::Execute(action_fn) => {
+                this.close_active_palette(window, cx);
+                let action = (action_fn)();
+                window.dispatch_action(action, cx);
+            }
+            CommandPaletteEvent::Cancel => {
+                this.close_active_palette(window, cx);
+            }
+        })
+        .detach();
+
+        modal.update(cx, |m, cx| {
+            m.focus(window, cx);
+        });
+
+        self.active_palette = Some(ActivePalette::CommandPalette(modal));
         cx.notify();
     }
 
@@ -1511,6 +1660,22 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_action_hide_all_bookmarks))
             .on_action(cx.listener(Self::on_action_toggle_hide_unbookmarked))
             .on_action(cx.listener(Self::on_action_unfold_bookmark_at_cursor))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_red))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_orange))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_yellow))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_green))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_cyan))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_blue))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_purple))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_pink))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_red))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_orange))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_yellow))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_green))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_cyan))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_blue))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_purple))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_pink))
             .on_action(cx.listener(Self::on_action_set_encoding))
             .on_action(cx.listener(Self::on_action_set_encoding_ascii))
             .on_action(cx.listener(Self::on_action_set_encoding_utf8))
@@ -1537,8 +1702,10 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_action_open_about))
             .on_action(cx.listener(Self::on_action_open_visual_map))
             .on_action(cx.listener(Self::on_action_show_files_tab))
+            .on_action(cx.listener(Self::on_action_show_search_tab))
             .on_action(cx.listener(Self::on_action_show_strings_tab))
             .on_action(cx.listener(Self::on_action_show_structure_tab))
+            .on_action(cx.listener(Self::on_action_show_inspector_tab))
             .on_action(cx.listener(Self::on_action_show_checksum_tab))
             .on_action(cx.listener(Self::on_action_show_bookmarks_tab))
             .on_action(cx.listener(Self::on_action_export_bookmarks))
@@ -1704,7 +1871,11 @@ impl Render for Workspace {
                         .child(modal),
                 )
             })
-            .when_some(self.quick_open_modal.clone(), |el, modal| {
+            .when_some(self.active_palette.clone(), |el, palette| {
+                let content = match palette {
+                    ActivePalette::QuickOpen(modal) => modal.into_any_element(),
+                    ActivePalette::CommandPalette(modal) => modal.into_any_element(),
+                };
                 el.child(
                     div()
                         .absolute()
@@ -1718,13 +1889,13 @@ impl Render for Workspace {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|this, _, window, cx| {
-                                this.close_quick_open(window, cx);
+                                this.close_active_palette(window, cx);
                             }),
                         )
                         .on_scroll_wheel(|_, _, cx| {
                             cx.stop_propagation();
                         })
-                        .child(modal),
+                        .child(content),
                 )
             })
     }

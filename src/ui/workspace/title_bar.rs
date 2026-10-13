@@ -204,48 +204,7 @@ impl AppMenu {
 
     fn query_editor_state(&self, cx: &mut Context<Self>) -> MenuEditorState {
         if let Some(workspace) = self.workspace.upgrade() {
-            let ws = workspace.read(cx);
-            let has_scratch = ws.active_scratchpad(cx).is_some();
-            if let Some(editor) = ws.active_editor(cx) {
-                let ed = editor.read(cx);
-                let is_ro = ed.is_read_only();
-                let can_u = !is_ro && ed.can_undo();
-                let can_r = !is_ro && ed.can_redo();
-                let has_sel = ed.has_selection();
-                let (can_o, can_r_tab, has_s) = if let Some(group) = ws.pane_tree.read(cx).active_group(cx) {
-                    let g = group.read(cx);
-                    let can_o = g.tabs.len() > 1;
-                    let active_ix = g.active_index;
-                    let can_r_tab = active_ix + 1 < g.tabs.len();
-                    let has_s = g.tabs.iter().any(|t| !t.is_dirty(cx));
-                    (can_o, can_r_tab, has_s)
-                } else {
-                    (false, false, false)
-                };
-                let can_copy = if let Some(editor_view) = ws.active_editor_view(cx) {
-                    editor_view.read(cx).hex_view().read(cx).copy_range(cx).is_some()
-                } else {
-                    has_sel
-                };
-                MenuEditorState {
-                    has_doc: true,
-                    is_read_only: is_ro,
-                    can_undo: can_u,
-                    can_redo: can_r,
-                    has_selection: has_sel,
-                    can_copy,
-                    can_close_others: can_o,
-                    can_close_right: can_r_tab,
-                    has_saved: has_s,
-                    has_scratch,
-                }
-            } else {
-                MenuEditorState {
-                    is_read_only: true,
-                    has_scratch,
-                    ..Default::default()
-                }
-            }
+            workspace.read(cx).menu_editor_state(cx)
         } else {
             MenuEditorState {
                 is_read_only: true,

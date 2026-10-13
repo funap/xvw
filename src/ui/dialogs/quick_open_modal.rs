@@ -3,7 +3,7 @@ use std::time::SystemTime;
 
 use autocorrect::ignorer::Ignorer;
 use gpui_kit::component::input::{self, Input, InputState};
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable, Size, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable, Size, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -364,54 +364,7 @@ pub fn format_relative_time(time: SystemTime) -> String {
         "recently".to_string()
     }
 }
-
-/// Pure helper that renders text with fuzzy-matched characters highlighted in primary theme color.
-pub fn render_highlighted_text(text: &str, matches: &[usize], text_color: Hsla, highlight_color: Hsla, is_medium_weight: bool) -> AnyElement {
-    if matches.is_empty() {
-        return div()
-            .when(is_medium_weight, |el| el.font_weight(FontWeight::MEDIUM))
-            .text_color(text_color)
-            .child(text.to_string())
-            .into_any_element();
-    }
-
-    let mut match_iter = matches.iter().copied().peekable();
-    let mut spans: Vec<(String, bool)> = Vec::new();
-
-    for (byte_offset, ch) in text.char_indices() {
-        let is_matched = if let Some(&next_pos) = match_iter.peek() {
-            if next_pos == byte_offset {
-                match_iter.next();
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-        if let Some((last_str, last_matched)) = spans.last_mut()
-            && *last_matched == is_matched
-        {
-            last_str.push(ch);
-            continue;
-        }
-        spans.push((ch.to_string(), is_matched));
-    }
-
-    let children: Vec<AnyElement> = spans
-        .into_iter()
-        .map(|(chunk, is_matched)| {
-            div()
-                .when(!is_matched && is_medium_weight, |el| el.font_weight(FontWeight::MEDIUM))
-                .when(is_matched, |el| el.font_weight(FontWeight::BOLD).text_color(highlight_color))
-                .when(!is_matched, |el| el.text_color(text_color))
-                .child(chunk)
-                .into_any_element()
-        })
-        .collect();
-
-    h_flex().items_center().children(children).into_any_element()
-}
+pub use super::common::{palette_list_container, palette_modal_container, render_highlighted_text, render_palette_empty_message};
 
 pub struct QuickOpenModal {
     focus_handle: FocusHandle,
@@ -549,17 +502,7 @@ impl Render for QuickOpenModal {
         let mut list_children = Vec::new();
 
         if self.filtered_items.is_empty() {
-            list_children.push(
-                div()
-                    .p_4()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child("No matching files or notes found")
-                    .into_any_element(),
-            );
+            list_children.push(render_palette_empty_message("No matching files or notes found", &theme));
         } else {
             for (idx, item) in self.filtered_items.iter().enumerate() {
                 let is_selected = idx == self.selected_index;
@@ -814,7 +757,7 @@ impl Render for QuickOpenModal {
             }
         }
 
-        v_flex()
+        palette_modal_container(&theme)
             .id("quick-open-modal")
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
@@ -837,13 +780,6 @@ impl Render for QuickOpenModal {
             .on_action(cx.listener(|this, _: &PaletteCancel, _, cx| {
                 this.cancel(cx);
             }))
-            .w(px(560.0))
-            .bg(theme.background)
-            .border_1()
-            .border_color(theme.border)
-            .rounded_lg()
-            .shadow_xl()
-            .overflow_hidden()
             .child(
                 h_flex()
                     .items_center()
@@ -859,18 +795,7 @@ impl Render for QuickOpenModal {
                             .with_size(Size::Small),
                     ),
             )
-            .child(
-                div()
-                    .id("palette-items-scroll")
-                    .track_scroll(&self.scroll_handle)
-                    .max_h(px(320.0))
-                    .overflow_y_scroll()
-                    .p_1p5()
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .children(list_children),
-            )
+            .child(palette_list_container(&self.scroll_handle, "palette-items-scroll").children(list_children))
             .child(
                 h_flex()
                     .items_center()

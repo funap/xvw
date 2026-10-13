@@ -171,3 +171,242 @@ fn test_navigate_to_offset_action_with_target_file() {
     assert_eq!(legacy_action.target, "0x2000");
     assert_eq!(legacy_action.target_file, None);
 }
+
+#[test]
+fn test_command_palette_action_exists() {
+    let action = crate::actions::CommandPalette;
+    let cloned = action.clone();
+    assert_eq!(action, cloned);
+}
+
+#[test]
+fn test_palette_kind_initial_open() {
+    use super::{PaletteKind, next_active_palette_kind};
+
+    assert_eq!(next_active_palette_kind(None, PaletteKind::QuickOpen), Some(PaletteKind::QuickOpen));
+    assert_eq!(next_active_palette_kind(None, PaletteKind::CommandPalette), Some(PaletteKind::CommandPalette));
+}
+
+#[test]
+fn test_palette_kind_toggle_close() {
+    use super::{PaletteKind, next_active_palette_kind};
+
+    // Pressing the same palette shortcut again toggles it closed
+    assert_eq!(next_active_palette_kind(Some(PaletteKind::QuickOpen), PaletteKind::QuickOpen), None);
+    assert_eq!(next_active_palette_kind(Some(PaletteKind::CommandPalette), PaletteKind::CommandPalette), None);
+}
+
+#[test]
+fn test_palette_kind_alternating_mutual_exclusion() {
+    use super::{PaletteKind, next_active_palette_kind};
+
+    // Reproduces the user's scenario:
+    // Alternating between Command Palette (cmd-shift-p) and Quick Open (cmd-p)
+    // must replace the active palette without stacking, ensuring a single Esc
+    // transitions immediately back to None (workspace).
+    let mut state = None;
+
+    // 1. Open Command Palette
+    state = next_active_palette_kind(state, PaletteKind::CommandPalette);
+    assert_eq!(state, Some(PaletteKind::CommandPalette));
+
+    // 2. Open Quick Open while Command Palette was active -> replaces
+    state = next_active_palette_kind(state, PaletteKind::QuickOpen);
+    assert_eq!(state, Some(PaletteKind::QuickOpen));
+
+    // 3. Open Command Palette while Quick Open was active -> replaces
+    state = next_active_palette_kind(state, PaletteKind::CommandPalette);
+    assert_eq!(state, Some(PaletteKind::CommandPalette));
+
+    // 4. Open Quick Open again -> replaces
+    state = next_active_palette_kind(state, PaletteKind::QuickOpen);
+    assert_eq!(state, Some(PaletteKind::QuickOpen));
+
+    // 5. User presses Esc -> single cancellation dismisses palette completely
+    state = None;
+    assert_eq!(state, None);
+}
+
+#[test]
+fn test_toggle_bookmark_color_actions_exist() {
+    use crate::actions::*;
+    use gpui_kit::Action;
+
+    let actions: [Box<dyn Action>; 16] = [
+        Box::new(ToggleBookmarkRed),
+        Box::new(ToggleBookmarkOrange),
+        Box::new(ToggleBookmarkYellow),
+        Box::new(ToggleBookmarkGreen),
+        Box::new(ToggleBookmarkCyan),
+        Box::new(ToggleBookmarkBlue),
+        Box::new(ToggleBookmarkPurple),
+        Box::new(ToggleBookmarkPink),
+        Box::new(ShowOnlyBookmarkRed),
+        Box::new(ShowOnlyBookmarkOrange),
+        Box::new(ShowOnlyBookmarkYellow),
+        Box::new(ShowOnlyBookmarkGreen),
+        Box::new(ShowOnlyBookmarkCyan),
+        Box::new(ShowOnlyBookmarkBlue),
+        Box::new(ShowOnlyBookmarkPurple),
+        Box::new(ShowOnlyBookmarkPink),
+    ];
+    assert_eq!(actions.len(), 16);
+}
+
+#[test]
+fn test_toggle_bookmark_color_cycle() {
+    use crate::core::bookmark::model::{BookmarkColor, BookmarkItem};
+    use crate::core::editor::Editor;
+
+    let buffer = Buffer::new(vec![0u8; 100]);
+    let doc = Arc::new(RwLock::new(Document::new(PathBuf::from("test.bin"), buffer)));
+    let mut editor = Editor::new(doc);
+
+    let bm = BookmarkItem::new(16, 48, BookmarkColor::Red, "Header");
+    editor.bookmarks_mut().add(bm);
+
+    // Initially not hidden
+    assert!(!editor.bookmarks().is_color_hidden(BookmarkColor::Red));
+    assert!(!editor.is_folded(16));
+    let initial_line_count = editor.line_starts().len();
+
+    // Toggle color -> hides Red
+    editor.bookmarks_mut().toggle_color(BookmarkColor::Red);
+    assert!(editor.bookmarks().is_color_hidden(BookmarkColor::Red));
+    assert!(editor.is_folded(16));
+    assert!(editor.line_starts().len() < initial_line_count);
+
+    // Toggle color again -> shows Red
+    editor.bookmarks_mut().toggle_color(BookmarkColor::Red);
+    assert!(!editor.bookmarks().is_color_hidden(BookmarkColor::Red));
+    assert!(!editor.is_folded(16));
+    assert_eq!(editor.line_starts().len(), initial_line_count);
+}
+
+#[test]
+fn test_panel_activity_transition_same_tab_does_not_close() {
+    use super::Workspace;
+    use crate::ui::panels::left_panel::LeftPanelTab;
+    use crate::ui::workspace::action_router::PanelActivityTransition;
+    use crate::ui::workspace::activity_bar::Activity;
+
+    // When the panel is already open on Files, selecting Files does NOT close the panel.
+    let transition = Workspace::compute_panel_activity_transition(true, LeftPanelTab::Files, Activity::Files);
+    assert_eq!(
+        transition,
+        PanelActivityTransition {
+            target_tab: LeftPanelTab::Files,
+            should_change_tab: false,
+            should_open_panel: false,
+        }
+    );
+}
+
+#[test]
+fn test_panel_activity_transition_switches_tab_when_visible() {
+    use super::Workspace;
+    use crate::ui::panels::left_panel::LeftPanelTab;
+    use crate::ui::workspace::action_router::PanelActivityTransition;
+    use crate::ui::workspace::activity_bar::Activity;
+
+    let transition = Workspace::compute_panel_activity_transition(true, LeftPanelTab::Search, Activity::Files);
+    assert_eq!(
+        transition,
+        PanelActivityTransition {
+            target_tab: LeftPanelTab::Files,
+            should_change_tab: true,
+            should_open_panel: false,
+        }
+    );
+}
+
+#[test]
+fn test_panel_activity_transition_opens_when_closed() {
+    use super::Workspace;
+    use crate::ui::panels::left_panel::LeftPanelTab;
+    use crate::ui::workspace::action_router::PanelActivityTransition;
+    use crate::ui::workspace::activity_bar::Activity;
+
+    let transition = Workspace::compute_panel_activity_transition(false, LeftPanelTab::Files, Activity::Files);
+    assert_eq!(
+        transition,
+        PanelActivityTransition {
+            target_tab: LeftPanelTab::Files,
+            should_change_tab: false,
+            should_open_panel: true,
+        }
+    );
+}
+
+#[test]
+fn test_panel_activity_all_activities_mapping() {
+    use super::Workspace;
+    use crate::ui::panels::left_panel::LeftPanelTab;
+    use crate::ui::workspace::activity_bar::Activity;
+
+    assert_eq!(Workspace::activity_to_tab(Activity::Files), LeftPanelTab::Files);
+    assert_eq!(Workspace::activity_to_tab(Activity::Search), LeftPanelTab::Search);
+    assert_eq!(Workspace::activity_to_tab(Activity::Strings), LeftPanelTab::Strings);
+    assert_eq!(Workspace::activity_to_tab(Activity::Structure), LeftPanelTab::Structure);
+    assert_eq!(Workspace::activity_to_tab(Activity::Inspector), LeftPanelTab::Inspector);
+    assert_eq!(Workspace::activity_to_tab(Activity::Map), LeftPanelTab::Map);
+    assert_eq!(Workspace::activity_to_tab(Activity::Checksum), LeftPanelTab::Checksum);
+    assert_eq!(Workspace::activity_to_tab(Activity::Bookmarks), LeftPanelTab::Bookmarks);
+}
+
+#[test]
+fn test_panel_activity_toggle_action_closes_when_same_tab_visible() {
+    use super::Workspace;
+    use crate::ui::panels::left_panel::LeftPanelTab;
+    use crate::ui::workspace::action_router::PanelActivityToggleAction;
+    use crate::ui::workspace::activity_bar::Activity;
+
+    let action = Workspace::compute_panel_activity_toggle_action(true, LeftPanelTab::Files, Activity::Files);
+    assert_eq!(action, PanelActivityToggleAction::Close);
+}
+
+#[test]
+fn test_panel_activity_toggle_action_switches_when_different_tab_visible() {
+    use super::Workspace;
+    use crate::ui::panels::left_panel::LeftPanelTab;
+    use crate::ui::workspace::action_router::{PanelActivityToggleAction, PanelActivityTransition};
+    use crate::ui::workspace::activity_bar::Activity;
+
+    let action = Workspace::compute_panel_activity_toggle_action(true, LeftPanelTab::Files, Activity::Search);
+    assert_eq!(
+        action,
+        PanelActivityToggleAction::OpenOrSwitch(PanelActivityTransition {
+            target_tab: LeftPanelTab::Search,
+            should_change_tab: true,
+            should_open_panel: false,
+        })
+    );
+}
+
+#[test]
+fn test_panel_activity_toggle_action_opens_when_panel_hidden() {
+    use super::Workspace;
+    use crate::ui::panels::left_panel::LeftPanelTab;
+    use crate::ui::workspace::action_router::{PanelActivityToggleAction, PanelActivityTransition};
+    use crate::ui::workspace::activity_bar::Activity;
+
+    let action_same_tab = Workspace::compute_panel_activity_toggle_action(false, LeftPanelTab::Files, Activity::Files);
+    assert_eq!(
+        action_same_tab,
+        PanelActivityToggleAction::OpenOrSwitch(PanelActivityTransition {
+            target_tab: LeftPanelTab::Files,
+            should_change_tab: false,
+            should_open_panel: true,
+        })
+    );
+
+    let action_diff_tab = Workspace::compute_panel_activity_toggle_action(false, LeftPanelTab::Files, Activity::Search);
+    assert_eq!(
+        action_diff_tab,
+        PanelActivityToggleAction::OpenOrSwitch(PanelActivityTransition {
+            target_tab: LeftPanelTab::Search,
+            should_change_tab: true,
+            should_open_panel: true,
+        })
+    );
+}

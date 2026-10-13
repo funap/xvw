@@ -574,6 +574,7 @@ impl Render for BookmarkPanel {
                                 editor.bookmarks_mut().toggle_color(preset_color);
                                 cx.notify();
                             });
+                            this.notify_document_changed(cx);
                             cx.notify();
                         }
                     }))
@@ -614,6 +615,7 @@ impl Render for BookmarkPanel {
                                     editor.bookmarks_mut().toggle_hide_unbookmarked();
                                     cx.notify();
                                 });
+                                this.notify_document_changed(cx);
                                 cx.notify();
                             }
                         }));
@@ -631,6 +633,7 @@ impl Render for BookmarkPanel {
                                     editor.bookmarks_mut().show_all();
                                     cx.notify();
                                 });
+                                this.notify_document_changed(cx);
                                 cx.notify();
                             }
                         })),
@@ -647,6 +650,7 @@ impl Render for BookmarkPanel {
                                     editor.bookmarks_mut().hide_all();
                                     cx.notify();
                                 });
+                                this.notify_document_changed(cx);
                                 cx.notify();
                             }
                         })),
@@ -850,6 +854,7 @@ impl BookmarkPanel {
                                             editor.bookmarks_mut().toggle_item_visibility(&item_id);
                                             cx.notify();
                                         });
+                                        this.notify_document_changed(cx);
                                         cx.notify();
                                     }
                                 }

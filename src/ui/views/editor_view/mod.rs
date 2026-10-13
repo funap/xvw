@@ -13,8 +13,10 @@ use crate::actions::{
     AddCustomBreak, BookmarkBlue, BookmarkCyan, BookmarkGreen, BookmarkOrange, BookmarkPink, BookmarkPurple, BookmarkRed, BookmarkYellow, ClearAllBookmarks,
     ClearAllCustomBreaks, ClearBookmark, Copy, CopyAsBase64, CopyAsBinary, CopyAsCppArray, CopyAsEscapedString, CopyAsHexDump, CopyAsHexSpaces,
     CopyAsHexStream, CopyAsJsonArray, CopyAsPrintableText, CopyAsRustArray, Cut, FocusHexView, GoToBeginning, GoToEnd, HideAllBookmarks, JoinLine, Paste, Redo,
-    RemoveCustomBreakBackward, RemoveCustomBreakForward, SearchNext, SearchPrev, SelectAll, ShowAllBookmarks, ToggleGoToAddress, ToggleHideUnbookmarked,
-    ToggleSearch, Undo, UnfoldBookmarkAtCursor,
+    RemoveCustomBreakBackward, RemoveCustomBreakForward, SearchNext, SearchPrev, SelectAll, ShowAllBookmarks, ShowOnlyBookmarkBlue, ShowOnlyBookmarkCyan,
+    ShowOnlyBookmarkGreen, ShowOnlyBookmarkOrange, ShowOnlyBookmarkPink, ShowOnlyBookmarkPurple, ShowOnlyBookmarkRed, ShowOnlyBookmarkYellow,
+    ToggleBookmarkBlue, ToggleBookmarkCyan, ToggleBookmarkGreen, ToggleBookmarkOrange, ToggleBookmarkPink, ToggleBookmarkPurple, ToggleBookmarkRed,
+    ToggleBookmarkYellow, ToggleGoToAddress, ToggleHideUnbookmarked, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
 };
 use crate::app_state::{AppState, InsertModeState};
 use crate::core::editor::Editor;
@@ -700,6 +702,90 @@ impl EditorView {
         self.hex_view.update(cx, |hv, cx| hv.unfold_bookmark_at_cursor(action, window, cx));
     }
 
+    pub fn toggle_bookmark_red(&mut self, _action: &ToggleBookmarkRed, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view
+            .update(cx, |hv, cx| hv.toggle_bookmark_color(crate::core::bookmark::BookmarkColor::Red, window, cx));
+    }
+
+    pub fn toggle_bookmark_orange(&mut self, _action: &ToggleBookmarkOrange, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view
+            .update(cx, |hv, cx| hv.toggle_bookmark_color(crate::core::bookmark::BookmarkColor::Orange, window, cx));
+    }
+
+    pub fn toggle_bookmark_yellow(&mut self, _action: &ToggleBookmarkYellow, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view
+            .update(cx, |hv, cx| hv.toggle_bookmark_color(crate::core::bookmark::BookmarkColor::Yellow, window, cx));
+    }
+
+    pub fn toggle_bookmark_green(&mut self, _action: &ToggleBookmarkGreen, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view
+            .update(cx, |hv, cx| hv.toggle_bookmark_color(crate::core::bookmark::BookmarkColor::Green, window, cx));
+    }
+
+    pub fn toggle_bookmark_cyan(&mut self, _action: &ToggleBookmarkCyan, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view
+            .update(cx, |hv, cx| hv.toggle_bookmark_color(crate::core::bookmark::BookmarkColor::Cyan, window, cx));
+    }
+
+    pub fn toggle_bookmark_blue(&mut self, _action: &ToggleBookmarkBlue, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view
+            .update(cx, |hv, cx| hv.toggle_bookmark_color(crate::core::bookmark::BookmarkColor::Blue, window, cx));
+    }
+
+    pub fn toggle_bookmark_purple(&mut self, _action: &ToggleBookmarkPurple, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view
+            .update(cx, |hv, cx| hv.toggle_bookmark_color(crate::core::bookmark::BookmarkColor::Purple, window, cx));
+    }
+
+    pub fn toggle_bookmark_pink(&mut self, _action: &ToggleBookmarkPink, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view
+            .update(cx, |hv, cx| hv.toggle_bookmark_color(crate::core::bookmark::BookmarkColor::Pink, window, cx));
+    }
+
+    pub fn show_only_bookmark_red(&mut self, _action: &ShowOnlyBookmarkRed, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view
+            .update(cx, |hv, cx| hv.show_only_bookmark_color(crate::core::bookmark::BookmarkColor::Red, window, cx));
+    }
+
+    pub fn show_only_bookmark_orange(&mut self, _action: &ShowOnlyBookmarkOrange, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view.update(cx, |hv, cx| {
+            hv.show_only_bookmark_color(crate::core::bookmark::BookmarkColor::Orange, window, cx)
+        });
+    }
+
+    pub fn show_only_bookmark_yellow(&mut self, _action: &ShowOnlyBookmarkYellow, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view.update(cx, |hv, cx| {
+            hv.show_only_bookmark_color(crate::core::bookmark::BookmarkColor::Yellow, window, cx)
+        });
+    }
+
+    pub fn show_only_bookmark_green(&mut self, _action: &ShowOnlyBookmarkGreen, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view.update(cx, |hv, cx| {
+            hv.show_only_bookmark_color(crate::core::bookmark::BookmarkColor::Green, window, cx)
+        });
+    }
+
+    pub fn show_only_bookmark_cyan(&mut self, _action: &ShowOnlyBookmarkCyan, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view
+            .update(cx, |hv, cx| hv.show_only_bookmark_color(crate::core::bookmark::BookmarkColor::Cyan, window, cx));
+    }
+
+    pub fn show_only_bookmark_blue(&mut self, _action: &ShowOnlyBookmarkBlue, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view
+            .update(cx, |hv, cx| hv.show_only_bookmark_color(crate::core::bookmark::BookmarkColor::Blue, window, cx));
+    }
+
+    pub fn show_only_bookmark_purple(&mut self, _action: &ShowOnlyBookmarkPurple, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view.update(cx, |hv, cx| {
+            hv.show_only_bookmark_color(crate::core::bookmark::BookmarkColor::Purple, window, cx)
+        });
+    }
+
+    pub fn show_only_bookmark_pink(&mut self, _action: &ShowOnlyBookmarkPink, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view
+            .update(cx, |hv, cx| hv.show_only_bookmark_color(crate::core::bookmark::BookmarkColor::Pink, window, cx));
+    }
+
     /// Jumps the editor to a specific byte offset, optionally extending current selection.
     pub fn jump_to_offset(&mut self, offset: usize, extend: bool, cx: &mut Context<Self>) {
         self.editor.update(cx, |editor, cx| {
@@ -903,6 +989,22 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::hide_all_bookmarks))
             .on_action(cx.listener(Self::toggle_hide_unbookmarked))
             .on_action(cx.listener(Self::unfold_bookmark_at_cursor))
+            .on_action(cx.listener(Self::toggle_bookmark_red))
+            .on_action(cx.listener(Self::toggle_bookmark_orange))
+            .on_action(cx.listener(Self::toggle_bookmark_yellow))
+            .on_action(cx.listener(Self::toggle_bookmark_green))
+            .on_action(cx.listener(Self::toggle_bookmark_cyan))
+            .on_action(cx.listener(Self::toggle_bookmark_blue))
+            .on_action(cx.listener(Self::toggle_bookmark_purple))
+            .on_action(cx.listener(Self::toggle_bookmark_pink))
+            .on_action(cx.listener(Self::show_only_bookmark_red))
+            .on_action(cx.listener(Self::show_only_bookmark_orange))
+            .on_action(cx.listener(Self::show_only_bookmark_yellow))
+            .on_action(cx.listener(Self::show_only_bookmark_green))
+            .on_action(cx.listener(Self::show_only_bookmark_cyan))
+            .on_action(cx.listener(Self::show_only_bookmark_blue))
+            .on_action(cx.listener(Self::show_only_bookmark_purple))
+            .on_action(cx.listener(Self::show_only_bookmark_pink))
             .child(div().size_full().child(self.hex_view.clone()))
             .when(self.is_search_visible, |el| {
                 el.child(

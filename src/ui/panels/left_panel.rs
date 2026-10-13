@@ -11,7 +11,7 @@ use crate::ui::panels::struct_tree_view::StructTreeView;
 use crate::ui::panels::visual_map_panel::{VisualMapPanel, VisualMapPanelEvent};
 use std::path::PathBuf;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LeftPanelTab {
     Files,
     Search,
