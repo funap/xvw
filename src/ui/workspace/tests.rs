@@ -282,3 +282,74 @@ fn test_toggle_bookmark_color_cycle() {
     assert!(!editor.is_folded(16));
     assert_eq!(editor.line_starts().len(), initial_line_count);
 }
+
+#[test]
+fn test_panel_activity_transition_same_tab_does_not_close() {
+    use super::Workspace;
+    use crate::ui::panels::left_panel::LeftPanelTab;
+    use crate::ui::workspace::action_router::PanelActivityTransition;
+    use crate::ui::workspace::activity_bar::Activity;
+
+    // When the panel is already open on Files, selecting Files does NOT close the panel.
+    let transition = Workspace::compute_panel_activity_transition(true, LeftPanelTab::Files, Activity::Files);
+    assert_eq!(
+        transition,
+        PanelActivityTransition {
+            target_tab: LeftPanelTab::Files,
+            should_change_tab: false,
+            should_open_panel: false,
+        }
+    );
+}
+
+#[test]
+fn test_panel_activity_transition_switches_tab_when_visible() {
+    use super::Workspace;
+    use crate::ui::panels::left_panel::LeftPanelTab;
+    use crate::ui::workspace::action_router::PanelActivityTransition;
+    use crate::ui::workspace::activity_bar::Activity;
+
+    let transition = Workspace::compute_panel_activity_transition(true, LeftPanelTab::Search, Activity::Files);
+    assert_eq!(
+        transition,
+        PanelActivityTransition {
+            target_tab: LeftPanelTab::Files,
+            should_change_tab: true,
+            should_open_panel: false,
+        }
+    );
+}
+
+#[test]
+fn test_panel_activity_transition_opens_when_closed() {
+    use super::Workspace;
+    use crate::ui::panels::left_panel::LeftPanelTab;
+    use crate::ui::workspace::action_router::PanelActivityTransition;
+    use crate::ui::workspace::activity_bar::Activity;
+
+    let transition = Workspace::compute_panel_activity_transition(false, LeftPanelTab::Files, Activity::Files);
+    assert_eq!(
+        transition,
+        PanelActivityTransition {
+            target_tab: LeftPanelTab::Files,
+            should_change_tab: false,
+            should_open_panel: true,
+        }
+    );
+}
+
+#[test]
+fn test_panel_activity_all_activities_mapping() {
+    use super::Workspace;
+    use crate::ui::panels::left_panel::LeftPanelTab;
+    use crate::ui::workspace::activity_bar::Activity;
+
+    assert_eq!(Workspace::activity_to_tab(Activity::Files), LeftPanelTab::Files);
+    assert_eq!(Workspace::activity_to_tab(Activity::Search), LeftPanelTab::Search);
+    assert_eq!(Workspace::activity_to_tab(Activity::Strings), LeftPanelTab::Strings);
+    assert_eq!(Workspace::activity_to_tab(Activity::Structure), LeftPanelTab::Structure);
+    assert_eq!(Workspace::activity_to_tab(Activity::Inspector), LeftPanelTab::Inspector);
+    assert_eq!(Workspace::activity_to_tab(Activity::Map), LeftPanelTab::Map);
+    assert_eq!(Workspace::activity_to_tab(Activity::Checksum), LeftPanelTab::Checksum);
+    assert_eq!(Workspace::activity_to_tab(Activity::Bookmarks), LeftPanelTab::Bookmarks);
+}

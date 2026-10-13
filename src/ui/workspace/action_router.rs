@@ -18,6 +18,13 @@ pub(crate) enum ScratchpadInsertMode {
     HexBytes,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PanelActivityTransition {
+    pub(crate) target_tab: LeftPanelTab,
+    pub(crate) should_change_tab: bool,
+    pub(crate) should_open_panel: bool,
+}
+
 impl Workspace {
     pub(crate) fn on_action_select_all(&mut self, action: &SelectAll, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(panel) = self.active_editor_view(cx) {
@@ -1226,8 +1233,8 @@ impl Workspace {
         self.select_activity(Activity::Bookmarks, window, cx);
     }
 
-    pub(crate) fn select_activity(&mut self, activity: Activity, window: &mut Window, cx: &mut Context<Self>) {
-        let tab = match activity {
+    pub(crate) fn activity_to_tab(activity: Activity) -> LeftPanelTab {
+        match activity {
             Activity::Files => LeftPanelTab::Files,
             Activity::Search => LeftPanelTab::Search,
             Activity::Strings => LeftPanelTab::Strings,
@@ -1236,20 +1243,37 @@ impl Workspace {
             Activity::Map => LeftPanelTab::Map,
             Activity::Checksum => LeftPanelTab::Checksum,
             Activity::Bookmarks => LeftPanelTab::Bookmarks,
-        };
-
-        let current_tab = self.left_panel.read(cx).active_tab;
-
-        if self.is_left_panel_visible && current_tab == tab {
-            self.set_left_panel_visible(false, window, cx);
-        } else {
-            self.left_panel.update(cx, |p, cx| {
-                p.set_tab(tab, cx);
-            });
-            self.set_left_panel_visible(true, window, cx);
-            let focus_handle = self.left_panel.read(cx).focus_handle(cx);
-            focus_handle.focus(window, cx);
         }
+    }
+
+    pub(crate) fn compute_panel_activity_transition(is_left_panel_visible: bool, current_tab: LeftPanelTab, activity: Activity) -> PanelActivityTransition {
+        let target_tab = Self::activity_to_tab(activity);
+        let should_change_tab = current_tab != target_tab;
+        let should_open_panel = !is_left_panel_visible;
+        PanelActivityTransition {
+            target_tab,
+            should_change_tab,
+            should_open_panel,
+        }
+    }
+
+    pub(crate) fn select_activity(&mut self, activity: Activity, window: &mut Window, cx: &mut Context<Self>) {
+        let current_tab = self.left_panel.read(cx).active_tab;
+        let transition = Self::compute_panel_activity_transition(self.is_left_panel_visible, current_tab, activity);
+
+        if transition.should_change_tab {
+            self.left_panel.update(cx, |p, cx| {
+                p.set_tab(transition.target_tab, cx);
+            });
+        }
+
+        if transition.should_open_panel || transition.should_change_tab {
+            self.set_left_panel_visible(true, window, cx);
+        }
+
+        let focus_handle = self.left_panel.read(cx).focus_handle(cx);
+        focus_handle.focus(window, cx);
+        cx.notify();
     }
 }
 
