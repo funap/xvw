@@ -356,7 +356,7 @@ impl Workspace {
 
         cx.subscribe_in(&activity_bar, window, |this, _, event: &ActivityBarEvent, window, cx| match event {
             ActivityBarEvent::Select(activity) => {
-                this.select_activity(*activity, window, cx);
+                this.toggle_activity(*activity, window, cx);
             }
             ActivityBarEvent::OpenSettings => {
                 this.open_settings_view(window, cx);

@@ -353,3 +353,60 @@ fn test_panel_activity_all_activities_mapping() {
     assert_eq!(Workspace::activity_to_tab(Activity::Checksum), LeftPanelTab::Checksum);
     assert_eq!(Workspace::activity_to_tab(Activity::Bookmarks), LeftPanelTab::Bookmarks);
 }
+
+#[test]
+fn test_panel_activity_toggle_action_closes_when_same_tab_visible() {
+    use super::Workspace;
+    use crate::ui::panels::left_panel::LeftPanelTab;
+    use crate::ui::workspace::action_router::PanelActivityToggleAction;
+    use crate::ui::workspace::activity_bar::Activity;
+
+    let action = Workspace::compute_panel_activity_toggle_action(true, LeftPanelTab::Files, Activity::Files);
+    assert_eq!(action, PanelActivityToggleAction::Close);
+}
+
+#[test]
+fn test_panel_activity_toggle_action_switches_when_different_tab_visible() {
+    use super::Workspace;
+    use crate::ui::panels::left_panel::LeftPanelTab;
+    use crate::ui::workspace::action_router::{PanelActivityToggleAction, PanelActivityTransition};
+    use crate::ui::workspace::activity_bar::Activity;
+
+    let action = Workspace::compute_panel_activity_toggle_action(true, LeftPanelTab::Files, Activity::Search);
+    assert_eq!(
+        action,
+        PanelActivityToggleAction::OpenOrSwitch(PanelActivityTransition {
+            target_tab: LeftPanelTab::Search,
+            should_change_tab: true,
+            should_open_panel: false,
+        })
+    );
+}
+
+#[test]
+fn test_panel_activity_toggle_action_opens_when_panel_hidden() {
+    use super::Workspace;
+    use crate::ui::panels::left_panel::LeftPanelTab;
+    use crate::ui::workspace::action_router::{PanelActivityToggleAction, PanelActivityTransition};
+    use crate::ui::workspace::activity_bar::Activity;
+
+    let action_same_tab = Workspace::compute_panel_activity_toggle_action(false, LeftPanelTab::Files, Activity::Files);
+    assert_eq!(
+        action_same_tab,
+        PanelActivityToggleAction::OpenOrSwitch(PanelActivityTransition {
+            target_tab: LeftPanelTab::Files,
+            should_change_tab: false,
+            should_open_panel: true,
+        })
+    );
+
+    let action_diff_tab = Workspace::compute_panel_activity_toggle_action(false, LeftPanelTab::Files, Activity::Search);
+    assert_eq!(
+        action_diff_tab,
+        PanelActivityToggleAction::OpenOrSwitch(PanelActivityTransition {
+            target_tab: LeftPanelTab::Search,
+            should_change_tab: true,
+            should_open_panel: true,
+        })
+    );
+}

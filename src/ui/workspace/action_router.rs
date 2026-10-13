@@ -25,6 +25,11 @@ pub(crate) struct PanelActivityTransition {
     pub(crate) should_open_panel: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PanelActivityToggleAction {
+    OpenOrSwitch(PanelActivityTransition),
+    Close,
+}
 impl Workspace {
     pub(crate) fn on_action_select_all(&mut self, action: &SelectAll, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(panel) = self.active_editor_view(cx) {
@@ -1257,6 +1262,30 @@ impl Workspace {
         }
     }
 
+    pub(crate) fn compute_panel_activity_toggle_action(
+        is_left_panel_visible: bool,
+        current_tab: LeftPanelTab,
+        activity: Activity,
+    ) -> PanelActivityToggleAction {
+        let target_tab = Self::activity_to_tab(activity);
+        if is_left_panel_visible && current_tab == target_tab {
+            PanelActivityToggleAction::Close
+        } else {
+            PanelActivityToggleAction::OpenOrSwitch(Self::compute_panel_activity_transition(is_left_panel_visible, current_tab, activity))
+        }
+    }
+
+    pub(crate) fn toggle_activity(&mut self, activity: Activity, window: &mut Window, cx: &mut Context<Self>) {
+        let current_tab = self.left_panel.read(cx).active_tab;
+        match Self::compute_panel_activity_toggle_action(self.is_left_panel_visible, current_tab, activity) {
+            PanelActivityToggleAction::Close => {
+                self.set_left_panel_visible(false, window, cx);
+            }
+            PanelActivityToggleAction::OpenOrSwitch(_) => {
+                self.select_activity(activity, window, cx);
+            }
+        }
+    }
     pub(crate) fn select_activity(&mut self, activity: Activity, window: &mut Window, cx: &mut Context<Self>) {
         let current_tab = self.left_panel.read(cx).active_tab;
         let transition = Self::compute_panel_activity_transition(self.is_left_panel_visible, current_tab, activity);
