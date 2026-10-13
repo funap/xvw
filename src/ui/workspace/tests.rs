@@ -226,3 +226,59 @@ fn test_palette_kind_alternating_mutual_exclusion() {
     state = None;
     assert_eq!(state, None);
 }
+
+#[test]
+fn test_toggle_bookmark_color_actions_exist() {
+    use crate::actions::*;
+    use gpui_kit::Action;
+
+    let actions: [Box<dyn Action>; 16] = [
+        Box::new(ToggleBookmarkRed),
+        Box::new(ToggleBookmarkOrange),
+        Box::new(ToggleBookmarkYellow),
+        Box::new(ToggleBookmarkGreen),
+        Box::new(ToggleBookmarkCyan),
+        Box::new(ToggleBookmarkBlue),
+        Box::new(ToggleBookmarkPurple),
+        Box::new(ToggleBookmarkPink),
+        Box::new(ShowOnlyBookmarkRed),
+        Box::new(ShowOnlyBookmarkOrange),
+        Box::new(ShowOnlyBookmarkYellow),
+        Box::new(ShowOnlyBookmarkGreen),
+        Box::new(ShowOnlyBookmarkCyan),
+        Box::new(ShowOnlyBookmarkBlue),
+        Box::new(ShowOnlyBookmarkPurple),
+        Box::new(ShowOnlyBookmarkPink),
+    ];
+    assert_eq!(actions.len(), 16);
+}
+
+#[test]
+fn test_toggle_bookmark_color_cycle() {
+    use crate::core::bookmark::model::{BookmarkColor, BookmarkItem};
+    use crate::core::editor::Editor;
+
+    let buffer = Buffer::new(vec![0u8; 100]);
+    let doc = Arc::new(RwLock::new(Document::new(PathBuf::from("test.bin"), buffer)));
+    let mut editor = Editor::new(doc);
+
+    let bm = BookmarkItem::new(16, 48, BookmarkColor::Red, "Header");
+    editor.bookmarks_mut().add(bm);
+
+    // Initially not hidden
+    assert!(!editor.bookmarks().is_color_hidden(BookmarkColor::Red));
+    assert!(!editor.is_folded(16));
+    let initial_line_count = editor.line_starts().len();
+
+    // Toggle color -> hides Red
+    editor.bookmarks_mut().toggle_color(BookmarkColor::Red);
+    assert!(editor.bookmarks().is_color_hidden(BookmarkColor::Red));
+    assert!(editor.is_folded(16));
+    assert!(editor.line_starts().len() < initial_line_count);
+
+    // Toggle color again -> shows Red
+    editor.bookmarks_mut().toggle_color(BookmarkColor::Red);
+    assert!(!editor.bookmarks().is_color_hidden(BookmarkColor::Red));
+    assert!(!editor.is_folded(16));
+    assert_eq!(editor.line_starts().len(), initial_line_count);
+}

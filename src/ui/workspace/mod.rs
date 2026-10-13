@@ -1398,7 +1398,7 @@ impl Workspace {
 
         cx.subscribe_in(&modal, window, |this, _, event: &CommandPaletteEvent, window, cx| match event {
             CommandPaletteEvent::Execute(action_fn) => {
-                this.dismiss_active_palette(cx);
+                this.close_active_palette(window, cx);
                 let action = (action_fn)();
                 window.dispatch_action(action, cx);
             }
@@ -1660,6 +1660,22 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_action_hide_all_bookmarks))
             .on_action(cx.listener(Self::on_action_toggle_hide_unbookmarked))
             .on_action(cx.listener(Self::on_action_unfold_bookmark_at_cursor))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_red))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_orange))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_yellow))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_green))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_cyan))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_blue))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_purple))
+            .on_action(cx.listener(Self::on_action_toggle_bookmark_pink))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_red))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_orange))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_yellow))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_green))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_cyan))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_blue))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_purple))
+            .on_action(cx.listener(Self::on_action_show_only_bookmark_pink))
             .on_action(cx.listener(Self::on_action_set_encoding))
             .on_action(cx.listener(Self::on_action_set_encoding_ascii))
             .on_action(cx.listener(Self::on_action_set_encoding_utf8))

@@ -295,6 +295,134 @@ impl Workspace {
         }
     }
 
+    pub(crate) fn on_action_toggle_bookmark_red(&mut self, action: &ToggleBookmarkRed, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.toggle_bookmark_red(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_toggle_bookmark_orange(&mut self, action: &ToggleBookmarkOrange, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.toggle_bookmark_orange(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_toggle_bookmark_yellow(&mut self, action: &ToggleBookmarkYellow, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.toggle_bookmark_yellow(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_toggle_bookmark_green(&mut self, action: &ToggleBookmarkGreen, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.toggle_bookmark_green(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_toggle_bookmark_cyan(&mut self, action: &ToggleBookmarkCyan, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.toggle_bookmark_cyan(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_toggle_bookmark_blue(&mut self, action: &ToggleBookmarkBlue, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.toggle_bookmark_blue(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_toggle_bookmark_purple(&mut self, action: &ToggleBookmarkPurple, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.toggle_bookmark_purple(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_toggle_bookmark_pink(&mut self, action: &ToggleBookmarkPink, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.toggle_bookmark_pink(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_show_only_bookmark_red(&mut self, action: &ShowOnlyBookmarkRed, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.show_only_bookmark_red(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_show_only_bookmark_orange(&mut self, action: &ShowOnlyBookmarkOrange, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.show_only_bookmark_orange(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_show_only_bookmark_yellow(&mut self, action: &ShowOnlyBookmarkYellow, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.show_only_bookmark_yellow(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_show_only_bookmark_green(&mut self, action: &ShowOnlyBookmarkGreen, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.show_only_bookmark_green(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_show_only_bookmark_cyan(&mut self, action: &ShowOnlyBookmarkCyan, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.show_only_bookmark_cyan(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_show_only_bookmark_blue(&mut self, action: &ShowOnlyBookmarkBlue, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.show_only_bookmark_blue(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_show_only_bookmark_purple(&mut self, action: &ShowOnlyBookmarkPurple, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.show_only_bookmark_purple(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_show_only_bookmark_pink(&mut self, action: &ShowOnlyBookmarkPink, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.show_only_bookmark_pink(action, window, cx);
+            });
+        }
+    }
+
     pub(crate) fn on_action_add_custom_break(&mut self, action: &AddCustomBreak, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
