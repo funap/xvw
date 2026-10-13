@@ -176,6 +176,10 @@ pub struct ToggleScratchpadMode;
 #[derive(Clone, PartialEq, Action)]
 pub struct QuickOpen;
 
+/// Opens the Command Palette.
+#[derive(Clone, Debug, PartialEq, Action)]
+pub struct CommandPalette;
+
 /// Opens the Scratchpad note switcher / quick palette (alias for QuickOpen).
 #[derive(Clone, PartialEq, Action)]
 pub struct OpenScratchpadPalette;
@@ -288,10 +292,16 @@ pub struct ToggleByteOrder;
 pub struct ShowFilesTab;
 
 #[derive(Clone, PartialEq, Action)]
+pub struct ShowSearchTab;
+
+#[derive(Clone, PartialEq, Action)]
 pub struct ShowStringsTab;
 
 #[derive(Clone, PartialEq, Action)]
 pub struct ShowStructureTab;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct ShowInspectorTab;
 
 #[derive(Clone, PartialEq, Action)]
 pub struct ShowChecksumTab;

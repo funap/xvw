@@ -35,6 +35,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(primary_key!("o"), crate::actions::OpenFileDialog, None),
         KeyBinding::new(primary_key!("shift-o"), crate::actions::OpenFolder, None),
         KeyBinding::new(primary_key!("p"), crate::actions::QuickOpen, None),
+        KeyBinding::new(primary_key!("shift-p"), crate::actions::CommandPalette, None),
         // Save
         KeyBinding::new(primary_key!("s"), crate::actions::Save, None),
         // Panels & Views

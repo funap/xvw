@@ -778,6 +778,10 @@ impl Workspace {
         self.open_quick_open(window, cx);
     }
 
+    pub(crate) fn on_action_command_palette(&mut self, _: &crate::actions::CommandPalette, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_command_palette(window, cx);
+    }
+
     pub(crate) fn on_action_open_scratchpad_palette(&mut self, _: &crate::actions::OpenScratchpadPalette, window: &mut Window, cx: &mut Context<Self>) {
         self.open_quick_open(window, cx);
     }
@@ -1070,12 +1074,20 @@ impl Workspace {
         self.select_activity(Activity::Files, window, cx);
     }
 
+    pub(crate) fn on_action_show_search_tab(&mut self, _: &ShowSearchTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_activity(Activity::Search, window, cx);
+    }
+
     pub(crate) fn on_action_show_strings_tab(&mut self, _: &ShowStringsTab, window: &mut Window, cx: &mut Context<Self>) {
         self.select_activity(Activity::Strings, window, cx);
     }
 
     pub(crate) fn on_action_show_structure_tab(&mut self, _: &ShowStructureTab, window: &mut Window, cx: &mut Context<Self>) {
         self.select_activity(Activity::Structure, window, cx);
+    }
+
+    pub(crate) fn on_action_show_inspector_tab(&mut self, _: &ShowInspectorTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_activity(Activity::Inspector, window, cx);
     }
 
     pub(crate) fn on_action_show_checksum_tab(&mut self, _: &ShowChecksumTab, window: &mut Window, cx: &mut Context<Self>) {

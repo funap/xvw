@@ -171,3 +171,58 @@ fn test_navigate_to_offset_action_with_target_file() {
     assert_eq!(legacy_action.target, "0x2000");
     assert_eq!(legacy_action.target_file, None);
 }
+
+#[test]
+fn test_command_palette_action_exists() {
+    let action = crate::actions::CommandPalette;
+    let cloned = action.clone();
+    assert_eq!(action, cloned);
+}
+
+#[test]
+fn test_palette_kind_initial_open() {
+    use super::{PaletteKind, next_active_palette_kind};
+
+    assert_eq!(next_active_palette_kind(None, PaletteKind::QuickOpen), Some(PaletteKind::QuickOpen));
+    assert_eq!(next_active_palette_kind(None, PaletteKind::CommandPalette), Some(PaletteKind::CommandPalette));
+}
+
+#[test]
+fn test_palette_kind_toggle_close() {
+    use super::{PaletteKind, next_active_palette_kind};
+
+    // Pressing the same palette shortcut again toggles it closed
+    assert_eq!(next_active_palette_kind(Some(PaletteKind::QuickOpen), PaletteKind::QuickOpen), None);
+    assert_eq!(next_active_palette_kind(Some(PaletteKind::CommandPalette), PaletteKind::CommandPalette), None);
+}
+
+#[test]
+fn test_palette_kind_alternating_mutual_exclusion() {
+    use super::{PaletteKind, next_active_palette_kind};
+
+    // Reproduces the user's scenario:
+    // Alternating between Command Palette (cmd-shift-p) and Quick Open (cmd-p)
+    // must replace the active palette without stacking, ensuring a single Esc
+    // transitions immediately back to None (workspace).
+    let mut state = None;
+
+    // 1. Open Command Palette
+    state = next_active_palette_kind(state, PaletteKind::CommandPalette);
+    assert_eq!(state, Some(PaletteKind::CommandPalette));
+
+    // 2. Open Quick Open while Command Palette was active -> replaces
+    state = next_active_palette_kind(state, PaletteKind::QuickOpen);
+    assert_eq!(state, Some(PaletteKind::QuickOpen));
+
+    // 3. Open Command Palette while Quick Open was active -> replaces
+    state = next_active_palette_kind(state, PaletteKind::CommandPalette);
+    assert_eq!(state, Some(PaletteKind::CommandPalette));
+
+    // 4. Open Quick Open again -> replaces
+    state = next_active_palette_kind(state, PaletteKind::QuickOpen);
+    assert_eq!(state, Some(PaletteKind::QuickOpen));
+
+    // 5. User presses Esc -> single cancellation dismisses palette completely
+    state = None;
+    assert_eq!(state, None);
+}
