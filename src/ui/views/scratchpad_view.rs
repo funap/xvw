@@ -1,4 +1,3 @@
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -7,10 +6,10 @@ use gpui_kit::component::{
     ActiveTheme, Icon, Sizable, StyledExt,
     button::{Button, ButtonVariants},
     dock::{Panel, PanelControl, PanelEvent},
-    input::{self, DefinitionProvider, Editor, EditorState, Input, InputState, Rope, RopeExt as _},
+    input::{self, DefinitionProvider, Editor, EditorState, Rope, RopeExt as _},
     menu::{ContextMenuExt as _, DropdownMenu as _},
     resizable::{ResizablePanelEvent, ResizableState, h_resizable, resizable_panel},
-    text::{FrontmatterPlugin, MarkdownExtensions, RangeHighlight, RenderedText, SelectionFormat, TextView, TextViewState},
+    text::{FrontmatterPlugin, MarkdownExtensions, SelectionFormat, TextView, TextViewState},
 };
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -54,7 +53,6 @@ impl DefinitionProvider for ScratchpadOffsetDefinitionProvider {
 use crate::ui::icon::IconName;
 
 const CONTEXT: &str = "ScratchpadView";
-const SEARCH_CONTEXT: &str = "ScratchpadSearch";
 pub const DEFAULT_SCRATCHPAD_CONTENT: &str = "# Scratchpad\n";
 
 /// Returns default scratchpad markdown content linking to `target_file` in its YAML frontmatter,
@@ -96,58 +94,6 @@ impl ScratchpadMode {
     }
 }
 
-/// Pure helper for finding non-overlapping, case-insensitive substring matches.
-///
-/// Returns byte ranges referencing valid UTF-8 boundaries in `text`.
-pub fn find_case_insensitive_matches(text: &str, query: &str) -> Vec<Range<usize>> {
-    let query = query.trim();
-    if query.is_empty() || text.is_empty() {
-        return Vec::new();
-    }
-
-    let query_lower = query.to_lowercase();
-    let query_chars: Vec<char> = query_lower.chars().collect();
-    let mut matches = Vec::new();
-    let mut last_match_end = 0;
-
-    for (start, _) in text.char_indices() {
-        if start < last_match_end {
-            continue;
-        }
-
-        let mut t_chars = text[start..].chars();
-        let mut matched = true;
-        let mut matched_bytes = 0;
-
-        for &q_char in &query_chars {
-            match t_chars.next() {
-                Some(t_char) => {
-                    let mut t_lower = t_char.to_lowercase();
-                    if t_lower.next() != Some(q_char) || t_lower.next().is_some() {
-                        matched = false;
-                        break;
-                    }
-                    matched_bytes += t_char.len_utf8();
-                }
-                None => {
-                    matched = false;
-                    break;
-                }
-            }
-        }
-
-        if matched && matched_bytes > 0 {
-            let end = start + matched_bytes;
-            if text.is_char_boundary(start) && text.is_char_boundary(end) {
-                matches.push(start..end);
-                last_match_end = end;
-            }
-        }
-    }
-
-    matches
-}
-
 /// Pure helper calculating line count, word count, and character count for a text buffer.
 pub fn calculate_text_stats(text: &str) -> (usize, usize, usize) {
     if text.is_empty() {
@@ -170,11 +116,6 @@ pub struct ScratchpadView {
     focus_handle: FocusHandle,
     editor: Entity<EditorState>,
     text_view_state: Entity<TextViewState>,
-    search_input: Entity<InputState>,
-    is_search_open: bool,
-    search_matches: Vec<Range<usize>>,
-    current_match_index: usize,
-    last_searched_text: Option<RenderedText>,
     mode: ScratchpadMode,
     split_state: Entity<ResizableState>,
     split_ratio: f32,
@@ -235,7 +176,6 @@ impl ScratchpadView {
             state
         });
         let text_view_state = cx.new(|cx| TextViewState::markdown(&content, cx));
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search in note..."));
 
         let mut subscriptions = Vec::new();
 
@@ -249,9 +189,6 @@ impl ScratchpadView {
                 this.text_view_state.update(cx, |tv, cx| {
                     tv.set_text(&content, cx);
                 });
-                if this.is_search_open {
-                    this.update_search(cx);
-                }
 
                 // Debounced auto-save (500ms)
                 this.debounce_task = None;
@@ -272,33 +209,6 @@ impl ScratchpadView {
             }
         });
         subscriptions.push(sub_editor);
-
-        let sub_search = cx.subscribe_in(&search_input, window, |this, _, event: &input::InputEvent, _window, cx| match event {
-            input::InputEvent::Change => {
-                this.update_search(cx);
-                cx.notify();
-            }
-            input::InputEvent::PressEnter { shift, .. } => {
-                if *shift {
-                    this.prev_match(cx);
-                } else {
-                    this.next_match(cx);
-                }
-                cx.notify();
-            }
-            _ => {}
-        });
-        subscriptions.push(sub_search);
-
-        let sub_tv = cx.observe(&text_view_state, |this, tv, cx| {
-            if this.is_search_open && this.mode == ScratchpadMode::Preview {
-                let rendered = tv.read(cx).rendered_text();
-                if this.last_searched_text.as_ref() != Some(&rendered) {
-                    this.update_search(cx);
-                }
-            }
-        });
-        subscriptions.push(sub_tv);
 
         let (initial_mode, initial_split_ratio, initial_split_width) = if cx.has_global::<ScratchpadSettings>() {
             let settings = cx.global::<ScratchpadSettings>();
@@ -343,11 +253,6 @@ impl ScratchpadView {
             focus_handle,
             editor,
             text_view_state,
-            search_input,
-            is_search_open: false,
-            search_matches: Vec::new(),
-            current_match_index: 0,
-            last_searched_text: None,
             mode: initial_mode,
             split_state,
             split_ratio: initial_split_ratio,
@@ -388,9 +293,6 @@ impl ScratchpadView {
             crate::settings::save_current(cx);
         }
 
-        if self.is_search_open {
-            self.update_search(cx);
-        }
         cx.notify();
     }
 
@@ -484,9 +386,6 @@ impl ScratchpadView {
                 });
                 crate::settings::save_current(cx);
             }
-            if self.is_search_open {
-                self.update_search(cx);
-            }
             cx.notify();
         }
     }
@@ -515,9 +414,6 @@ impl ScratchpadView {
         self.text_view_state.update(cx, |tv, cx| {
             tv.set_text(&content, cx);
         });
-        if self.is_search_open {
-            self.update_search(cx);
-        }
 
         // Debounced auto-save (500ms)
         self.debounce_task = None;
@@ -548,186 +444,6 @@ impl ScratchpadView {
                 ed.focus(window, cx);
             });
         }
-    }
-
-    pub fn toggle_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.is_search_open = !self.is_search_open;
-        if self.is_search_open {
-            self.search_input.update(cx, |input, cx| {
-                input.focus(window, cx);
-            });
-            self.update_search(cx);
-        } else {
-            self.close_search(cx);
-        }
-        cx.notify();
-    }
-
-    pub fn close_search(&mut self, cx: &mut Context<Self>) {
-        if self.is_search_open {
-            self.is_search_open = false;
-            self.search_matches.clear();
-            self.current_match_index = 0;
-            self.editor.update(cx, |ed, cx| {
-                ed.close_search(cx);
-                let cursor = ed.cursor();
-                ed.set_selected_range(cursor..cursor, cx);
-            });
-            self.text_view_state.update(cx, |tv, cx| {
-                tv.clear_range_highlights(cx);
-            });
-            cx.notify();
-        }
-    }
-
-    pub fn next_match(&mut self, cx: &mut Context<Self>) {
-        if self.mode != ScratchpadMode::Preview {
-            self.editor.update(cx, |ed, cx| {
-                if let Some(range) = ed.next_search_match(cx) {
-                    ed.set_selected_range(range, cx);
-                }
-            });
-
-            if self.mode == ScratchpadMode::Split {
-                self.sync_preview_current_match(cx);
-            }
-        } else {
-            if self.search_matches.is_empty() {
-                return;
-            }
-            self.current_match_index = (self.current_match_index + 1) % self.search_matches.len();
-            self.apply_preview_highlight_ranges(cx);
-        }
-        cx.notify();
-    }
-
-    pub fn prev_match(&mut self, cx: &mut Context<Self>) {
-        if self.mode != ScratchpadMode::Preview {
-            self.editor.update(cx, |ed, cx| {
-                if let Some(range) = ed.previous_search_match(cx) {
-                    ed.set_selected_range(range, cx);
-                }
-            });
-
-            if self.mode == ScratchpadMode::Split {
-                self.sync_preview_current_match(cx);
-            }
-        } else {
-            if self.search_matches.is_empty() {
-                return;
-            }
-            self.current_match_index = if self.current_match_index == 0 {
-                self.search_matches.len() - 1
-            } else {
-                self.current_match_index - 1
-            };
-            self.apply_preview_highlight_ranges(cx);
-        }
-        cx.notify();
-    }
-
-    fn update_search(&mut self, cx: &mut Context<Self>) {
-        let query = self.search_input.read(cx).value().trim().to_string();
-        if query.is_empty() {
-            self.search_matches.clear();
-            self.current_match_index = 0;
-            self.editor.update(cx, |ed, cx| {
-                ed.close_search(cx);
-            });
-            self.text_view_state.update(cx, |tv, cx| {
-                tv.clear_range_highlights(cx);
-            });
-            return;
-        }
-
-        if self.mode != ScratchpadMode::Preview {
-            // Edit side is displayed: search on Editor
-            self.editor.update(cx, |ed, cx| {
-                ed.set_search_query(&query, true, cx);
-                if let Some(first_range) = ed.next_search_match(cx) {
-                    ed.set_selected_range(first_range, cx);
-                }
-            });
-
-            // In Split mode, also update Preview highlights to keep both in sync
-            if self.mode == ScratchpadMode::Split {
-                self.update_preview_highlights(&query, cx);
-            } else {
-                self.text_view_state.update(cx, |tv, cx| {
-                    tv.clear_range_highlights(cx);
-                });
-            }
-        } else {
-            // Preview mode: search on TextView
-            self.update_preview_highlights(&query, cx);
-        }
-    }
-
-    fn sync_preview_current_match(&mut self, cx: &mut Context<Self>) {
-        let (current_idx, matched_ranges) = self.editor.read_with(cx, |ed, _| {
-            let session = ed.search_session();
-            (session.matcher.current_match_index(), session.matcher.matched_ranges())
-        });
-        if let Some(source_range) = matched_ranges.get(current_idx) {
-            let rendered = self.text_view_state.read(cx).rendered_text();
-            if let Some(preview_range) = rendered.range_for_source(source_range.clone()) {
-                self.current_match_index = self.search_matches.iter().position(|r| r.start == preview_range.start).unwrap_or(0);
-                self.apply_preview_highlight_ranges(cx);
-            }
-        }
-    }
-
-    fn update_preview_highlights(&mut self, query: &str, cx: &mut Context<Self>) {
-        let rendered = self.text_view_state.read(cx).rendered_text();
-        self.last_searched_text = Some(rendered.clone());
-        self.search_matches = find_case_insensitive_matches(rendered.as_str(), query);
-
-        if self.search_matches.is_empty() {
-            self.current_match_index = 0;
-            self.text_view_state.update(cx, |tv, cx| {
-                tv.clear_range_highlights(cx);
-            });
-            return;
-        }
-
-        if self.current_match_index >= self.search_matches.len() {
-            self.current_match_index = 0;
-        }
-
-        self.apply_preview_highlight_ranges(cx);
-    }
-
-    fn apply_preview_highlight_ranges(&mut self, cx: &mut Context<Self>) {
-        if self.search_matches.is_empty() {
-            self.text_view_state.update(cx, |tv, cx| {
-                tv.clear_range_highlights(cx);
-            });
-            return;
-        }
-
-        let theme = cx.theme();
-        let match_bg = theme.accent.opacity(0.35);
-        let active_bg = theme.selection.opacity(0.85);
-
-        let highlights: Vec<RangeHighlight> = self
-            .search_matches
-            .iter()
-            .enumerate()
-            .map(|(idx, range)| {
-                let bg = if idx == self.current_match_index { active_bg } else { match_bg };
-                RangeHighlight::new(range.clone(), bg)
-            })
-            .collect();
-
-        let _ = self.text_view_state.update(cx, |tv, cx| {
-            let res = tv.set_range_highlights(highlights, cx);
-            if res.is_ok()
-                && let Some(target_range) = self.search_matches.get(self.current_match_index)
-            {
-                let _ = tv.reveal_range(target_range.clone(), cx);
-            }
-            res
-        });
     }
 
     fn render_text_view(&self) -> TextView {
@@ -913,32 +629,6 @@ impl Render for ScratchpadView {
                     })),
             );
 
-        let action_controls = div()
-            .flex()
-            .items_center()
-            .gap_0p5()
-            .child(
-                Button::new("toggle-search")
-                    .icon(IconName::Search)
-                    .tooltip("Search in note (Cmd/Ctrl+F)")
-                    .ghost()
-                    .xsmall()
-                    .when(self.is_search_open, |btn| btn.primary())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.toggle_search(window, cx);
-                    })),
-            )
-            .child(
-                Button::new("close-scratchpad")
-                    .icon(IconName::Close)
-                    .tooltip("Close Scratchpad")
-                    .ghost()
-                    .xsmall()
-                    .on_click(cx.listener(|_, _, window, cx| {
-                        window.dispatch_action(Box::new(crate::actions::ToggleRightPanel), cx);
-                    })),
-            );
-
         let toolbar = div()
             .flex()
             .flex_row()
@@ -950,74 +640,7 @@ impl Render for ScratchpadView {
             .border_color(theme.border)
             .bg(theme.muted)
             .child(switcher)
-            .child(div().flex().items_center().gap_1().child(mode_controls).child(action_controls));
-
-        let search_bar = if self.is_search_open {
-            let query = self.search_input.read(cx).value();
-            let count_text = if query.trim().is_empty() {
-                String::new()
-            } else if self.mode != ScratchpadMode::Preview {
-                self.editor.read(cx).search_session().matcher.label()
-            } else if self.search_matches.is_empty() {
-                "0/0".to_string()
-            } else {
-                format!("{}/{}", self.current_match_index + 1, self.search_matches.len())
-            };
-
-            Some(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .py_1p5()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .bg(theme.muted)
-                    .key_context(SEARCH_CONTEXT)
-                    .child(
-                        div()
-                            .w(px(240.0))
-                            .child(Input::new(&self.search_input).prefix(Icon::new(IconName::Search).size_3p5()).cleanable(true)),
-                    )
-                    .when(!count_text.is_empty(), |el| {
-                        el.child(div().text_xs().text_color(theme.muted_foreground).child(count_text))
-                    })
-                    .child(
-                        Button::new("search-prev")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::ChevronUp)
-                            .tooltip("Previous match (Shift+Enter)")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.prev_match(cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("search-next")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::ChevronDown)
-                            .tooltip("Next match (Enter)")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.next_match(cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("search-close")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Close)
-                            .tooltip("Close search (Esc)")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.close_search(cx);
-                            })),
-                    ),
-            )
-        } else {
-            None
-        };
+            .child(mode_controls);
 
         let left_panel_size = if let Some(w) = self.split_width {
             px(w.clamp(50.0, 10000.0))
@@ -1165,24 +788,10 @@ impl Render for ScratchpadView {
             .bg(theme.background)
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(|this, _: &crate::actions::ToggleSearch, window, cx| {
-                this.toggle_search(window, cx);
-            }))
-            .on_action(cx.listener(|this, _: &crate::actions::SearchNext, _, cx| {
-                if this.is_search_open {
-                    this.next_match(cx);
-                }
-            }))
-            .on_action(cx.listener(|this, _: &crate::actions::SearchPrev, _, cx| {
-                if this.is_search_open {
-                    this.prev_match(cx);
-                }
-            }))
             .on_action(cx.listener(|this, _: &crate::actions::ToggleScratchpadMode, _, cx| {
                 this.cycle_mode(cx);
             }))
             .child(toolbar)
-            .children(search_bar)
             .child(
                 div()
                     .flex_1()
@@ -1200,8 +809,6 @@ impl Render for ScratchpadView {
                                         .menu_with_icon("as Text / String", IconName::FileText, Box::new(crate::actions::InsertActiveText))
                                 })
                                 .separator()
-                                .menu_with_icon("Find in Note...", IconName::Search, Box::new(crate::actions::ToggleSearch))
-                                .separator()
                                 .menu_with_icon("New Scratchpad", IconName::Plus, Box::new(crate::actions::NewScratchpad))
                                 .menu_with_icon(
                                     "Export Scratchpad As...",
@@ -1218,11 +825,6 @@ impl Render for ScratchpadView {
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-f", crate::actions::ToggleSearch, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-f", crate::actions::ToggleSearch, Some(CONTEXT)),
-        KeyBinding::new("escape", crate::actions::ToggleSearch, Some(SEARCH_CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-e", crate::actions::ToggleScratchpadMode, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
@@ -1325,7 +927,7 @@ impl crate::ui::pane::WorkspaceTab for Entity<ScratchpadView> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_SCRATCHPAD_CONTENT, ScratchpadMode, find_case_insensitive_matches};
+    use super::{DEFAULT_SCRATCHPAD_CONTENT, ScratchpadMode};
 
     #[test]
     fn test_default_scratchpad_content() {
@@ -1443,42 +1045,6 @@ mod tests {
         assert_eq!(serde_json::from_str::<ScratchpadMode>("\"edit\"").unwrap(), ScratchpadMode::Edit);
         assert_eq!(serde_json::from_str::<ScratchpadMode>("\"split\"").unwrap(), ScratchpadMode::Split);
         assert_eq!(serde_json::from_str::<ScratchpadMode>("\"preview\"").unwrap(), ScratchpadMode::Preview);
-    }
-
-    #[test]
-    fn test_find_case_insensitive_matches_ascii() {
-        let text = "Hello world, HELLO universe, hello again";
-        let matches = find_case_insensitive_matches(text, "hello");
-        assert_eq!(matches.len(), 3);
-        assert_eq!(&text[matches[0].clone()], "Hello");
-        assert_eq!(&text[matches[1].clone()], "HELLO");
-        assert_eq!(&text[matches[2].clone()], "hello");
-    }
-
-    #[test]
-    fn test_find_case_insensitive_matches_empty_and_not_found() {
-        assert!(find_case_insensitive_matches("", "hello").is_empty());
-        assert!(find_case_insensitive_matches("Hello", "").is_empty());
-        assert!(find_case_insensitive_matches("Hello", "   ").is_empty());
-        assert!(find_case_insensitive_matches("Hello", "world").is_empty());
-    }
-
-    #[test]
-    fn test_find_case_insensitive_matches_multibyte() {
-        let text = "Markdownのメモ。大事なメモを残す。";
-        let matches = find_case_insensitive_matches(text, "メモ");
-        assert_eq!(matches.len(), 2);
-        assert_eq!(&text[matches[0].clone()], "メモ");
-        assert_eq!(&text[matches[1].clone()], "メモ");
-    }
-
-    #[test]
-    fn test_find_case_insensitive_matches_non_overlapping() {
-        let text = "aaaa";
-        let matches = find_case_insensitive_matches(text, "aa");
-        assert_eq!(matches.len(), 2);
-        assert_eq!(matches[0], 0..2);
-        assert_eq!(matches[1], 2..4);
     }
 
     #[test]
