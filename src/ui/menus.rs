@@ -136,7 +136,7 @@ impl PaletteCommand {
     }
 }
 
-fn shortcut_for_label(category: &str, label: &str) -> Option<&'static str> {
+pub(crate) fn shortcut_for_label(category: &str, label: &str) -> Option<&'static str> {
     #[cfg(target_os = "macos")]
     {
         match (category, label) {
@@ -152,17 +152,49 @@ fn shortcut_for_label(category: &str, label: &str) -> Option<&'static str> {
             ("Edit", "Cut") => Some("⌘X"),
             ("Edit", "Copy") => Some("⌘C"),
             ("Edit", "Paste") => Some("⌘V"),
-            ("Edit", "as Hex Dump") => Some("⇧⌘C"),
+            ("Edit", "as Hex Dump") | ("Edit > Copy As", "as Hex Dump") => Some("⇧⌘C"),
             ("Edit", "Select All") => Some("⌘A"),
             ("Edit", "Find") => Some("⌘F"),
             ("Edit", "Find in File (Scan All)") => Some("⇧⌘F"),
+            ("Edit", "Find Next") | ("Go", "Find Next") => Some("⌘G"),
+            ("Edit", "Find Previous") | ("Go", "Find Previous") => Some("⇧⌘G"),
+            ("Edit", "Toggle Insert Mode") => Some("Insert"),
+            ("Edit", "Unfold at Cursor")
+            | ("Edit", "Unfold Bookmark at Cursor")
+            | ("Go", "Unfold Bookmark at Cursor")
+            | ("Go > Bookmark Visibility", "Unfold Bookmark at Cursor")
+            | ("Edit > Bookmark Visibility", "Unfold Bookmark at Cursor") => Some("⇧⌘]"),
             ("View", "Toggle Left Panel") => Some("⌘B"),
             ("View", "Toggle Right Panel (Scratchpad)") => Some("⌥⌘B"),
             ("View", "Focus Active Editor") => Some("Esc"),
             ("View", "Command Palette...") => Some("⇧⌘P"),
             ("View", "Search") => Some("⇧⌘F"),
-            ("Go", "Go to Beginning") => Some("⌘Home"),
-            ("Go", "Go to End") => Some("⌘End"),
+            ("View", "Break Line")
+            | ("View", "Add Line Break")
+            | ("Edit", "Break Line")
+            | ("Edit", "Add Line Break")
+            | ("Edit > Custom Line Breaks", "Add Line Break")
+            | ("View > Custom Line Breaks", "Break Line")
+            | ("View > Custom Line Breaks", "Add Line Break") => Some("Enter"),
+            ("View", "Join Lines")
+            | ("View", "Join Line")
+            | ("Edit", "Join Lines")
+            | ("Edit", "Join Line")
+            | ("Edit > Custom Line Breaks", "Join Line")
+            | ("View > Custom Line Breaks", "Join Line")
+            | ("View > Custom Line Breaks", "Join Lines") => Some("⌘J"),
+            ("View", "Reset Custom Breaks")
+            | ("View", "Clear All Line Breaks")
+            | ("Edit", "Reset Custom Breaks")
+            | ("Edit", "Clear All Line Breaks")
+            | ("Edit > Custom Line Breaks", "Clear All Line Breaks")
+            | ("View > Custom Line Breaks", "Reset Custom Breaks")
+            | ("View > Custom Line Breaks", "Clear All Line Breaks") => Some("⇧⌘Backspace"),
+            ("Go", "Go to Address...") => Some("⌘L"),
+            ("Go", "Go to Beginning") | ("Go", "Beginning of File") => Some("⌘Home"),
+            ("Go", "Go to End") | ("Go", "End of File") => Some("⌘End"),
+            ("Go", "Next Difference") | ("Analysis", "Next Difference") => Some("F3"),
+            ("Go", "Previous Difference") | ("Analysis", "Previous Difference") => Some("⇧F3"),
             ("Analysis", "Load Definition...") => Some("⇧⌘S"),
             ("Analysis", "Toggle Inline Structure View") => Some("⇧⌘V"),
             ("Analysis", "Compare Open Files...") => Some("⌥⌘D"),
@@ -192,17 +224,49 @@ fn shortcut_for_label(category: &str, label: &str) -> Option<&'static str> {
             ("Edit", "Cut") => Some("Ctrl+X"),
             ("Edit", "Copy") => Some("Ctrl+C"),
             ("Edit", "Paste") => Some("Ctrl+V"),
-            ("Edit", "as Hex Dump") => Some("Ctrl+Shift+C"),
+            ("Edit", "as Hex Dump") | ("Edit > Copy As", "as Hex Dump") => Some("Ctrl+Shift+C"),
             ("Edit", "Select All") => Some("Ctrl+A"),
             ("Edit", "Find") => Some("Ctrl+F"),
             ("Edit", "Find in File (Scan All)") => Some("Ctrl+Shift+F"),
+            ("Edit", "Find Next") | ("Go", "Find Next") => Some("F3"),
+            ("Edit", "Find Previous") | ("Go", "Find Previous") => Some("Shift+F3"),
+            ("Edit", "Toggle Insert Mode") => Some("Insert"),
+            ("Edit", "Unfold at Cursor")
+            | ("Edit", "Unfold Bookmark at Cursor")
+            | ("Go", "Unfold Bookmark at Cursor")
+            | ("Go > Bookmark Visibility", "Unfold Bookmark at Cursor")
+            | ("Edit > Bookmark Visibility", "Unfold Bookmark at Cursor") => Some("Ctrl+Shift+]"),
             ("View", "Toggle Left Panel") => Some("Ctrl+B"),
             ("View", "Toggle Right Panel (Scratchpad)") => Some("Alt+Ctrl+B"),
             ("View", "Focus Active Editor") => Some("Esc"),
             ("View", "Command Palette...") => Some("Ctrl+Shift+P"),
             ("View", "Search") => Some("Ctrl+Shift+F"),
-            ("Go", "Go to Beginning") => Some("Ctrl+Home"),
-            ("Go", "Go to End") => Some("Ctrl+End"),
+            ("View", "Break Line")
+            | ("View", "Add Line Break")
+            | ("Edit", "Break Line")
+            | ("Edit", "Add Line Break")
+            | ("Edit > Custom Line Breaks", "Add Line Break")
+            | ("View > Custom Line Breaks", "Break Line")
+            | ("View > Custom Line Breaks", "Add Line Break") => Some("Enter"),
+            ("View", "Join Lines")
+            | ("View", "Join Line")
+            | ("Edit", "Join Lines")
+            | ("Edit", "Join Line")
+            | ("Edit > Custom Line Breaks", "Join Line")
+            | ("View > Custom Line Breaks", "Join Line")
+            | ("View > Custom Line Breaks", "Join Lines") => Some("Ctrl+J"),
+            ("View", "Reset Custom Breaks")
+            | ("View", "Clear All Line Breaks")
+            | ("Edit", "Reset Custom Breaks")
+            | ("Edit", "Clear All Line Breaks")
+            | ("Edit > Custom Line Breaks", "Clear All Line Breaks")
+            | ("View > Custom Line Breaks", "Reset Custom Breaks")
+            | ("View > Custom Line Breaks", "Clear All Line Breaks") => Some("Ctrl+Shift+Backspace"),
+            ("Go", "Go to Address...") => Some("Ctrl+L"),
+            ("Go", "Go to Beginning") | ("Go", "Beginning of File") => Some("Ctrl+Home"),
+            ("Go", "Go to End") | ("Go", "End of File") => Some("Ctrl+End"),
+            ("Go", "Next Difference") | ("Analysis", "Next Difference") => Some("F3"),
+            ("Go", "Previous Difference") | ("Analysis", "Previous Difference") => Some("Shift+F3"),
             ("Analysis", "Load Definition...") => Some("Ctrl+Shift+S"),
             ("Analysis", "Toggle Inline Structure View") => Some("Ctrl+Shift+V"),
             ("Analysis", "Compare Open Files...") => Some("Alt+Ctrl+D"),
@@ -885,6 +949,101 @@ mod tests {
         // Check submenu flattening
         let copy_hex = commands.iter().find(|c| c.title == "Edit: Copy As > as Hex Dump");
         assert!(copy_hex.is_some());
+        let copy_hex = copy_hex.unwrap();
+        #[cfg(target_os = "macos")]
+        assert_eq!(copy_hex.shortcut.as_deref(), Some("⇧⌘C"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(copy_hex.shortcut.as_deref(), Some("Ctrl+Shift+C"));
+
+        let insert_mode = commands.iter().find(|c| c.title == "Edit: Toggle Insert Mode").expect("Toggle Insert Mode");
+        assert_eq!(insert_mode.shortcut.as_deref(), Some("Insert"));
+
+        let find_next = commands.iter().find(|c| c.title == "Edit: Find Next").expect("Find Next");
+        #[cfg(target_os = "macos")]
+        assert_eq!(find_next.shortcut.as_deref(), Some("⌘G"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(find_next.shortcut.as_deref(), Some("F3"));
+
+        let find_prev = commands.iter().find(|c| c.title == "Edit: Find Previous").expect("Find Previous");
+        #[cfg(target_os = "macos")]
+        assert_eq!(find_prev.shortcut.as_deref(), Some("⇧⌘G"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(find_prev.shortcut.as_deref(), Some("Shift+F3"));
+
+        let unfold_bm = commands
+            .iter()
+            .find(|c| c.title == "Edit: Bookmark Visibility > Unfold at Cursor")
+            .expect("Unfold at Cursor");
+        #[cfg(target_os = "macos")]
+        assert_eq!(unfold_bm.shortcut.as_deref(), Some("⇧⌘]"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(unfold_bm.shortcut.as_deref(), Some("Ctrl+Shift+]"));
+
+        let break_line = commands
+            .iter()
+            .find(|c| c.title == "View: Custom Line Breaks > Break Line")
+            .expect("Break Line");
+        assert_eq!(break_line.shortcut.as_deref(), Some("Enter"));
+
+        let join_lines = commands
+            .iter()
+            .find(|c| c.title == "View: Custom Line Breaks > Join Lines")
+            .expect("Join Lines");
+        #[cfg(target_os = "macos")]
+        assert_eq!(join_lines.shortcut.as_deref(), Some("⌘J"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(join_lines.shortcut.as_deref(), Some("Ctrl+J"));
+
+        let reset_breaks = commands
+            .iter()
+            .find(|c| c.title == "View: Custom Line Breaks > Reset Custom Breaks")
+            .expect("Reset Custom Breaks");
+        #[cfg(target_os = "macos")]
+        assert_eq!(reset_breaks.shortcut.as_deref(), Some("⇧⌘Backspace"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(reset_breaks.shortcut.as_deref(), Some("Ctrl+Shift+Backspace"));
+
+        let go_addr = commands.iter().find(|c| c.title == "Go: Go to Address...").expect("Go to Address...");
+        #[cfg(target_os = "macos")]
+        assert_eq!(go_addr.shortcut.as_deref(), Some("⌘L"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(go_addr.shortcut.as_deref(), Some("Ctrl+L"));
+
+        let go_begin = commands.iter().find(|c| c.title == "Go: Go to Beginning").expect("Go to Beginning");
+        #[cfg(target_os = "macos")]
+        assert_eq!(go_begin.shortcut.as_deref(), Some("⌘Home"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(go_begin.shortcut.as_deref(), Some("Ctrl+Home"));
+
+        let go_end = commands.iter().find(|c| c.title == "Go: Go to End").expect("Go to End");
+        #[cfg(target_os = "macos")]
+        assert_eq!(go_end.shortcut.as_deref(), Some("⌘End"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(go_end.shortcut.as_deref(), Some("Ctrl+End"));
+
+        let next_diff = commands.iter().find(|c| c.title == "Go: Next Difference").expect("Next Difference");
+        assert_eq!(next_diff.shortcut.as_deref(), Some("F3"));
+
+        let prev_diff = commands.iter().find(|c| c.title == "Go: Previous Difference").expect("Previous Difference");
+        #[cfg(target_os = "macos")]
+        assert_eq!(prev_diff.shortcut.as_deref(), Some("⇧F3"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(prev_diff.shortcut.as_deref(), Some("Shift+F3"));
+
+        let diff_next = commands
+            .iter()
+            .find(|c| c.title == "Analysis: Compare / Diff > Next Difference")
+            .expect("Analysis Next Difference");
+        assert_eq!(diff_next.shortcut.as_deref(), Some("F3"));
+
+        let diff_prev = commands
+            .iter()
+            .find(|c| c.title == "Analysis: Compare / Diff > Previous Difference")
+            .expect("Analysis Previous Difference");
+        #[cfg(target_os = "macos")]
+        assert_eq!(diff_prev.shortcut.as_deref(), Some("⇧F3"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(diff_prev.shortcut.as_deref(), Some("Shift+F3"));
 
         // Check that all 8 left panels are available in commands
         let panel_commands = [
@@ -953,5 +1112,119 @@ mod tests {
             .find(|c| c.title == "View: Focus Active Editor")
             .expect("Focus Active Editor in palette");
         assert_eq!(focus_cmd.shortcut.as_deref(), Some("Esc"));
+    }
+
+    #[test]
+    fn test_shortcut_for_label_alignment() {
+        use super::shortcut_for_label;
+
+        // Next Difference and Previous Difference
+        assert_eq!(shortcut_for_label("Go", "Next Difference"), Some("F3"));
+        assert_eq!(shortcut_for_label("Analysis", "Next Difference"), Some("F3"));
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(shortcut_for_label("Go", "Previous Difference"), Some("⇧F3"));
+            assert_eq!(shortcut_for_label("Analysis", "Previous Difference"), Some("⇧F3"));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(shortcut_for_label("Go", "Previous Difference"), Some("Shift+F3"));
+            assert_eq!(shortcut_for_label("Analysis", "Previous Difference"), Some("Shift+F3"));
+        }
+
+        // Find Next / Find Previous
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(shortcut_for_label("Edit", "Find Next"), Some("⌘G"));
+            assert_eq!(shortcut_for_label("Go", "Find Next"), Some("⌘G"));
+            assert_eq!(shortcut_for_label("Edit", "Find Previous"), Some("⇧⌘G"));
+            assert_eq!(shortcut_for_label("Go", "Find Previous"), Some("⇧⌘G"));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(shortcut_for_label("Edit", "Find Next"), Some("F3"));
+            assert_eq!(shortcut_for_label("Go", "Find Next"), Some("F3"));
+            assert_eq!(shortcut_for_label("Edit", "Find Previous"), Some("Shift+F3"));
+            assert_eq!(shortcut_for_label("Go", "Find Previous"), Some("Shift+F3"));
+        }
+
+        // Toggle Insert Mode
+        assert_eq!(shortcut_for_label("Edit", "Toggle Insert Mode"), Some("Insert"));
+
+        // Copy as Hex Dump
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(shortcut_for_label("Edit", "as Hex Dump"), Some("⇧⌘C"));
+            assert_eq!(shortcut_for_label("Edit > Copy As", "as Hex Dump"), Some("⇧⌘C"));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(shortcut_for_label("Edit", "as Hex Dump"), Some("Ctrl+Shift+C"));
+            assert_eq!(shortcut_for_label("Edit > Copy As", "as Hex Dump"), Some("Ctrl+Shift+C"));
+        }
+
+        // Beginning / End of File
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(shortcut_for_label("Go", "Beginning of File"), Some("⌘Home"));
+            assert_eq!(shortcut_for_label("Go", "Go to Beginning"), Some("⌘Home"));
+            assert_eq!(shortcut_for_label("Go", "End of File"), Some("⌘End"));
+            assert_eq!(shortcut_for_label("Go", "Go to End"), Some("⌘End"));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(shortcut_for_label("Go", "Beginning of File"), Some("Ctrl+Home"));
+            assert_eq!(shortcut_for_label("Go", "Go to Beginning"), Some("Ctrl+Home"));
+            assert_eq!(shortcut_for_label("Go", "End of File"), Some("Ctrl+End"));
+            assert_eq!(shortcut_for_label("Go", "Go to End"), Some("Ctrl+End"));
+        }
+
+        // Unfold Bookmark at Cursor
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(shortcut_for_label("Edit", "Unfold at Cursor"), Some("⇧⌘]"));
+            assert_eq!(shortcut_for_label("Edit", "Unfold Bookmark at Cursor"), Some("⇧⌘]"));
+            assert_eq!(shortcut_for_label("Go > Bookmark Visibility", "Unfold Bookmark at Cursor"), Some("⇧⌘]"));
+            assert_eq!(shortcut_for_label("Edit > Bookmark Visibility", "Unfold Bookmark at Cursor"), Some("⇧⌘]"));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(shortcut_for_label("Edit", "Unfold at Cursor"), Some("Ctrl+Shift+]"));
+            assert_eq!(shortcut_for_label("Edit", "Unfold Bookmark at Cursor"), Some("Ctrl+Shift+]"));
+            assert_eq!(
+                shortcut_for_label("Go > Bookmark Visibility", "Unfold Bookmark at Cursor"),
+                Some("Ctrl+Shift+]")
+            );
+            assert_eq!(
+                shortcut_for_label("Edit > Bookmark Visibility", "Unfold Bookmark at Cursor"),
+                Some("Ctrl+Shift+]")
+            );
+        }
+
+        // Custom Line Breaks
+        assert_eq!(shortcut_for_label("View", "Break Line"), Some("Enter"));
+        assert_eq!(shortcut_for_label("View", "Add Line Break"), Some("Enter"));
+        assert_eq!(shortcut_for_label("Edit > Custom Line Breaks", "Add Line Break"), Some("Enter"));
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(shortcut_for_label("View", "Join Lines"), Some("⌘J"));
+            assert_eq!(shortcut_for_label("View", "Join Line"), Some("⌘J"));
+            assert_eq!(shortcut_for_label("Edit > Custom Line Breaks", "Join Line"), Some("⌘J"));
+            assert_eq!(shortcut_for_label("View", "Reset Custom Breaks"), Some("⇧⌘Backspace"));
+            assert_eq!(shortcut_for_label("View", "Clear All Line Breaks"), Some("⇧⌘Backspace"));
+            assert_eq!(shortcut_for_label("Edit > Custom Line Breaks", "Clear All Line Breaks"), Some("⇧⌘Backspace"));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(shortcut_for_label("View", "Join Lines"), Some("Ctrl+J"));
+            assert_eq!(shortcut_for_label("View", "Join Line"), Some("Ctrl+J"));
+            assert_eq!(shortcut_for_label("Edit > Custom Line Breaks", "Join Line"), Some("Ctrl+J"));
+            assert_eq!(shortcut_for_label("View", "Reset Custom Breaks"), Some("Ctrl+Shift+Backspace"));
+            assert_eq!(shortcut_for_label("View", "Clear All Line Breaks"), Some("Ctrl+Shift+Backspace"));
+            assert_eq!(
+                shortcut_for_label("Edit > Custom Line Breaks", "Clear All Line Breaks"),
+                Some("Ctrl+Shift+Backspace")
+            );
+        }
     }
 }
