@@ -35,6 +35,12 @@ fn selected_range_for_checksum(editor: &Editor) -> Option<Range<usize>> {
 
 const CONTEXT: &str = "ChecksumPanel";
 
+actions!(checksum_panel, [Dismiss]);
+
+pub fn init(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new("escape", Dismiss, Some("ChecksumPanel && !Input"))]);
+}
+
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = checksum_panel, no_json)]
 struct CopyValue {
@@ -98,6 +104,10 @@ impl ChecksumPanel {
             self.on_editor_changed(cx);
         }
         cx.notify();
+    }
+
+    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
     fn on_editor_changed(&mut self, cx: &mut Context<Self>) {
@@ -759,6 +769,7 @@ impl Render for ChecksumPanel {
             .id("checksum-panel")
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::copy_value))
             .on_action(cx.listener(Self::copy_row))
             .on_action(cx.listener(Self::copy_all_checksums))

@@ -11,10 +11,11 @@ use gpui_kit::*;
 pub const CONTEXT: &str = "DataInspector";
 pub const EDIT_CONTEXT: &str = "InspectorEdit";
 
-actions!(data_inspector, [CommitInspectorEdit, CancelInspectorEdit]);
+actions!(data_inspector, [CommitInspectorEdit, CancelInspectorEdit, Dismiss]);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("escape", Dismiss, Some("DataInspector && !InspectorEdit && !Input")),
         KeyBinding::new("enter", CommitInspectorEdit, Some(EDIT_CONTEXT)),
         KeyBinding::new("escape", CancelInspectorEdit, Some(EDIT_CONTEXT)),
     ]);
@@ -113,6 +114,12 @@ impl DataInspector {
             }));
         }
         cx.notify();
+    }
+
+    pub fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing_field.is_none() {
+            window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
+        }
     }
 
     /// Selects `byte_len` bytes starting from current cursor_offset in the active editor.
@@ -596,7 +603,8 @@ impl Render for DataInspector {
             (None, None)
         };
 
-        let is_focused = self.focus_handle.is_focused(window);
+        let is_input_focused = self.edit_input.read(cx).focus_handle(cx).is_focused(window);
+        let is_focused = self.focus_handle.is_focused(window) || is_input_focused;
 
         let endian_controls = h_flex()
             .items_center()
@@ -647,6 +655,7 @@ impl Render for DataInspector {
             .id("data-inspector")
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::dismiss))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {

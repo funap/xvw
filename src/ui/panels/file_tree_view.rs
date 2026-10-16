@@ -21,7 +21,7 @@ use gpui_kit::{
     prelude::FluentBuilder as _, px, relative,
 };
 
-actions!(file_tree, [MoveUp, MoveDown, MoveTop, MoveBottom, PageUp, PageDown]);
+actions!(file_tree, [MoveUp, MoveDown, MoveTop, MoveBottom, PageUp, PageDown, Dismiss]);
 
 const CONTEXT: &str = "FileTreeView";
 
@@ -33,6 +33,7 @@ fn path_file_name(path: &Path) -> String {
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("escape", Dismiss, Some("FileTreeView && !Input")),
         KeyBinding::new("up", MoveUp, Some("FileTreeView && !Input")),
         KeyBinding::new("down", MoveDown, Some("FileTreeView && !Input")),
         KeyBinding::new("k", MoveUp, Some("FileTreeView && !Input")),
@@ -314,6 +315,10 @@ impl FileTreeView {
         }
     }
 
+    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
+    }
+
     fn on_action_rename(&mut self, _: &Rename, _: &mut Window, cx: &mut Context<Self>) {
         let item = self
             .selected_item
@@ -578,6 +583,7 @@ impl Render for FileTreeView {
             .on_action(cx.listener(Self::move_bottom))
             .on_action(cx.listener(Self::page_up))
             .on_action(cx.listener(Self::page_down))
+            .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::on_action_rename))
             .on_action(cx.listener(Self::on_action_select_item))
             .on_action(cx.listener(Self::on_action_set_file_tree_folder))

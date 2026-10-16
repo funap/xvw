@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 actions!(
     struct_tree,
-    [MoveUp, MoveDown, MoveTop, MoveBottom, PageUp, PageDown, ToggleExpand, Expand, Collapse]
+    [MoveUp, MoveDown, MoveTop, MoveBottom, PageUp, PageDown, ToggleExpand, Expand, Collapse, Dismiss]
 );
 
 #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
@@ -106,6 +106,7 @@ fn default_yaml_file_name(definition_id: &str) -> String {
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("escape", Dismiss, Some("StructTreeView && !Input")),
         KeyBinding::new("up", MoveUp, Some("StructTreeView && !Input")),
         KeyBinding::new("down", MoveDown, Some("StructTreeView && !Input")),
         KeyBinding::new("k", MoveUp, Some("StructTreeView && !Input")),
@@ -887,6 +888,10 @@ impl StructTreeView {
         cx.notify();
     }
 
+    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
+    }
+
     fn on_action_expand_all(&mut self, _: &crate::actions::ExpandAllStructure, _window: &mut Window, cx: &mut Context<Self>) {
         self.expand_all(cx);
     }
@@ -1163,7 +1168,8 @@ impl Render for StructTreeView {
         let is_parsing = self.editor.as_ref().is_some_and(|ed| ed.read(cx).structure.is_parsing());
         let is_empty = self.flattened_fields.is_empty() && self.parse_result.as_ref().is_none_or(|result| result.fields.is_empty());
         let show_parsing_placeholder = is_parsing && self.flattened_fields.is_empty();
-        let is_focused = self.focus_handle.is_focused(window);
+        let is_table_focused = self.table_state.focus_handle.as_ref().is_some_and(|h| h.is_focused(window));
+        let is_focused = self.focus_handle.is_focused(window) || is_table_focused;
         let theme = cx.theme();
         let has_active_editor = self.editor.is_some();
         let parse_progress = self.editor.as_ref().and_then(|editor| {
@@ -1313,6 +1319,7 @@ impl Render for StructTreeView {
             .on_action(cx.listener(Self::toggle_expand))
             .on_action(cx.listener(Self::expand))
             .on_action(cx.listener(Self::collapse))
+            .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::on_action_expand_all))
             .on_action(cx.listener(Self::on_action_collapse_all))
             .on_action(cx.listener(Self::on_action_toggle_structure_address_column))

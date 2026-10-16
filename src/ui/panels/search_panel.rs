@@ -384,13 +384,19 @@ impl SearchPanel {
         }
     }
 
-    fn table_dismiss(&mut self, _: &table::Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+    fn table_dismiss(&mut self, _: &table::Dismiss, window: &mut Window, cx: &mut Context<Self>) {
         cx.emit(SearchPanelEvent::FocusEditor);
+        window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
     fn focus_table(&mut self, _: &FocusTable, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(handle) = &self.table_state.focus_handle {
+        if !self.results.is_empty()
+            && let Some(handle) = &self.table_state.focus_handle
+        {
             handle.focus(window, cx);
+        } else {
+            cx.emit(SearchPanelEvent::FocusEditor);
+            window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
         }
         cx.notify();
     }
@@ -526,8 +532,9 @@ impl Render for SearchPanel {
 
         let theme = cx.theme();
         let font_family = cx.global::<Appearance>().font_family.clone();
+        let is_input_focused = self.input.read(cx).focus_handle(cx).is_focused(window);
         let is_table_focused = self.table_state.focus_handle.as_ref().is_some_and(|h| h.is_focused(window));
-        let is_focused = self.focus_handle.is_focused(window) || is_table_focused;
+        let is_focused = self.focus_handle.is_focused(window) || is_input_focused || is_table_focused;
         let has_editor = self.editor.is_some();
         let is_query_empty = self.input.read(cx).value().trim().is_empty();
         let count = self.results.len();

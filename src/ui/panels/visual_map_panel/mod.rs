@@ -29,6 +29,14 @@ use std::cmp;
 
 pub const DEFAULT_ENTROPY_WINDOW: usize = 256;
 
+const CONTEXT: &str = "VisualMapPanel";
+
+actions!(visual_map_panel, [Dismiss]);
+
+pub fn init(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new("escape", Dismiss, Some("VisualMapPanel && !Input"))]);
+}
+
 fn default_entropy_window() -> usize {
     DEFAULT_ENTROPY_WINDOW
 }
@@ -217,6 +225,10 @@ impl VisualMapPanel {
                 }
             }
         }
+    }
+
+    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
     fn on_scroll_wheel(&mut self, event: &ScrollWheelEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -591,7 +603,9 @@ impl Render for VisualMapPanel {
 
                 return container
                     .id("visual-map-panel")
+                    .key_context(CONTEXT)
                     .track_focus(&self.focus_handle)
+                    .on_action(cx.listener(Self::dismiss))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, window, cx| {
@@ -690,7 +704,9 @@ impl Render for VisualMapPanel {
 
         container
             .id("visual-map-panel")
+            .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::dismiss))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {

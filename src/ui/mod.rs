@@ -32,6 +32,8 @@ pub fn init(cx: &mut gpui_kit::App) {
     panels::struct_tree_view::init(cx);
     panels::bookmark_panel::init(cx);
     panels::data_inspector::init(cx);
+    panels::checksum_panel::init(cx);
+    panels::visual_map_panel::init(cx);
     views::editor_view::init(cx);
     views::diff_view::init(cx);
     views::scratchpad_view::init(cx);

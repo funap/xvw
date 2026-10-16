@@ -180,6 +180,13 @@ fn test_command_palette_action_exists() {
 }
 
 #[test]
+fn test_focus_hex_view_action_exists() {
+    let action = crate::actions::FocusHexView;
+    let cloned = action.clone();
+    assert_eq!(action, cloned);
+}
+
+#[test]
 fn test_palette_kind_initial_open() {
     use super::{PaletteKind, next_active_palette_kind};
 

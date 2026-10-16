@@ -158,6 +158,7 @@ fn shortcut_for_label(category: &str, label: &str) -> Option<&'static str> {
             ("Edit", "Find in File (Scan All)") => Some("⇧⌘F"),
             ("View", "Toggle Left Panel") => Some("⌘B"),
             ("View", "Toggle Right Panel (Scratchpad)") => Some("⌥⌘B"),
+            ("View", "Focus Active Editor") => Some("Esc"),
             ("View", "Command Palette...") => Some("⇧⌘P"),
             ("View", "Search") => Some("⇧⌘F"),
             ("Go", "Go to Beginning") => Some("⌘Home"),
@@ -197,6 +198,7 @@ fn shortcut_for_label(category: &str, label: &str) -> Option<&'static str> {
             ("Edit", "Find in File (Scan All)") => Some("Ctrl+Shift+F"),
             ("View", "Toggle Left Panel") => Some("Ctrl+B"),
             ("View", "Toggle Right Panel (Scratchpad)") => Some("Alt+Ctrl+B"),
+            ("View", "Focus Active Editor") => Some("Esc"),
             ("View", "Command Palette...") => Some("Ctrl+Shift+P"),
             ("View", "Search") => Some("Ctrl+Shift+F"),
             ("Go", "Go to Beginning") => Some("Ctrl+Home"),
@@ -455,6 +457,7 @@ fn build_view_menu() -> MenuDef {
             MenuItemDef::separator(),
             MenuItemDef::action("Toggle Left Panel", crate::actions::ToggleLeftPanel),
             MenuItemDef::action("Toggle Right Panel (Scratchpad)", crate::actions::ToggleRightPanel),
+            MenuItemDef::action_with_condition("Focus Active Editor", crate::actions::FocusHexView, |s| s.has_doc || s.has_scratch),
             MenuItemDef::submenu(
                 "Panels",
                 vec![
@@ -912,5 +915,43 @@ mod tests {
             ..Default::default()
         };
         assert!(save_cmd.is_executable(&state_writable));
+    }
+
+    #[test]
+    fn test_focus_active_editor_menu_item() {
+        use super::collect_palette_commands;
+
+        let menus = application_menus();
+        let view_menu = menus.iter().find(|m| m.name == "View").expect("View menu found");
+        let focus_item = view_menu
+            .items
+            .iter()
+            .find(|item| matches!(item, MenuItemDef::Action { label, .. } if label.as_ref() == "Focus Active Editor"))
+            .expect("Focus Active Editor item found");
+
+        if let MenuItemDef::Action { is_enabled: Some(cond), .. } = focus_item {
+            assert!(cond(&MenuEditorState {
+                has_doc: true,
+                ..Default::default()
+            }));
+            assert!(cond(&MenuEditorState {
+                has_scratch: true,
+                ..Default::default()
+            }));
+            assert!(!cond(&MenuEditorState {
+                has_doc: false,
+                has_scratch: false,
+                ..Default::default()
+            }));
+        } else {
+            panic!("Focus Active Editor item must have condition");
+        }
+
+        let commands = collect_palette_commands(&menus);
+        let focus_cmd = commands
+            .iter()
+            .find(|c| c.title == "View: Focus Active Editor")
+            .expect("Focus Active Editor in palette");
+        assert_eq!(focus_cmd.shortcut.as_deref(), Some("Esc"));
     }
 }

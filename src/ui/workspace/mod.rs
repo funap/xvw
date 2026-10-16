@@ -454,11 +454,7 @@ impl Workspace {
                     }
                 }
                 crate::ui::panels::search_panel::SearchPanelEvent::FocusEditor => {
-                    if let Some(editor_view) = this.effective_editor_view(cx) {
-                        editor_view.update(cx, |view, cx| {
-                            view.hex_view().read(cx).focus_handle(cx).focus(window, cx);
-                        });
-                    }
+                    this.restore_editor_focus(window, cx);
                 }
             },
         )
@@ -477,11 +473,7 @@ impl Workspace {
                     }
                 }
                 crate::ui::panels::strings_panel::StringsPanelEvent::FocusEditor => {
-                    if let Some(editor_view) = this.effective_editor_view(cx) {
-                        editor_view.update(cx, |view, cx| {
-                            view.hex_view().read(cx).focus_handle(cx).focus(window, cx);
-                        });
-                    }
+                    this.restore_editor_focus(window, cx);
                 }
             },
         )
@@ -1005,7 +997,7 @@ impl Workspace {
             let focus_handle = self.left_panel.read(cx).focus_handle(cx);
             focus_handle.focus(window, cx);
         } else {
-            self.focus_handle.focus(window, cx);
+            self.restore_editor_focus(window, cx);
         }
 
         self.sync_activity_bar(cx);
@@ -1020,7 +1012,7 @@ impl Workspace {
                 sp.focus(window, cx);
             });
         } else {
-            self.focus_handle.focus(window, cx);
+            self.restore_editor_focus(window, cx);
         }
 
         cx.notify();
@@ -1224,7 +1216,15 @@ impl Workspace {
     }
 
     pub(crate) fn restore_editor_focus(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(scratchpad) = self.active_scratchpad(cx) {
+        if let Some(editor_view) = self.active_editor_view(cx) {
+            editor_view.update(cx, |view, cx| {
+                view.hex_view().read(cx).focus_handle(cx).focus(window, cx);
+            });
+        } else if let Some(scratchpad) = self
+            .pane_tree
+            .read(cx)
+            .active_tab_as::<Entity<crate::ui::views::scratchpad_view::ScratchpadView>>(cx)
+        {
             scratchpad.update(cx, |sp, cx| {
                 sp.focus(window, cx);
             });
@@ -1232,6 +1232,12 @@ impl Workspace {
             editor_view.update(cx, |view, cx| {
                 view.hex_view().read(cx).focus_handle(cx).focus(window, cx);
             });
+        } else if let Some(scratchpad) = self.active_scratchpad(cx) {
+            scratchpad.update(cx, |sp, cx| {
+                sp.focus(window, cx);
+            });
+        } else {
+            self.focus_handle.focus(window, cx);
         }
     }
 
@@ -1602,6 +1608,7 @@ impl Render for Workspace {
         let theme = cx.theme();
         div()
             .id("workspace")
+            .on_action(cx.listener(Self::on_action_focus_hex_view))
             .on_action(cx.listener(Self::on_action_toggle_right_panel))
             .on_action(cx.listener(Self::on_action_new_file))
             .on_action(cx.listener(Self::on_action_new_empty_file))

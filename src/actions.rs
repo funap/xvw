@@ -82,7 +82,7 @@ pub struct SearchNext;
 #[derive(Clone, PartialEq, Action)]
 pub struct SearchPrev;
 
-#[derive(Clone, PartialEq, Action)]
+#[derive(Clone, Debug, PartialEq, Action)]
 pub struct FocusHexView;
 
 #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]

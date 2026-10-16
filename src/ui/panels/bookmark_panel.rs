@@ -22,7 +22,8 @@ actions!(
         EditComment,
         CancelEdit,
         SaveEdit,
-        DeleteSelected
+        DeleteSelected,
+        Dismiss
     ]
 );
 
@@ -30,6 +31,7 @@ const CONTEXT: &str = "BookmarkPanel";
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("escape", Dismiss, Some("BookmarkPanel && !CommentEdit && !Input")),
         KeyBinding::new("up", MoveUp, Some("BookmarkPanel && !CommentEdit && !Input")),
         KeyBinding::new("down", MoveDown, Some("BookmarkPanel && !CommentEdit && !Input")),
         KeyBinding::new("k", MoveUp, Some("BookmarkPanel && !CommentEdit && !Input")),
@@ -320,6 +322,12 @@ impl BookmarkPanel {
         cx.notify();
     }
 
+    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing_id.is_none() {
+            window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
+        }
+    }
+
     fn move_up(&mut self, _: &MoveUp, _window: &mut Window, cx: &mut Context<Self>) {
         if self.editing_id.is_some() {
             return;
@@ -479,7 +487,8 @@ impl Focusable for BookmarkPanel {
 impl Render for BookmarkPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let is_focused = self.focus_handle.is_focused(window);
+        let is_input_focused = self.comment_input.read(cx).focus_handle(cx).is_focused(window);
+        let is_focused = self.focus_handle.is_focused(window) || is_input_focused;
 
         let (bookmarks, has_editor) = if let Some(ed) = &self.editor {
             let editor = ed.read(cx);
@@ -716,6 +725,7 @@ impl Render for BookmarkPanel {
             .on_action(cx.listener(Self::select_current))
             .on_action(cx.listener(Self::edit_comment))
             .on_action(cx.listener(Self::delete_selected))
+            .on_action(cx.listener(Self::dismiss))
             .child(header);
 
         if let Some(toolbar) = filter_toolbar {

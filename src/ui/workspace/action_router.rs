@@ -31,6 +31,10 @@ pub(crate) enum PanelActivityToggleAction {
     Close,
 }
 impl Workspace {
+    pub(crate) fn on_action_focus_hex_view(&mut self, _: &FocusHexView, window: &mut Window, cx: &mut Context<Self>) {
+        self.restore_editor_focus(window, cx);
+    }
+
     pub(crate) fn on_action_select_all(&mut self, action: &SelectAll, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
