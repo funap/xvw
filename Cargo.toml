@@ -12,21 +12,21 @@ categories = ["development-tools", "gui"]
 
 [dependencies]
 dirs = "7.0.0"
-gpui-kit = { version = "0.7.1", features = ["tree-sitter-markdown"] }
+gpui-kit = { version = "0.7.3", features = ["tree-sitter-markdown"] }
 rust-embed = "8.13.0"
 anyhow = "1.0.104"
-tokio = { version = "1.53.2", features = ["full"] }
+tokio = { version = "1.53.3", features = ["full"] }
 autocorrect = "2.14.2"
 serde = { version = "1.0.229", features = ["derive"] }
-schemars = "1.2.2"
-serde_json = "1.0.151"
+schemars = "1.2.3"
+serde_json = "1.0.154"
 toml = "1.1.8+spec-1.1.0"
 bstr = "1.13.1"
 serde_yaml = "0.9"
 memmap2 = "0.9.11"
 flate2 = "1.1.10"
 image = "0.25.10"
-sha2 = "0.11.0"
+sha2 = "0.11.1"
 encoding_rs = "0.8.42"
 getrandom = "0.4.3"
 lsp-types = "0.97.0"
