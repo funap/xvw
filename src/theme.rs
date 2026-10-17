@@ -43,24 +43,37 @@ impl EmbeddedThemes {
         self.themes.get(name).cloned()
     }
 
-    /// Returns a list of all available theme names with default themes first, followed by alphabetical order.
+    /// Returns a list of all available theme names, grouping Light themes first followed by Dark themes.
+    /// Within each group, the default theme comes first, followed by alphabetical order.
     pub fn theme_names(&self) -> Vec<SharedString> {
-        let mut names: Vec<_> = self
-            .themes
-            .keys()
-            .filter(|name| name.as_ref() != DEFAULT_LIGHT_THEME && name.as_ref() != DEFAULT_DARK_THEME)
-            .cloned()
-            .collect();
-        names.sort();
+        let mut light_names: Vec<_> = Vec::new();
+        let mut dark_names: Vec<_> = Vec::new();
+
+        for (name, config) in &self.themes {
+            if name.as_ref() == DEFAULT_LIGHT_THEME || name.as_ref() == DEFAULT_DARK_THEME {
+                continue;
+            }
+            if config.mode.is_dark() {
+                dark_names.push(name.clone());
+            } else {
+                light_names.push(name.clone());
+            }
+        }
+
+        light_names.sort();
+        dark_names.sort();
 
         let mut result = Vec::with_capacity(self.themes.len());
         if self.themes.contains_key(DEFAULT_LIGHT_THEME) {
             result.push(SharedString::from(DEFAULT_LIGHT_THEME));
         }
+        result.extend(light_names);
+
         if self.themes.contains_key(DEFAULT_DARK_THEME) {
             result.push(SharedString::from(DEFAULT_DARK_THEME));
         }
-        result.extend(names);
+        result.extend(dark_names);
+
         result
     }
 }
@@ -132,7 +145,7 @@ pub fn apply_theme_by_name(name: &str, window: Option<&mut Window>, cx: &mut App
     Theme::change(mode, window, cx);
 }
 
-/// Returns a list of all available theme names with default themes first, followed by alphabetical order.
+/// Returns a list of all available theme names, grouping Light themes first followed by Dark themes.
 pub fn all_theme_names(cx: &App) -> Vec<SharedString> {
     cx.global::<EmbeddedThemes>().theme_names()
 }
@@ -226,9 +239,35 @@ mod tests {
         let embedded = EmbeddedThemes::load_from_assets(&Assets);
         let names = embedded.theme_names();
         assert_eq!(names.len(), 38);
+
+        // First theme must be Default Light
         assert_eq!(names[0], SharedString::from("Default Light"));
-        assert_eq!(names[1], SharedString::from("Default Dark"));
-        assert_eq!(names[2], SharedString::from("Adventure"));
+
+        // Find the boundary where dark themes start
+        let dark_index = names
+            .iter()
+            .position(|name| embedded.get(name).unwrap().mode.is_dark())
+            .expect("must contain dark themes");
+
+        // First dark theme must be Default Dark
+        assert_eq!(names[dark_index], SharedString::from("Default Dark"));
+
+        // All themes before dark_index must be light
+        for name in &names[..dark_index] {
+            assert!(!embedded.get(name).unwrap().mode.is_dark(), "theme {name} in light section should not be dark");
+        }
+
+        // All themes from dark_index onward must be dark
+        for name in &names[dark_index..] {
+            assert!(embedded.get(name).unwrap().mode.is_dark(), "theme {name} in dark section should be dark");
+        }
+
+        // Light themes after Default Light must be sorted alphabetically
+        assert!(names[1..dark_index].windows(2).all(|w| w[0] <= w[1]));
+
+        // Dark themes after Default Dark must be sorted alphabetically
+        assert!(names[dark_index + 1..].windows(2).all(|w| w[0] <= w[1]));
+
         assert!(names.contains(&SharedString::from("Adventure")));
         assert!(names.contains(&SharedString::from("Ayu Light")));
         assert!(names.contains(&SharedString::from("Catppuccin Mocha")));
@@ -239,8 +278,5 @@ mod tests {
         assert!(names.contains(&SharedString::from("Solarized Light")));
         assert!(names.contains(&SharedString::from("Tokyo Night")));
         assert!(names.contains(&SharedString::from("Twilight")));
-
-        // Verify remaining themes are in alphabetical order
-        assert!(names[2..].windows(2).all(|w| w[0] <= w[1]));
     }
 }

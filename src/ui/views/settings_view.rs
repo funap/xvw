@@ -6,18 +6,20 @@ use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::ui::icon::IconName;
 use crate::ui::views::hex_view::resolve_category_color;
 use gpui_kit::component::{
-    ActiveTheme, Sizable as _, Size, StyledExt, WindowExt as _,
+    ActiveTheme, Icon, IndexPath, Sizable as _, Size, StyledExt, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dock::{Panel, PanelEvent},
     input::{self, Input, InputState, NumberInput},
     menu::{DropdownMenu as _, PopupMenuItem},
     notification::Notification,
+    searchable_list::{SearchableListDelegate, SearchableListItem},
+    select::{Select, SelectEvent, SelectState},
     theme::Theme,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Action, Anchor, AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString, Subscription,
-    Window, div, px,
+    Action, Anchor, AnyElement, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, KeyDownEvent, ParentElement, Render,
+    SharedString, Subscription, Window, div, px,
 };
 
 use std::cell::RefCell;
@@ -26,10 +28,22 @@ use std::rc::Rc;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ThemePreviewState {
     origin: Option<SharedString>,
+    current_index: Option<usize>,
     confirmed: bool,
+    open: bool,
 }
 
 impl ThemePreviewState {
+    /// Returns whether the theme dropdown popup is currently open.
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    /// Sets whether the theme dropdown popup is open.
+    pub fn set_open(&mut self, open: bool) {
+        self.open = open;
+    }
+
     /// Records the current theme as origin if not already previewing.
     pub fn start_preview(&mut self, current_theme: SharedString) {
         if self.origin.is_none() {
@@ -38,14 +52,49 @@ impl ThemePreviewState {
         }
     }
 
+    /// Sets the current preview index (e.g. from mouse hover).
+    pub fn set_hover_index(&mut self, index: usize) {
+        self.current_index = Some(index);
+    }
+
+    /// Steps selection index up or down across `total_items`, matching PopupMenu keyboard behavior.
+    /// Returns the newly selected index.
+    pub fn step_index(&mut self, step_down: bool, total_items: usize) -> Option<usize> {
+        if total_items == 0 {
+            return None;
+        }
+        let next_idx = match self.current_index {
+            None => {
+                if step_down {
+                    0
+                } else {
+                    total_items - 1
+                }
+            }
+            Some(idx) => {
+                if step_down {
+                    if idx + 1 >= total_items { 0 } else { idx + 1 }
+                } else {
+                    if idx == 0 { total_items - 1 } else { idx - 1 }
+                }
+            }
+        };
+        self.current_index = Some(next_idx);
+        Some(next_idx)
+    }
+
     /// Marks the selected theme as confirmed and clears origin so dismissal will not revert.
     pub fn confirm(&mut self) {
         self.confirmed = true;
         self.origin = None;
+        self.current_index = None;
+        self.open = false;
     }
 
     /// Cancels preview and returns the original theme to restore, if not confirmed.
     pub fn cancel(&mut self) -> Option<SharedString> {
+        self.current_index = None;
+        self.open = false;
         let is_confirmed = self.confirmed;
         self.confirmed = false;
         if !is_confirmed {
@@ -60,6 +109,99 @@ impl ThemePreviewState {
     pub fn origin(&self) -> Option<&SharedString> {
         self.origin.as_ref()
     }
+
+    /// Returns the currently previewed index, if any.
+    pub fn current_index(&self) -> Option<usize> {
+        self.current_index
+    }
+}
+
+/// Calculates the next index when stepping up or down across a list of items of length `total`,
+/// starting from `current_index`. Stepping down advances with wraparound; stepping up retreats with wraparound.
+pub fn cycle_theme_index(current_index: usize, step_down: bool, total: usize) -> usize {
+    if total == 0 {
+        return 0;
+    }
+    if step_down {
+        if current_index + 1 >= total { 0 } else { current_index + 1 }
+    } else {
+        if current_index == 0 { total - 1 } else { current_index - 1 }
+    }
+}
+
+#[derive(Clone)]
+pub struct ThemeListDelegate {
+    themes: Vec<SharedString>,
+    preview_state: Rc<RefCell<ThemePreviewState>>,
+}
+
+impl ThemeListDelegate {
+    pub fn new(themes: Vec<SharedString>, preview_state: Rc<RefCell<ThemePreviewState>>) -> Self {
+        Self { themes, preview_state }
+    }
+}
+
+impl SearchableListDelegate for ThemeListDelegate {
+    type Item = SharedString;
+
+    fn items_count(&self, _section: usize) -> usize {
+        self.themes.len()
+    }
+
+    fn item(&self, ix: IndexPath) -> Option<&Self::Item> {
+        self.themes.get(ix.row)
+    }
+
+    fn position<V>(&self, value: &V) -> Option<IndexPath>
+    where
+        Self::Item: SearchableListItem<Value = V>,
+        V: PartialEq,
+    {
+        self.themes.iter().position(|item| item.value() == value).map(IndexPath::new)
+    }
+
+    fn render_item(&self, ix: IndexPath, item: &Self::Item, checked: bool, _window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+        let name = item.clone();
+        let preview_state = self.preview_state.clone();
+        {
+            let mut state = preview_state.borrow_mut();
+            state.set_open(true);
+            if checked && state.current_index().is_none() {
+                state.start_preview(cx.theme().theme_name().clone());
+                state.set_hover_index(ix.row);
+            }
+        }
+        Some(
+            div()
+                .id(SharedString::from(format!("theme-item-{}", name)))
+                .w_full()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(div().truncate().child(name.clone()))
+                .when(checked, |this| this.child(Icon::new(IconName::Check).size(px(14.0)).flex_shrink_0()))
+                .on_hover(move |hovered, window, cx| {
+                    if *hovered {
+                        let (need_apply, theme_name) = {
+                            let mut state = preview_state.borrow_mut();
+                            state.set_hover_index(ix.row);
+                            if cx.theme().theme_name() != name.as_ref() {
+                                state.start_preview(cx.theme().theme_name().clone());
+                                (true, Some(name.clone()))
+                            } else {
+                                (false, None)
+                            }
+                        };
+                        if need_apply && let Some(theme_name) = theme_name {
+                            crate::theme::apply_theme_by_name(&theme_name, Some(window), cx);
+                        }
+                    }
+                })
+                .into_any_element(),
+        )
+    }
 }
 
 #[derive(Clone, PartialEq, Action)]
@@ -67,6 +209,7 @@ pub struct UpdateSettingInput;
 
 pub struct SettingsView {
     focus_handle: FocusHandle,
+    theme_select: Entity<SelectState<ThemeListDelegate>>,
     font_family_input: Entity<InputState>,
     font_size_input: Entity<InputState>,
     bytes_per_row_input: Entity<InputState>,
@@ -78,6 +221,13 @@ pub struct SettingsView {
 impl SettingsView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
+        let theme_preview_state = Rc::new(RefCell::new(ThemePreviewState::default()));
+
+        let all_themes = crate::theme::all_theme_names(cx);
+        let active_theme_name = cx.theme().theme_name().clone();
+        let current_idx = all_themes.iter().position(|t| t == &active_theme_name).unwrap_or(0);
+        let delegate = ThemeListDelegate::new(all_themes.clone(), theme_preview_state.clone());
+        let theme_select = cx.new(|cx| SelectState::new(delegate, Some(IndexPath::new(current_idx)), window, cx));
 
         let font_family_input = cx.new(|cx| InputState::new(window, cx));
         let font_size_input = cx.new(|cx| InputState::new(window, cx).step(1.0).min(MIN_FONT_SIZE as f64).max(MAX_FONT_SIZE as f64));
@@ -227,13 +377,62 @@ impl SettingsView {
             },
         ));
 
+        subscriptions.push(cx.subscribe(&theme_select, |this, _, event: &SelectEvent<ThemeListDelegate>, cx| {
+            if let SelectEvent::Confirm(Some(theme_name)) = event {
+                this.theme_preview_state.borrow_mut().confirm();
+                crate::theme::apply_theme_by_name(theme_name, None, cx);
+                crate::settings::save_current(cx);
+                cx.notify();
+            }
+        }));
+
+        subscriptions.push(cx.subscribe(&theme_select, |this, _, _event: &DismissEvent, cx| {
+            let origin = this.theme_preview_state.borrow_mut().cancel();
+            if let Some(origin) = origin {
+                crate::theme::apply_theme_by_name(&origin, None, cx);
+                cx.notify();
+            }
+        }));
+
+        let preview_state = theme_preview_state.clone();
+        let all_themes_for_sub = all_themes.clone();
+        let sub = cx.observe_keystrokes(move |_this, event, window, cx| {
+            let is_list = event.context_stack.iter().any(|c| c.contains("List"));
+            if is_list && !event.keystroke.modifiers.modified() {
+                let step_down = if event.keystroke.key == "down" || event.action.as_ref().map(|a| a.name() == "SelectDown").unwrap_or(false) {
+                    Some(true)
+                } else if event.keystroke.key == "up" || event.action.as_ref().map(|a| a.name() == "SelectUp").unwrap_or(false) {
+                    Some(false)
+                } else {
+                    None
+                };
+
+                if let Some(step_down) = step_down {
+                    let next_theme = {
+                        let mut state = preview_state.borrow_mut();
+                        state.start_preview(cx.theme().theme_name().clone());
+                        let next_idx = state.step_index(step_down, all_themes_for_sub.len());
+                        next_idx.and_then(|idx| all_themes_for_sub.get(idx).cloned())
+                    };
+
+                    if let Some(theme_name) = next_theme
+                        && cx.theme().theme_name() != theme_name.as_ref()
+                    {
+                        crate::theme::apply_theme_by_name(&theme_name, Some(window), cx);
+                    }
+                }
+            }
+        });
+        subscriptions.push(sub);
+
         Self {
             focus_handle,
+            theme_select,
             font_family_input,
             font_size_input,
             bytes_per_row_input,
             structure_yaml_sha_threshold_input,
-            theme_preview_state: Rc::new(RefCell::new(ThemePreviewState::default())),
+            theme_preview_state,
             _subscriptions: subscriptions,
         }
     }
@@ -244,6 +443,13 @@ impl SettingsView {
         let size_str = appearance.font_size.to_string();
         let bytes_per_row_str = cx.global::<BytesPerRow>().0.to_string();
         let yaml_sha_threshold_str = cx.global::<StructureYamlShaThreshold>().0.to_string();
+
+        let active_theme = cx.theme().theme_name().clone();
+        self.theme_select.update(cx, |select, cx| {
+            if select.selected_value() != Some(&active_theme) {
+                select.set_selected_value(&active_theme, window, cx);
+            }
+        });
 
         self.font_family_input.update(cx, |input, cx| {
             if input.value() != family.as_str() {
@@ -300,64 +506,45 @@ impl Render for SettingsView {
                             .gap(row_gap)
                             .child(div().w(label_width).flex_shrink_0().whitespace_nowrap().child("Theme"))
                             .child(
-                                div().w(control_width).child(
-                                    Button::new("theme-selection")
-                                        .label(active_theme_name.clone())
-                                        .outline()
-                                        .dropdown_caret(true)
-                                        .with_size(Size::Small)
-                                        .dropdown_menu_with_anchor(Anchor::TopRight, {
-                                            let preview_state = preview_state.clone();
-                                            let saved_theme_name = saved_theme_name.clone();
-                                            move |menu, _window, cx| {
-                                                preview_state.borrow_mut().start_preview(cx.theme().theme_name().clone());
-
-                                                all_themes.iter().fold(menu.scrollable(true).max_h(px(360.)), |menu, theme_name| {
-                                                    let is_active = theme_name == &saved_theme_name;
-                                                    let name = theme_name.clone();
-                                                    let preview_state_for_element = preview_state.clone();
-                                                    let preview_state_for_click = preview_state.clone();
-
-                                                    menu.item(
-                                                        PopupMenuItem::element({
-                                                            let name = name.clone();
-                                                            let item_id = SharedString::from(format!("theme-item-{}", name));
-                                                            move |_window, _cx| {
-                                                                div().id(item_id.clone()).w_full().h_full().flex().items_center().child(name.clone()).on_hover(
-                                                                    {
-                                                                        let name = name.clone();
-                                                                        let preview_state = preview_state_for_element.clone();
-                                                                        move |hovered, window, cx| {
-                                                                            if *hovered && cx.theme().theme_name() != name.as_ref() {
-                                                                                preview_state.borrow_mut().start_preview(cx.theme().theme_name().clone());
-                                                                                crate::theme::apply_theme_by_name(&name, Some(window), cx);
-                                                                            }
-                                                                        }
-                                                                    },
-                                                                )
-                                                            }
-                                                        })
-                                                        .checked(is_active)
-                                                        .on_click(move |_, window, cx| {
-                                                            preview_state_for_click.borrow_mut().confirm();
-                                                            crate::theme::apply_theme_by_name(&name, Some(window), cx);
-                                                            crate::settings::save_current(cx);
-                                                        }),
-                                                    )
-                                                })
+                                div()
+                                    .w(control_width)
+                                    .capture_key_down(cx.listener({
+                                        let all_themes = all_themes.clone();
+                                        move |this, event: &KeyDownEvent, window, cx| {
+                                            let is_popup_open = this.theme_preview_state.borrow().is_open();
+                                            if is_popup_open || event.keystroke.modifiers.modified() {
+                                                return;
                                             }
-                                        })
-                                        .on_open_change({
-                                            let preview_state = preview_state.clone();
-                                            move |open, window, cx| {
-                                                if *open {
-                                                    preview_state.borrow_mut().start_preview(cx.theme().theme_name().clone());
-                                                } else if let Some(origin) = preview_state.borrow_mut().cancel() {
-                                                    crate::theme::apply_theme_by_name(&origin, Some(window), cx);
+                                            let step_down = if event.keystroke.key == "down" {
+                                                Some(true)
+                                            } else if event.keystroke.key == "up" {
+                                                Some(false)
+                                            } else {
+                                                None
+                                            };
+
+                                            if let Some(step_down) = step_down {
+                                                window.prevent_default();
+                                                cx.stop_propagation();
+
+                                                let current_name = cx.theme().theme_name().clone();
+                                                let current_idx = all_themes.iter().position(|t| t == &current_name).unwrap_or(0);
+                                                let next_idx = cycle_theme_index(current_idx, step_down, all_themes.len());
+
+                                                if let Some(next_theme) = all_themes.get(next_idx) {
+                                                    let next_theme = next_theme.clone();
+                                                    this.theme_select.update(cx, |select, cx| {
+                                                        select.set_selected_index(Some(IndexPath::new(next_idx)), window, cx);
+                                                    });
+                                                    crate::theme::apply_theme_by_name(&next_theme, Some(window), cx);
+                                                    crate::settings::save_current(cx);
+                                                    this.theme_preview_state.borrow_mut().confirm();
+                                                    cx.notify();
                                                 }
                                             }
-                                        }),
-                                ),
+                                        }
+                                    }))
+                                    .child(Select::new(&self.theme_select).w_full().with_size(Size::Small)),
                             )
                             .when(is_modified, |row| {
                                 row.child(
@@ -366,9 +553,15 @@ impl Render for SettingsView {
                                         .ghost()
                                         .with_size(Size::Small)
                                         .tooltip("Reset to default")
-                                        .on_click(cx.listener(|_, _, window, cx| {
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            let default_theme = SharedString::from(crate::settings::DEFAULT_LIGHT_THEME);
+                                            this.theme_select.update(cx, |select, cx| {
+                                                select.set_selected_value(&default_theme, window, cx);
+                                                select.focus(window, cx);
+                                            });
                                             crate::theme::apply_theme_by_name(crate::settings::DEFAULT_LIGHT_THEME, Some(window), cx);
                                             crate::settings::save_current(cx);
+                                            this.theme_preview_state.borrow_mut().confirm();
                                             window.push_notification(Notification::info("Reset Theme to default"), cx);
                                         })),
                                 )
@@ -1147,5 +1340,129 @@ mod tests {
         assert_eq!(state.origin(), None);
 
         assert_eq!(state.cancel(), None);
+    }
+
+    #[test]
+    fn test_theme_preview_state_step_index_navigation() {
+        let mut state = ThemePreviewState::default();
+        assert_eq!(state.current_index(), None);
+
+        // Zero items returns None
+        assert_eq!(state.step_index(true, 0), None);
+        assert_eq!(state.step_index(false, 0), None);
+
+        // Step down from None starts at index 0
+        assert_eq!(state.step_index(true, 3), Some(0));
+        assert_eq!(state.current_index(), Some(0));
+
+        // Step down advances index
+        assert_eq!(state.step_index(true, 3), Some(1));
+        assert_eq!(state.step_index(true, 3), Some(2));
+
+        // Step down at the end wraps around to 0
+        assert_eq!(state.step_index(true, 3), Some(0));
+
+        // Step up at 0 wraps around to the last index
+        assert_eq!(state.step_index(false, 3), Some(2));
+        assert_eq!(state.step_index(false, 3), Some(1));
+        assert_eq!(state.step_index(false, 3), Some(0));
+
+        // Step up from None starts at the last item
+        let mut state_up = ThemePreviewState::default();
+        assert_eq!(state_up.step_index(false, 3), Some(2));
+        assert_eq!(state_up.current_index(), Some(2));
+    }
+
+    #[test]
+    fn test_theme_preview_state_hover_sync_and_reset() {
+        let mut state = ThemePreviewState::default();
+        state.start_preview(SharedString::from("Default Light"));
+
+        // Setting hover index updates current_index
+        state.set_hover_index(2);
+        assert_eq!(state.current_index(), Some(2));
+
+        // Stepping continues from the hovered index
+        assert_eq!(state.step_index(true, 5), Some(3));
+        assert_eq!(state.step_index(false, 5), Some(2));
+
+        // Cancel resets current_index
+        state.cancel();
+        assert_eq!(state.current_index(), None);
+
+        // Confirm also resets current_index
+        state.start_preview(SharedString::from("Default Light"));
+        state.set_hover_index(1);
+        state.confirm();
+        assert_eq!(state.current_index(), None);
+    }
+
+    #[test]
+    fn test_theme_preview_state_scoped_borrow_allows_reborrow() {
+        let cell = std::cell::RefCell::new(ThemePreviewState::default());
+        let step_result = {
+            let mut state = cell.borrow_mut();
+            state.start_preview(SharedString::from("Default Light"));
+            state.step_index(true, 5)
+        };
+        assert_eq!(step_result, Some(0));
+
+        // Reborrowing succeeds because the previous borrow was scoped and dropped
+        cell.borrow_mut().confirm();
+        assert_eq!(cell.borrow().origin(), None);
+    }
+
+    #[test]
+    fn test_cycle_theme_index() {
+        assert_eq!(cycle_theme_index(0, true, 0), 0);
+        assert_eq!(cycle_theme_index(0, false, 0), 0);
+
+        // Single item
+        assert_eq!(cycle_theme_index(0, true, 1), 0);
+        assert_eq!(cycle_theme_index(0, false, 1), 0);
+
+        // Three items - step down
+        assert_eq!(cycle_theme_index(0, true, 3), 1);
+        assert_eq!(cycle_theme_index(1, true, 3), 2);
+        assert_eq!(cycle_theme_index(2, true, 3), 0); // wrap to start
+
+        // Three items - step up
+        assert_eq!(cycle_theme_index(0, false, 3), 2); // wrap to end
+        assert_eq!(cycle_theme_index(2, false, 3), 1);
+        assert_eq!(cycle_theme_index(1, false, 3), 0);
+    }
+
+    #[test]
+    fn test_theme_preview_state_open_tracking() {
+        let mut state = ThemePreviewState::default();
+        assert!(!state.is_open());
+
+        state.set_open(true);
+        assert!(state.is_open());
+
+        state.confirm();
+        assert!(!state.is_open());
+
+        state.set_open(true);
+        assert!(state.is_open());
+
+        state.cancel();
+        assert!(!state.is_open());
+    }
+
+    #[test]
+    fn test_theme_list_delegate() {
+        let themes = vec![SharedString::from("Light"), SharedString::from("Dark")];
+        let state = Rc::new(RefCell::new(ThemePreviewState::default()));
+        let delegate = ThemeListDelegate::new(themes, state);
+
+        assert_eq!(delegate.items_count(0), 2);
+        assert_eq!(delegate.item(IndexPath::new(0)), Some(&SharedString::from("Light")));
+        assert_eq!(delegate.item(IndexPath::new(1)), Some(&SharedString::from("Dark")));
+        assert_eq!(delegate.item(IndexPath::new(2)), None);
+
+        assert_eq!(delegate.position(&SharedString::from("Light")), Some(IndexPath::new(0)));
+        assert_eq!(delegate.position(&SharedString::from("Dark")), Some(IndexPath::new(1)));
+        assert_eq!(delegate.position(&SharedString::from("Unknown")), None);
     }
 }

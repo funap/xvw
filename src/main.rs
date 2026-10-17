@@ -51,7 +51,10 @@ fn init_panic_hook() {
                 Some(dir.join("xvw_panic.log"))
             })
             .unwrap_or_else(|| PathBuf::from("xvw_panic.log"));
-        let _ = std::fs::write(log_path, msg);
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
+            use std::io::Write as _;
+            let _ = writeln!(file, "{msg}\n----------------------------------------\n");
+        }
     }));
 }
 
