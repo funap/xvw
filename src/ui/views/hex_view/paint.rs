@@ -4,7 +4,7 @@ use crate::core::bookmark::BookmarkItem;
 use crate::core::document::Document;
 use crate::core::editor::LineMap;
 use crate::core::encoding::Encoding;
-use crate::core::radix::{ByteGroupSize, DisplayRadix, digit_count, is_group_zero};
+use crate::core::radix::{ByteGroupSize, DisplayRadix, byte_category, digit_count, group_category};
 use crate::core::structure::{IndexedField, ParseResult};
 use crate::ui::color::BookmarkColorExt;
 use gpui_kit::component::ActiveTheme;
@@ -183,6 +183,44 @@ pub fn selection_background_color(selection_color: Hsla, is_focused: bool, is_da
     selection_color.alpha(alpha)
 }
 
+/// Computes the text color for a hex group item taking into account cursor focus,
+/// active selection, highlights, and category palette.
+#[inline]
+pub fn hex_item_text_color(is_cursor_focused: bool, is_selected: bool, has_hl: bool, item_slice: &[u8], palette: &ByteCategoryPalette, fg_color: Hsla) -> Hsla {
+    if is_cursor_focused || is_selected || has_hl {
+        fg_color
+    } else {
+        palette.color_for(group_category(item_slice))
+    }
+}
+
+/// Computes the text color for an ASCII character cell taking into account selection,
+/// highlights, printable status, and category palette.
+#[inline]
+pub fn ascii_item_text_color(
+    in_selected_group: bool,
+    has_hl: bool,
+    byte: u8,
+    is_printable: bool,
+    palette: &ByteCategoryPalette,
+    fg_color: Hsla,
+    muted_color: Hsla,
+) -> Hsla {
+    if has_hl || in_selected_group {
+        if !is_printable { fg_color.opacity(0.65) } else { fg_color }
+    } else {
+        let cat = byte_category(byte);
+        let color = palette.color_for(Some(cat));
+        if is_printable {
+            color
+        } else if color == fg_color || color == muted_color.opacity(0.5) {
+            muted_color.opacity(0.4)
+        } else {
+            color.opacity(0.7)
+        }
+    }
+}
+
 /// Paint every glyph centered in its fixed Hex cell while reusing the line
 /// shaped for the row. This keeps shaping batched and avoids a per-row glyph
 /// position allocation.
@@ -316,6 +354,7 @@ pub struct RowPaintParams<'a> {
     pub radix: DisplayRadix,
     pub group_size: ByteGroupSize,
     pub is_big_endian: bool,
+    pub category_palette: ByteCategoryPalette,
     pub cursor_offset: usize,
     pub insert_cursor_offset: usize,
     pub min_sel: usize,
@@ -385,10 +424,11 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let is_struct_mode = params.parse_result.is_some();
 
     let active_row_highlights = row_highlights(params.highlights, params.max_highlight_len, offset, next_offset);
+    let is_dark = cx.theme().mode.is_dark();
     let (selection_bg, caret_color, muted_color, fg_color, accent_fg_color, border_color, _sidebar_bg, bg_color_theme) = {
         let theme = cx.theme();
         (
-            selection_background_color(theme.selection, params.is_focused, theme.mode.is_dark()),
+            selection_background_color(theme.selection, params.is_focused, is_dark),
             theme.caret,
             theme.muted_foreground,
             theme.foreground,
@@ -765,7 +805,6 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         } else {
             params.cursor_offset >= item_start_offset && params.cursor_offset < item_end_offset
         };
-        let is_zero = is_group_zero(item_slice);
         let is_selected = if params.min_sel <= params.max_sel {
             item_start_offset <= params.max_sel && item_end_offset > params.min_sel
         } else {
@@ -774,13 +813,14 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
         let current_hl_color = highlight_color_for_range(item_start_offset, item_end_offset, active_row_highlights);
         let has_hl = current_hl_color.is_some();
-        let text_color = if (is_cursor && params.is_focused) || is_selected || has_hl {
-            fg_color
-        } else if is_zero {
-            muted_color.opacity(0.5)
-        } else {
-            fg_color
-        };
+        let text_color = hex_item_text_color(
+            is_cursor && params.is_focused,
+            is_selected,
+            has_hl,
+            item_slice,
+            &params.category_palette,
+            fg_color,
+        );
 
         group_visuals.push((current_hl_color, is_selected, is_cursor));
         group_text_colors.push(text_color);
@@ -1202,15 +1242,16 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         } else {
                             false
                         };
-                        let text_color = if !item.is_printable() {
-                            if has_hl || in_selected_group {
-                                fg_color.opacity(0.65)
-                            } else {
-                                muted_color.opacity(0.4)
-                            }
-                        } else {
-                            fg_color
-                        };
+                        let byte = chunk.get(j).copied().unwrap_or(0);
+                        let text_color = ascii_item_text_color(
+                            in_selected_group,
+                            has_hl,
+                            byte,
+                            item.is_printable(),
+                            &params.category_palette,
+                            fg_color,
+                            muted_color,
+                        );
 
                         let text_byte_start = ascii_text.len();
                         ascii_text.push(c);
@@ -1592,7 +1633,12 @@ pub fn paint_scrollbar(
 
 #[cfg(test)]
 mod tests {
-    use super::{ByteGroupSize, DisplayRadix, HexGroupInfo, HexInsertCursorParams, hex_insert_cursor_geometry, selection_background_color};
+    use super::{
+        ByteCategoryPalette, ByteGroupSize, DisplayRadix, HexGroupInfo, HexInsertCursorParams, ascii_item_text_color, hex_insert_cursor_geometry,
+        hex_item_text_color, selection_background_color,
+    };
+    use crate::core::radix::{ByteCategoryColors, ByteColoring, CategoryColor};
+    use gpui_kit::component::theme::Theme;
     use gpui_kit::{hsla, px};
 
     #[test]
@@ -1667,5 +1713,132 @@ mod tests {
         // Light mode unfocused
         let light_unfocused = selection_background_color(base, false, false);
         assert_eq!(light_unfocused.a, 0.20);
+    }
+
+    #[allow(clippy::field_reassign_with_default)]
+    fn test_theme() -> Theme {
+        let mut theme = Theme::default();
+        theme.foreground = hsla(0.0, 0.0, 1.0, 1.0);
+        theme.muted_foreground = hsla(0.0, 0.0, 0.5, 1.0);
+        theme.red = hsla(0.0, 0.8, 0.5, 1.0);
+        theme.green = hsla(120.0 / 360.0, 0.8, 0.5, 1.0);
+        theme.blue = hsla(210.0 / 360.0, 0.8, 0.5, 1.0);
+        theme.yellow = hsla(45.0 / 360.0, 0.8, 0.5, 1.0);
+        theme.cyan = hsla(190.0 / 360.0, 0.8, 0.5, 1.0);
+        theme.magenta = hsla(280.0 / 360.0, 0.8, 0.5, 1.0);
+        theme
+    }
+
+    #[test]
+    fn test_hex_item_text_color() {
+        let theme = test_theme();
+        let fg = theme.foreground;
+        let muted = theme.muted_foreground;
+
+        let dim_zero_palette = ByteCategoryPalette::from_colors(ByteColoring::DimZero.colors().unwrap(), &theme);
+        let uniform_palette = ByteCategoryPalette::from_colors(ByteColoring::Uniform.colors().unwrap(), &theme);
+        let dim_padding_palette = ByteCategoryPalette::from_colors(ByteColoring::DimPadding.colors().unwrap(), &theme);
+        let category_palette = ByteCategoryPalette::from_colors(ByteColoring::Category.colors().unwrap(), &theme);
+
+        // When focused cursor is on item, use fg
+        assert_eq!(hex_item_text_color(true, false, false, &[0x00], &dim_zero_palette, fg), fg);
+
+        // When selected, use fg even if dimmed
+        assert_eq!(hex_item_text_color(false, true, false, &[0x00], &dim_zero_palette, fg), fg);
+
+        // When highlighted, use fg even if dimmed
+        assert_eq!(hex_item_text_color(false, false, true, &[0x00], &dim_zero_palette, fg), fg);
+
+        // Uniform mode: always fg
+        assert_eq!(hex_item_text_color(false, false, false, &[0x00], &uniform_palette, fg), fg);
+
+        // DimZero mode: 0x00 is dimmed
+        assert_eq!(hex_item_text_color(false, false, false, &[0x00], &dim_zero_palette, fg), dim_zero_palette.null);
+        assert_eq!(hex_item_text_color(false, false, false, &[0x42], &dim_zero_palette, fg), fg);
+
+        // DimPadding mode: 0x00 and 0xFF are dimmed
+        assert_eq!(hex_item_text_color(false, false, false, &[0xFF], &dim_padding_palette, fg), muted.opacity(0.5));
+
+        // Category mode: distinct colors for different categories
+        let null_col = hex_item_text_color(false, false, false, &[0x00], &category_palette, fg);
+        let ascii_col = hex_item_text_color(false, false, false, b"A", &category_palette, fg);
+        let ws_col = hex_item_text_color(false, false, false, b" ", &category_palette, fg);
+        let ctrl_col = hex_item_text_color(false, false, false, &[0x01], &category_palette, fg);
+        let non_ascii_col = hex_item_text_color(false, false, false, &[0x80], &category_palette, fg);
+        let max_col = hex_item_text_color(false, false, false, &[0xFF], &category_palette, fg);
+
+        assert_eq!(null_col, category_palette.null);
+        assert_eq!(ascii_col, category_palette.ascii_printable);
+        assert_eq!(ws_col, category_palette.ascii_whitespace);
+        assert_eq!(ctrl_col, category_palette.ascii_control);
+        assert_eq!(non_ascii_col, category_palette.non_ascii);
+        assert_eq!(max_col, category_palette.max);
+
+        assert_ne!(ascii_col, fg);
+        assert_ne!(ascii_col, ws_col);
+        assert_ne!(ws_col, ctrl_col);
+        assert_ne!(ctrl_col, non_ascii_col);
+        assert_ne!(non_ascii_col, max_col);
+
+        // Mixed group defaults to fg
+        let mixed_col = hex_item_text_color(false, false, false, &[b'A', 0x00], &category_palette, fg);
+        assert_eq!(mixed_col, fg);
+    }
+
+    #[test]
+    fn test_ascii_item_text_color() {
+        let theme = test_theme();
+        let fg = theme.foreground;
+        let muted = theme.muted_foreground;
+        let dim_zero_palette = ByteCategoryPalette::from_colors(ByteColoring::DimZero.colors().unwrap(), &theme);
+        let category_palette = ByteCategoryPalette::from_colors(ByteColoring::Category.colors().unwrap(), &theme);
+
+        // Selection / highlight takes priority
+        assert_eq!(ascii_item_text_color(true, false, b'A', true, &category_palette, fg, muted), fg);
+        assert_eq!(ascii_item_text_color(false, true, b'A', true, &category_palette, fg, muted), fg);
+
+        // Normal mode (DimZero)
+        assert_eq!(ascii_item_text_color(false, false, b'A', true, &dim_zero_palette, fg, muted), fg);
+        assert_eq!(
+            ascii_item_text_color(false, false, 0x00, false, &dim_zero_palette, fg, muted),
+            muted.opacity(0.4)
+        );
+        assert_eq!(
+            ascii_item_text_color(false, false, 0x01, false, &dim_zero_palette, fg, muted),
+            muted.opacity(0.4)
+        );
+
+        // Category mode
+        let printable_col = ascii_item_text_color(false, false, b'A', true, &category_palette, fg, muted);
+        let ws_col = ascii_item_text_color(false, false, b' ', true, &category_palette, fg, muted);
+        assert_eq!(printable_col, category_palette.ascii_printable);
+        assert_eq!(ws_col, category_palette.ascii_whitespace);
+
+        let unprintable_col = ascii_item_text_color(false, false, 0x01, false, &category_palette, fg, muted);
+        assert_eq!(unprintable_col, category_palette.ascii_control.opacity(0.7));
+    }
+
+    #[test]
+    fn test_palette_from_colors() {
+        let theme = test_theme();
+
+        let custom_colors = ByteCategoryColors {
+            null: CategoryColor::Muted,
+            ascii_printable: CategoryColor::Default,
+            ascii_whitespace: CategoryColor::Green,
+            ascii_control: CategoryColor::Red,
+            non_ascii: CategoryColor::Yellow,
+            max: CategoryColor::Magenta,
+            mixed: CategoryColor::Cyan,
+        };
+
+        let custom_palette = ByteCategoryPalette::from_colors(custom_colors, &theme);
+        assert_eq!(custom_palette.null, theme.muted_foreground.opacity(0.5));
+        assert_eq!(custom_palette.ascii_printable, theme.foreground);
+        assert_eq!(custom_palette.ascii_whitespace, theme.green);
+        assert_eq!(custom_palette.ascii_control, theme.red);
+        assert_eq!(custom_palette.non_ascii, theme.yellow);
+        assert_eq!(custom_palette.max, theme.magenta);
+        assert_eq!(custom_palette.mixed, theme.cyan);
     }
 }

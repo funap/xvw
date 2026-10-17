@@ -38,7 +38,7 @@ use crate::app_state::InsertModeState;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::format::CopyFormat;
-use crate::core::radix::{ByteGroupSize, DisplayRadix};
+use crate::core::radix::{ByteCategoryColors, ByteColoring, ByteGroupSize, DisplayRadix};
 
 use crate::core::structure::{IndexedField, ParseResult};
 use crate::ui::icon::IconName;
@@ -162,10 +162,13 @@ pub struct HexView {
     last_cursor_offset: Option<usize>,
     last_max_bytes_per_row: Option<usize>,
     cursor_reveal_pending: bool,
+    pub category_palette: Option<ByteCategoryPalette>,
     _editor_subscription: Subscription,
     _insert_mode_subscription: Subscription,
     _cursor_blink_subscription: Subscription,
     _window_activation_subscription: Subscription,
+    _byte_coloring_subscription: Subscription,
+    _byte_category_colors_subscription: Subscription,
 }
 
 impl EventEmitter<HexViewEvent> for HexView {}
@@ -254,6 +257,14 @@ impl HexView {
             cx.notify();
         });
 
+        let _byte_coloring_subscription = cx.observe_global::<ByteColoring>(|_, cx| {
+            cx.notify();
+        });
+
+        let _byte_category_colors_subscription = cx.observe_global::<ByteCategoryColors>(|_, cx| {
+            cx.notify();
+        });
+
         Self {
             editor,
             focus_handle,
@@ -288,11 +299,26 @@ impl HexView {
             last_cursor_offset: None,
             last_max_bytes_per_row: None,
             cursor_reveal_pending: true,
+            category_palette: None,
             _editor_subscription,
             _insert_mode_subscription,
             _cursor_blink_subscription,
             _window_activation_subscription,
+            _byte_coloring_subscription,
+            _byte_category_colors_subscription,
         }
+    }
+
+    /// Sets or clears the custom category palette override for this `HexView`.
+    /// When `None`, the palette is derived dynamically from global `ByteCategoryColors` and current theme.
+    pub fn set_category_palette(&mut self, palette: Option<ByteCategoryPalette>, cx: &mut Context<Self>) {
+        self.category_palette = palette;
+        cx.notify();
+    }
+
+    /// Returns the current custom category palette override, if set.
+    pub fn category_palette(&self) -> Option<ByteCategoryPalette> {
+        self.category_palette
     }
 
     pub fn editor(&self) -> &Entity<Editor> {
@@ -3507,6 +3533,7 @@ impl Render for HexView {
                 let is_dragging_scrollbar = self.scroll.is_dragging_scrollbar;
                 let scrollbar_hovered = self.scroll.scrollbar_hovered;
                 let scrollbar_view = view.clone();
+                let custom_category_palette = self.category_palette;
 
                 canvas(
                     move |bounds, _window, cx| {
@@ -3585,6 +3612,10 @@ impl Render for HexView {
                         let visible_rows = (list_h / ROW_HEIGHT).ceil() as usize + 1;
                         let top_row = scroll_offset.min(total_rows.saturating_sub(1));
                         let end_row = (top_row + visible_rows).min(total_rows);
+                        let category_palette = custom_category_palette.unwrap_or_else(|| {
+                            let colors = *cx.global::<ByteCategoryColors>();
+                            ByteCategoryPalette::from_colors(colors, cx.theme())
+                        });
 
                         for (k, row_idx) in (top_row..end_row).enumerate() {
                             let row_y = bounds.top() + px((k + top_overscroll_rows) as f32 * ROW_HEIGHT);
@@ -3605,6 +3636,7 @@ impl Render for HexView {
                                     radix,
                                     group_size,
                                     is_big_endian,
+                                    category_palette,
                                     cursor_offset,
                                     insert_cursor_offset,
                                     min_sel,

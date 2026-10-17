@@ -85,6 +85,8 @@ impl AppState {
         cx.set_global(settings.default_radix);
         cx.set_global(settings.default_group_size);
         cx.set_global(settings.default_endianness);
+        cx.set_global(settings.byte_coloring);
+        cx.set_global(settings.byte_category_colors);
         cx.set_global(crate::core::layout::BytesPerRow(settings.bytes_per_row));
         cx.set_global(crate::core::structure::StructureYamlShaThreshold(settings.structure_yaml_sha_threshold));
         cx.set_global(crate::core::structure::StructureYamlIncludeOffsets(settings.structure_yaml_include_offsets));
