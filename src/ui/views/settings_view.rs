@@ -20,6 +20,48 @@ use gpui_kit::{
     Window, div, px,
 };
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ThemePreviewState {
+    origin: Option<SharedString>,
+    confirmed: bool,
+}
+
+impl ThemePreviewState {
+    /// Records the current theme as origin if not already previewing.
+    pub fn start_preview(&mut self, current_theme: SharedString) {
+        if self.origin.is_none() {
+            self.origin = Some(current_theme);
+            self.confirmed = false;
+        }
+    }
+
+    /// Marks the selected theme as confirmed and clears origin so dismissal will not revert.
+    pub fn confirm(&mut self) {
+        self.confirmed = true;
+        self.origin = None;
+    }
+
+    /// Cancels preview and returns the original theme to restore, if not confirmed.
+    pub fn cancel(&mut self) -> Option<SharedString> {
+        let is_confirmed = self.confirmed;
+        self.confirmed = false;
+        if !is_confirmed {
+            self.origin.take()
+        } else {
+            self.origin = None;
+            None
+        }
+    }
+
+    /// Returns the original saved theme name if actively previewing, or None.
+    pub fn origin(&self) -> Option<&SharedString> {
+        self.origin.as_ref()
+    }
+}
+
 #[derive(Clone, PartialEq, Action)]
 pub struct UpdateSettingInput;
 
@@ -29,6 +71,7 @@ pub struct SettingsView {
     font_size_input: Entity<InputState>,
     bytes_per_row_input: Entity<InputState>,
     structure_yaml_sha_threshold_input: Entity<InputState>,
+    theme_preview_state: Rc<RefCell<ThemePreviewState>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -190,6 +233,7 @@ impl SettingsView {
             font_size_input,
             bytes_per_row_input,
             structure_yaml_sha_threshold_input,
+            theme_preview_state: Rc::new(RefCell::new(ThemePreviewState::default())),
             _subscriptions: subscriptions,
         }
     }
@@ -245,7 +289,10 @@ impl Render for SettingsView {
                     .child({
                         let active_theme_name = cx.theme().theme_name().clone();
                         let all_themes = crate::theme::all_theme_names(cx);
-                        let is_modified = active_theme_name != crate::settings::DEFAULT_LIGHT_THEME;
+
+                        let preview_state = self.theme_preview_state.clone();
+                        let saved_theme_name = preview_state.borrow().origin().cloned().unwrap_or_else(|| active_theme_name.clone());
+                        let is_modified = saved_theme_name != crate::settings::DEFAULT_LIGHT_THEME;
 
                         div()
                             .flex()
@@ -259,15 +306,56 @@ impl Render for SettingsView {
                                         .outline()
                                         .dropdown_caret(true)
                                         .with_size(Size::Small)
-                                        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
-                                            all_themes.iter().fold(menu.scrollable(true).max_h(px(360.)), |menu, theme_name| {
-                                                let is_active = theme_name == &active_theme_name;
-                                                let name = theme_name.clone();
-                                                menu.item(PopupMenuItem::new(name.clone()).checked(is_active).on_click(move |_, window, cx| {
-                                                    crate::theme::apply_theme_by_name(&name, Some(window), cx);
-                                                    crate::settings::save_current(cx);
-                                                }))
-                                            })
+                                        .dropdown_menu_with_anchor(Anchor::TopRight, {
+                                            let preview_state = preview_state.clone();
+                                            let saved_theme_name = saved_theme_name.clone();
+                                            move |menu, _window, cx| {
+                                                preview_state.borrow_mut().start_preview(cx.theme().theme_name().clone());
+
+                                                all_themes.iter().fold(menu.scrollable(true).max_h(px(360.)), |menu, theme_name| {
+                                                    let is_active = theme_name == &saved_theme_name;
+                                                    let name = theme_name.clone();
+                                                    let preview_state_for_element = preview_state.clone();
+                                                    let preview_state_for_click = preview_state.clone();
+
+                                                    menu.item(
+                                                        PopupMenuItem::element({
+                                                            let name = name.clone();
+                                                            let item_id = SharedString::from(format!("theme-item-{}", name));
+                                                            move |_window, _cx| {
+                                                                div().id(item_id.clone()).w_full().h_full().flex().items_center().child(name.clone()).on_hover(
+                                                                    {
+                                                                        let name = name.clone();
+                                                                        let preview_state = preview_state_for_element.clone();
+                                                                        move |hovered, window, cx| {
+                                                                            if *hovered && cx.theme().theme_name() != name.as_ref() {
+                                                                                preview_state.borrow_mut().start_preview(cx.theme().theme_name().clone());
+                                                                                crate::theme::apply_theme_by_name(&name, Some(window), cx);
+                                                                            }
+                                                                        }
+                                                                    },
+                                                                )
+                                                            }
+                                                        })
+                                                        .checked(is_active)
+                                                        .on_click(move |_, window, cx| {
+                                                            preview_state_for_click.borrow_mut().confirm();
+                                                            crate::theme::apply_theme_by_name(&name, Some(window), cx);
+                                                            crate::settings::save_current(cx);
+                                                        }),
+                                                    )
+                                                })
+                                            }
+                                        })
+                                        .on_open_change({
+                                            let preview_state = preview_state.clone();
+                                            move |open, window, cx| {
+                                                if *open {
+                                                    preview_state.borrow_mut().start_preview(cx.theme().theme_name().clone());
+                                                } else if let Some(origin) = preview_state.borrow_mut().cancel() {
+                                                    crate::theme::apply_theme_by_name(&origin, Some(window), cx);
+                                                }
+                                            }
                                         }),
                                 ),
                             )
@@ -1015,5 +1103,49 @@ impl crate::ui::pane::WorkspaceTab for Entity<SettingsView> {
     fn create_split(&self, window: &mut Window, cx: &mut App) -> Option<crate::ui::pane::TabContent> {
         let new_settings = cx.new(|cx| SettingsView::new(window, cx));
         Some(crate::ui::pane::TabContent::new(new_settings))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_theme_preview_state_start_and_cancel_reverts_to_origin() {
+        let mut state = ThemePreviewState::default();
+        assert_eq!(state.origin(), None);
+
+        state.start_preview(SharedString::from("Default Light"));
+        assert_eq!(state.origin(), Some(&SharedString::from("Default Light")));
+
+        let restored = state.cancel();
+        assert_eq!(restored, Some(SharedString::from("Default Light")));
+        assert_eq!(state.origin(), None);
+
+        assert_eq!(state.cancel(), None);
+    }
+
+    #[test]
+    fn test_theme_preview_state_multiple_start_preview_preserves_initial_origin() {
+        let mut state = ThemePreviewState::default();
+        state.start_preview(SharedString::from("Default Light"));
+        state.start_preview(SharedString::from("Ayu Dark"));
+        state.start_preview(SharedString::from("Solarized Light"));
+
+        assert_eq!(state.origin(), Some(&SharedString::from("Default Light")));
+
+        let restored = state.cancel();
+        assert_eq!(restored, Some(SharedString::from("Default Light")));
+    }
+
+    #[test]
+    fn test_theme_preview_state_confirm_prevents_revert_on_cancel() {
+        let mut state = ThemePreviewState::default();
+        state.start_preview(SharedString::from("Default Light"));
+
+        state.confirm();
+        assert_eq!(state.origin(), None);
+
+        assert_eq!(state.cancel(), None);
     }
 }
