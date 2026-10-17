@@ -110,11 +110,11 @@ impl ByteOrder {
 pub enum ByteColoring {
     DimZero,
     DimPadding,
-    #[default]
-    #[serde(alias = "none", alias = "plain")]
-    Uniform,
     Category,
     Custom,
+    #[default]
+    #[serde(other, alias = "none", alias = "plain")]
+    Uniform,
 }
 
 #[allow(dead_code)]
@@ -250,8 +250,6 @@ impl ByteCategory {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CategoryColor {
-    #[default]
-    Default,
     Muted,
     Red,
     Green,
@@ -259,6 +257,9 @@ pub enum CategoryColor {
     Yellow,
     Cyan,
     Magenta,
+    #[default]
+    #[serde(other)]
+    Default,
 }
 
 impl CategoryColor {
@@ -1028,5 +1029,20 @@ mod tests {
         assert_eq!(ByteColoring::from_colors(colors), ByteColoring::Uniform);
         assert_eq!(colors.color_for(Some(ByteCategory::Null)), CategoryColor::Default);
         assert_eq!(colors.color_for(None), CategoryColor::Default);
+    }
+
+    #[test]
+    fn test_byte_coloring_fallback_on_unknown_variant() {
+        let de: ByteColoring = serde_json::from_str("\"unknown_preset\"").expect("deserialize unknown");
+        assert_eq!(de, ByteColoring::Uniform);
+
+        let de_legacy: ByteColoring = serde_json::from_str("\"ascii_printable\"").expect("deserialize legacy");
+        assert_eq!(de_legacy, ByteColoring::Uniform);
+    }
+
+    #[test]
+    fn test_category_color_fallback_on_unknown_variant() {
+        let de: CategoryColor = serde_json::from_str("\"unknown_color\"").expect("deserialize unknown");
+        assert_eq!(de, CategoryColor::Default);
     }
 }

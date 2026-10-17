@@ -23,38 +23,97 @@ const SETTINGS_FILE_NAME: &str = "settings.toml";
 
 static SAVE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static SAVE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static SETTINGS_LOAD_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Deserializes a value using its `Deserialize` implementation, or falls back to `Default::default()`
+/// if the value is invalid (e.g. unknown enum variant or mismatched type from an older version).
+fn deserialize_or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(T::deserialize(value).unwrap_or_default())
+}
+
+fn deserialize_bytes_per_row<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(usize::deserialize(value).unwrap_or(DEFAULT_BYTES_PER_ROW))
+}
+
+fn deserialize_structure_yaml_sha_threshold<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(usize::deserialize(value).unwrap_or(DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD))
+}
+
+fn deserialize_structure_yaml_include_offsets<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(bool::deserialize(value).unwrap_or(DEFAULT_STRUCTURE_YAML_INCLUDE_OFFSETS))
+}
+
+fn default_light_theme() -> String {
+    DEFAULT_LIGHT_THEME.to_string()
+}
+
+fn default_dark_theme() -> String {
+    DEFAULT_DARK_THEME.to_string()
+}
 
 /// User-configurable application settings persisted between launches.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    #[serde(default, deserialize_with = "deserialize_or_default")]
     pub appearance: Appearance,
+    #[serde(default = "default_light_theme", deserialize_with = "deserialize_or_default")]
     pub light_theme: String,
+    #[serde(default = "default_dark_theme", deserialize_with = "deserialize_or_default")]
     pub dark_theme: String,
+    #[serde(default, deserialize_with = "deserialize_or_default")]
     pub theme_mode: ThemeMode,
+    #[serde(default, deserialize_with = "deserialize_or_default")]
     pub default_encoding: Encoding,
+    #[serde(default, deserialize_with = "deserialize_or_default")]
     pub default_radix: DisplayRadix,
+    #[serde(default, deserialize_with = "deserialize_or_default")]
     pub default_group_size: ByteGroupSize,
-    #[serde(alias = "default_byte_order")]
+    #[serde(default, alias = "default_byte_order", deserialize_with = "deserialize_or_default")]
     pub default_endianness: ByteOrder,
-    #[serde(default = "default_bytes_per_row")]
+    #[serde(default = "default_bytes_per_row", deserialize_with = "deserialize_bytes_per_row")]
     pub bytes_per_row: usize,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_or_default")]
     pub byte_coloring: ByteColoring,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_or_default")]
     pub byte_category_colors: ByteCategoryColors,
     #[serde(
         default = "default_structure_yaml_sha_threshold",
         alias = "structure_yaml_sha256_threshold",
-        alias = "structure_yaml_binary_sha_threshold"
+        alias = "structure_yaml_binary_sha_threshold",
+        deserialize_with = "deserialize_structure_yaml_sha_threshold"
     )]
     pub structure_yaml_sha_threshold: usize,
-    #[serde(default = "default_structure_yaml_include_offsets", alias = "structure_yaml_include_offset")]
+    #[serde(
+        default = "default_structure_yaml_include_offsets",
+        alias = "structure_yaml_include_offset",
+        deserialize_with = "deserialize_structure_yaml_include_offsets"
+    )]
     pub structure_yaml_include_offsets: bool,
+    #[serde(default, deserialize_with = "deserialize_or_default")]
     pub recent_definition_paths: Vec<PathBuf>,
+    #[serde(default, deserialize_with = "deserialize_or_default")]
     pub recent_file_paths: Vec<PathBuf>,
+    #[serde(default, deserialize_with = "deserialize_or_default")]
     pub recent_files: Vec<RecentFileEntry>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_or_default")]
     pub scratchpad: ScratchpadSettings,
 }
 
@@ -75,19 +134,35 @@ fn default_panel_width() -> f32 {
     DEFAULT_SCRATCHPAD_PANEL_WIDTH
 }
 
+fn deserialize_split_ratio<'de, D>(deserializer: D) -> Result<f32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(f32::deserialize(value).unwrap_or(DEFAULT_SPLIT_RATIO))
+}
+
+fn deserialize_panel_width<'de, D>(deserializer: D) -> Result<f32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    Ok(f32::deserialize(value).unwrap_or(DEFAULT_SCRATCHPAD_PANEL_WIDTH))
+}
+
 /// Scratchpad layout and display mode settings persisted between launches.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ScratchpadSettings {
-    #[serde(default, alias = "last_mode")]
+    #[serde(default, alias = "last_mode", deserialize_with = "deserialize_or_default")]
     pub mode: ScratchpadMode,
-    #[serde(default = "default_split_ratio")]
+    #[serde(default = "default_split_ratio", deserialize_with = "deserialize_split_ratio")]
     pub split_ratio: f32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_or_default")]
     pub split_width: Option<f32>,
-    #[serde(default = "default_panel_width", alias = "right_panel_width")]
+    #[serde(default = "default_panel_width", alias = "right_panel_width", deserialize_with = "deserialize_panel_width")]
     pub panel_width: f32,
-    #[serde(default, alias = "last_file", alias = "last_opened_file")]
+    #[serde(default, alias = "last_file", alias = "last_opened_file", deserialize_with = "deserialize_or_default")]
     pub last_open_file: Option<PathBuf>,
 }
 
@@ -188,11 +263,22 @@ impl Default for Settings {
     }
 }
 
+fn backup_corrupted_settings(path: &Path) {
+    let backup_path = path.with_extension("toml.bak");
+    if let Err(error) = fs::copy(path, &backup_path) {
+        eprintln!("Failed to create backup of settings file at {}: {error}", backup_path.display());
+    } else {
+        eprintln!("Backed up previous settings file to {}", backup_path.display());
+    }
+}
+
 impl Settings {
     /// Loads settings from the platform configuration directory.
     ///
     /// Missing or invalid files are ignored and replaced with the defaults so
     /// a damaged preferences file cannot prevent the application from starting.
+    /// When loading fails due to a damaged or incompatible file, a backup copy
+    /// (.bak) is automatically created so user settings are not irreversibly lost.
     pub fn load() -> Self {
         let Some(path) = settings_path() else {
             return Self::default();
@@ -203,6 +289,8 @@ impl Settings {
             Err(SettingsError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Self::default(),
             Err(error) => {
                 eprintln!("Failed to load settings from {}: {error}", path.display());
+                SETTINGS_LOAD_FAILED.store(true, Ordering::Release);
+                backup_corrupted_settings(&path);
                 Self::default()
             }
         }
@@ -346,6 +434,17 @@ pub fn register_quit_handler(cx: &App) {
             let Some(path) = settings_path() else {
                 return;
             };
+
+            // If loading settings failed at launch and the user hasn't modified
+            // any settings during this session, do not overwrite the existing settings
+            // file with default settings on quit.
+            if SETTINGS_LOAD_FAILED.load(Ordering::Acquire) && SAVE_GENERATION.load(Ordering::Acquire) == 0 {
+                eprintln!(
+                    "Skipping overwrite of settings at {} because startup load failed and settings were not modified",
+                    path.display()
+                );
+                return;
+            }
 
             let lock = SAVE_LOCK.get_or_init(|| Mutex::new(()));
             let _guard = lock.lock().expect("settings save lock");
@@ -732,5 +831,117 @@ mixed = "cyan"
         let settings_default = Settings::load_from(&file_default.path).expect("load settings");
         assert_eq!(settings_default.byte_coloring, ByteColoring::Uniform);
         assert_eq!(settings_default.byte_category_colors, ByteCategoryColors::default());
+    }
+
+    #[test]
+    fn byte_coloring_unknown_variant_falls_back_without_losing_settings() {
+        let file = TestSettingsFile::new("unknown-coloring");
+        let toml_str = r#"
+light_theme = "Solarized Light"
+dark_theme = "Nord"
+bytes_per_row = 24
+byte_coloring = "ascii_printable"
+
+[appearance]
+font_family = "MyCustomFont"
+font_size = 16.0
+"#;
+        fs::write(&file.path, toml_str).expect("write settings");
+
+        let settings = Settings::load_from(&file.path).expect("load settings with unknown coloring");
+        assert_eq!(settings.byte_coloring, ByteColoring::Uniform);
+        assert_eq!(settings.light_theme, "Solarized Light");
+        assert_eq!(settings.dark_theme, "Nord");
+        assert_eq!(settings.bytes_per_row, 24);
+        assert_eq!(settings.appearance.font_family, "MyCustomFont");
+        assert_eq!(settings.appearance.font_size, 16.0);
+    }
+
+    #[test]
+    fn enum_fields_unknown_variant_fallback_without_losing_settings() {
+        let file = TestSettingsFile::new("unknown-enums");
+        let toml_str = r#"
+light_theme = "Gruvbox Light"
+theme_mode = "HighContrast"
+default_radix = "Trinary"
+default_group_size = "Sixteen"
+default_byte_order = "MiddleEndian"
+default_encoding = "EBCDIC"
+
+[scratchpad]
+mode = "diagram"
+"#;
+        fs::write(&file.path, toml_str).expect("write settings");
+
+        let settings = Settings::load_from(&file.path).expect("load settings with unknown enums");
+        assert_eq!(settings.light_theme, "Gruvbox Light");
+        assert_eq!(settings.theme_mode, ThemeMode::Light);
+        assert_eq!(settings.default_radix, DisplayRadix::Hexadecimal);
+        assert_eq!(settings.default_group_size, ByteGroupSize::One);
+        assert_eq!(settings.default_endianness, ByteOrder::LittleEndian);
+        assert_eq!(settings.default_encoding, Encoding::Ascii);
+        assert_eq!(settings.scratchpad.mode, ScratchpadMode::Edit);
+    }
+
+    #[test]
+    fn category_colors_unknown_values_fallback() {
+        use crate::core::radix::CategoryColor;
+
+        let file = TestSettingsFile::new("unknown-category-colors");
+        let toml_str = r#"
+light_theme = "Tokyo Night Light"
+
+[byte_category_colors]
+null = "rainbow"
+ascii_printable = "red"
+non_ascii = "ultraviolet"
+"#;
+        fs::write(&file.path, toml_str).expect("write settings");
+
+        let settings = Settings::load_from(&file.path).expect("load settings with unknown category colors");
+        assert_eq!(settings.light_theme, "Tokyo Night Light");
+        assert_eq!(settings.byte_category_colors.null, CategoryColor::Default);
+        assert_eq!(settings.byte_category_colors.ascii_printable, CategoryColor::Red);
+        assert_eq!(settings.byte_category_colors.non_ascii, CategoryColor::Default);
+    }
+
+    #[test]
+    fn invalid_field_types_fallback_to_defaults() {
+        let file = TestSettingsFile::new("invalid-types");
+        let toml_str = r#"
+light_theme = "Solarized"
+bytes_per_row = "not_a_number"
+structure_yaml_sha_threshold = true
+structure_yaml_include_offsets = "yes"
+
+[scratchpad]
+split_ratio = "half"
+panel_width = "wide"
+"#;
+        fs::write(&file.path, toml_str).expect("write settings");
+
+        let settings = Settings::load_from(&file.path).expect("load settings with invalid types");
+        assert_eq!(settings.light_theme, "Solarized");
+        assert_eq!(settings.bytes_per_row, DEFAULT_BYTES_PER_ROW);
+        assert_eq!(settings.structure_yaml_sha_threshold, DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD);
+        assert_eq!(settings.structure_yaml_include_offsets, DEFAULT_STRUCTURE_YAML_INCLUDE_OFFSETS);
+        assert_eq!(settings.scratchpad.split_ratio, DEFAULT_SPLIT_RATIO);
+        assert_eq!(settings.scratchpad.panel_width, DEFAULT_SCRATCHPAD_PANEL_WIDTH);
+    }
+
+    #[test]
+    fn backup_corrupted_settings_creates_backup_file() {
+        let file = TestSettingsFile::new("corrupted");
+        fs::write(&file.path, "this is not valid toml = [[{\n").expect("write corrupt settings");
+
+        let backup_path = file.path.with_extension("toml.bak");
+        let _ = fs::remove_file(&backup_path);
+
+        backup_corrupted_settings(&file.path);
+        assert!(backup_path.exists());
+        let backup_content = fs::read_to_string(&backup_path).expect("read backup");
+        assert_eq!(backup_content, "this is not valid toml = [[{\n");
+
+        let _ = fs::remove_file(&backup_path);
     }
 }
