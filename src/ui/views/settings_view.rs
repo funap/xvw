@@ -1,9 +1,10 @@
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
-use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
+use crate::core::radix::{ByteCategory, ByteCategoryColors, ByteColoring, ByteGroupSize, ByteOrder, CategoryColor, DisplayRadix};
 use crate::core::structure::{StructureYamlIncludeOffsets, StructureYamlShaThreshold};
 use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::ui::icon::IconName;
+use crate::ui::views::hex_view::resolve_category_color;
 use gpui_kit::component::{
     ActiveTheme, Sizable as _, Size, StyledExt, WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -107,6 +108,14 @@ impl SettingsView {
         }));
 
         subscriptions.push(cx.observe_global::<ByteOrder>(|_, cx| {
+            cx.notify();
+        }));
+
+        subscriptions.push(cx.observe_global::<ByteColoring>(|_, cx| {
+            cx.notify();
+        }));
+
+        subscriptions.push(cx.observe_global::<ByteCategoryColors>(|_, cx| {
             cx.notify();
         }));
 
@@ -217,6 +226,11 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let label_width = px(312.0);
+        let sub_label_width = px(280.0);
+        let row_gap = px(20.0);
+        let control_width = px(200.0);
+
         let container = div().p_4().flex().flex_col().gap_6();
 
         container
@@ -236,10 +250,10 @@ impl Render for SettingsView {
                         div()
                             .flex()
                             .items_center()
-                            .gap_4()
-                            .child(div().w_32().child("Theme"))
+                            .gap(row_gap)
+                            .child(div().w(label_width).flex_shrink_0().whitespace_nowrap().child("Theme"))
                             .child(
-                                div().w_48().child(
+                                div().w(control_width).child(
                                     Button::new("theme-selection")
                                         .label(active_theme_name.clone())
                                         .outline()
@@ -286,9 +300,9 @@ impl Render for SettingsView {
                         div()
                             .flex()
                             .items_center()
-                            .gap_4()
-                            .child(div().w_32().child("Font Family"))
-                            .child(div().w_48().child(Input::new(&self.font_family_input)))
+                            .gap(row_gap)
+                            .child(div().w(label_width).flex_shrink_0().whitespace_nowrap().child("Font Family"))
+                            .child(div().w(control_width).child(Input::new(&self.font_family_input)))
                             .when(is_modified, |row| {
                                 row.child(
                                     Button::new("reset-font-family")
@@ -317,9 +331,9 @@ impl Render for SettingsView {
                         div()
                             .flex()
                             .items_center()
-                            .gap_4()
-                            .child(div().w_32().child("Font Size"))
-                            .child(div().w_48().child(NumberInput::new(&self.font_size_input)))
+                            .gap(row_gap)
+                            .child(div().w(label_width).flex_shrink_0().whitespace_nowrap().child("Font Size"))
+                            .child(div().w(control_width).child(NumberInput::new(&self.font_size_input)))
                             .when(is_modified, |row| {
                                 row.child(
                                     Button::new("reset-font-size")
@@ -348,9 +362,9 @@ impl Render for SettingsView {
                         div()
                             .flex()
                             .items_center()
-                            .gap_4()
-                            .child(div().w_32().child("Bytes Per Row"))
-                            .child(div().w_48().child(NumberInput::new(&self.bytes_per_row_input)))
+                            .gap(row_gap)
+                            .child(div().w(label_width).flex_shrink_0().whitespace_nowrap().child("Bytes Per Row"))
+                            .child(div().w(control_width).child(NumberInput::new(&self.bytes_per_row_input)))
                             .when(is_modified, |row| {
                                 row.child(
                                     Button::new("reset-bytes-per-row")
@@ -378,10 +392,10 @@ impl Render for SettingsView {
                         div()
                             .flex()
                             .items_center()
-                            .gap_4()
-                            .child(div().w_32().child("Default Encoding"))
+                            .gap(row_gap)
+                            .child(div().w(label_width).flex_shrink_0().whitespace_nowrap().child("Default Encoding"))
                             .child(
-                                div().w_48().child(
+                                div().w(control_width).child(
                                     Button::new("default-encoding")
                                         .label(default_encoding.label())
                                         .outline()
@@ -440,10 +454,10 @@ impl Render for SettingsView {
                         div()
                             .flex()
                             .items_center()
-                            .gap_4()
-                            .child(div().w_32().child("Default Radix"))
+                            .gap(row_gap)
+                            .child(div().w(label_width).flex_shrink_0().whitespace_nowrap().child("Default Radix"))
                             .child(
-                                div().w_48().child(
+                                div().w(control_width).child(
                                     Button::new("default-radix")
                                         .label(default_radix.label())
                                         .outline()
@@ -485,10 +499,10 @@ impl Render for SettingsView {
                         div()
                             .flex()
                             .items_center()
-                            .gap_4()
-                            .child(div().w_32().child("Default Grouping"))
+                            .gap(row_gap)
+                            .child(div().w(label_width).flex_shrink_0().whitespace_nowrap().child("Default Grouping"))
                             .child(
-                                div().w_48().child(
+                                div().w(control_width).child(
                                     Button::new("default-grouping")
                                         .label(default_group_size.label())
                                         .outline()
@@ -532,10 +546,10 @@ impl Render for SettingsView {
                         div()
                             .flex()
                             .items_center()
-                            .gap_4()
-                            .child(div().w_32().child("Default Byte Order"))
+                            .gap(row_gap)
+                            .child(div().w(label_width).flex_shrink_0().whitespace_nowrap().child("Default Byte Order"))
                             .child(
-                                div().w_48().child(
+                                div().w(control_width).child(
                                     Button::new("default-byte-order")
                                         .label(default_byte_order.label())
                                         .outline()
@@ -571,6 +585,270 @@ impl Render for SettingsView {
                                         })),
                                 )
                             })
+                    })
+                    .child({
+                        let byte_coloring = *cx.global::<ByteColoring>();
+                        let category_colors = *cx.global::<ByteCategoryColors>();
+                        let default_colors = ByteCategoryColors::default();
+                        let is_modified = byte_coloring != ByteColoring::default() || category_colors != default_colors;
+                        let is_custom = byte_coloring == ByteColoring::Custom;
+                        let status_text = if is_custom {
+                            SharedString::from("Custom overrides")
+                        } else {
+                            SharedString::from(format!("Preset: {}", byte_coloring.label()))
+                        };
+                        let border_accent = if is_custom { cx.theme().accent } else { cx.theme().border };
+
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(row_gap)
+                                    .child(div().w(label_width).flex_shrink_0().whitespace_nowrap().child("Byte Coloring"))
+                                    .child(
+                                        div().w(control_width).child(
+                                            Button::new("byte-coloring")
+                                                .label(byte_coloring.label())
+                                                .outline()
+                                                .dropdown_caret(true)
+                                                .with_size(Size::Small)
+                                                .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
+                                                    let menu = ByteColoring::PRESETS.iter().copied().fold(menu, |menu, coloring| {
+                                                        menu.item(PopupMenuItem::new(coloring.label()).checked(coloring == byte_coloring).on_click(
+                                                            move |_, _, cx| {
+                                                                cx.update_global::<ByteColoring, _>(|current, _| {
+                                                                    *current = coloring;
+                                                                });
+                                                                if let Some(colors) = coloring.colors() {
+                                                                    cx.update_global::<ByteCategoryColors, _>(|current, _| {
+                                                                        *current = colors;
+                                                                    });
+                                                                }
+                                                                crate::settings::save_current(cx);
+                                                            },
+                                                        ))
+                                                    });
+                                                    if is_custom {
+                                                        menu.separator().item(PopupMenuItem::new(ByteColoring::Custom.label()).checked(true))
+                                                    } else {
+                                                        menu
+                                                    }
+                                                }),
+                                        ),
+                                    )
+                                    .when(is_modified, |row| {
+                                        row.child(
+                                            Button::new("reset-byte-coloring")
+                                                .icon(IconName::Undo2)
+                                                .ghost()
+                                                .with_size(Size::Small)
+                                                .tooltip("Reset Byte Coloring & Category Colors to default")
+                                                .on_click(cx.listener(|_, _, window, cx| {
+                                                    cx.update_global::<ByteColoring, _>(|current, _| {
+                                                        *current = ByteColoring::default();
+                                                    });
+                                                    cx.update_global::<ByteCategoryColors, _>(|current, _| {
+                                                        current.reset_all();
+                                                    });
+                                                    crate::settings::save_current(cx);
+                                                    window.push_notification(Notification::info("Reset Byte Coloring to default"), cx);
+                                                })),
+                                        )
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .ml_4()
+                                    .pl_4()
+                                    .pr_4()
+                                    .py_3()
+                                    .border_l_2()
+                                    .border_color(border_accent)
+                                    .bg(cx.theme().muted.opacity(0.2))
+                                    .rounded_md()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(6.0))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .pb_1()
+                                            .child(div().text_xs().font_semibold().text_color(cx.theme().muted_foreground).child("Category Colors"))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(if is_custom {
+                                                        cx.theme().accent_foreground
+                                                    } else {
+                                                        cx.theme().muted_foreground
+                                                    })
+                                                    .child(status_text),
+                                            ),
+                                    )
+                                    .children(ByteCategory::ALL.iter().copied().map(|cat| {
+                                        let color = category_colors.color_for(Some(cat));
+                                        let default_cat_color = default_colors.color_for(Some(cat));
+                                        let is_cat_modified = color != default_cat_color;
+                                        let swatch_color = resolve_category_color(color, cx.theme());
+
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(row_gap)
+                                            .child(
+                                                div()
+                                                    .w(sub_label_width)
+                                                    .flex_shrink_0()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(
+                                                        div()
+                                                            .w(px(10.0))
+                                                            .h(px(10.0))
+                                                            .rounded_full()
+                                                            .flex_shrink_0()
+                                                            .bg(swatch_color)
+                                                            .border_1()
+                                                            .border_color(cx.theme().border.opacity(0.6)),
+                                                    )
+                                                    .child(div().text_xs().whitespace_nowrap().child(cat.label())),
+                                            )
+                                            .child(
+                                                div().w(control_width).child(
+                                                    Button::new(format!("cat-color-{}", cat.id()))
+                                                        .label(color.label())
+                                                        .outline()
+                                                        .dropdown_caret(true)
+                                                        .with_size(Size::Small)
+                                                        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
+                                                            CategoryColor::ALL.iter().copied().fold(menu, |menu, choice| {
+                                                                menu.item(PopupMenuItem::new(choice.label()).checked(choice == color).on_click(
+                                                                    move |_, _, cx| {
+                                                                        let mut next_colors = *cx.global::<ByteCategoryColors>();
+                                                                        next_colors.set(cat, choice);
+                                                                        let next_coloring = ByteColoring::from_colors(next_colors);
+                                                                        cx.update_global::<ByteCategoryColors, _>(|current, _| {
+                                                                            *current = next_colors;
+                                                                        });
+                                                                        cx.update_global::<ByteColoring, _>(|current, _| {
+                                                                            *current = next_coloring;
+                                                                        });
+                                                                        crate::settings::save_current(cx);
+                                                                    },
+                                                                ))
+                                                            })
+                                                        }),
+                                                ),
+                                            )
+                                            .when(is_cat_modified, |row| {
+                                                row.child(
+                                                    Button::new(format!("reset-cat-color-{}", cat.id()))
+                                                        .icon(IconName::Undo2)
+                                                        .ghost()
+                                                        .with_size(Size::Small)
+                                                        .tooltip("Reset category to default")
+                                                        .on_click(cx.listener(move |_, _, _, cx| {
+                                                            let mut next_colors = *cx.global::<ByteCategoryColors>();
+                                                            next_colors.set(cat, default_cat_color);
+                                                            let next_coloring = ByteColoring::from_colors(next_colors);
+                                                            cx.update_global::<ByteCategoryColors, _>(|current, _| {
+                                                                *current = next_colors;
+                                                            });
+                                                            cx.update_global::<ByteColoring, _>(|current, _| {
+                                                                *current = next_coloring;
+                                                            });
+                                                            crate::settings::save_current(cx);
+                                                        })),
+                                                )
+                                            })
+                                    }))
+                                    .child({
+                                        let color = category_colors.color_for(None);
+                                        let default_mixed_color = default_colors.color_for(None);
+                                        let is_mixed_modified = color != default_mixed_color;
+                                        let swatch_color = resolve_category_color(color, cx.theme());
+
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(row_gap)
+                                            .child(
+                                                div()
+                                                    .w(sub_label_width)
+                                                    .flex_shrink_0()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(
+                                                        div()
+                                                            .w(px(10.0))
+                                                            .h(px(10.0))
+                                                            .rounded_full()
+                                                            .flex_shrink_0()
+                                                            .bg(swatch_color)
+                                                            .border_1()
+                                                            .border_color(cx.theme().border.opacity(0.6)),
+                                                    )
+                                                    .child(div().text_xs().whitespace_nowrap().child("Mixed Group (Multi-byte)")),
+                                            )
+                                            .child(
+                                                div().w(control_width).child(
+                                                    Button::new("cat-color-mixed")
+                                                        .label(color.label())
+                                                        .outline()
+                                                        .dropdown_caret(true)
+                                                        .with_size(Size::Small)
+                                                        .tooltip("Color for multi-byte values containing mixed byte types")
+                                                        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
+                                                            CategoryColor::ALL.iter().copied().fold(menu, |menu, choice| {
+                                                                menu.item(PopupMenuItem::new(choice.label()).checked(choice == color).on_click(
+                                                                    move |_, _, cx| {
+                                                                        let mut next_colors = *cx.global::<ByteCategoryColors>();
+                                                                        next_colors.mixed = choice;
+                                                                        let next_coloring = ByteColoring::from_colors(next_colors);
+                                                                        cx.update_global::<ByteCategoryColors, _>(|current, _| {
+                                                                            *current = next_colors;
+                                                                        });
+                                                                        cx.update_global::<ByteColoring, _>(|current, _| {
+                                                                            *current = next_coloring;
+                                                                        });
+                                                                        crate::settings::save_current(cx);
+                                                                    },
+                                                                ))
+                                                            })
+                                                        }),
+                                                ),
+                                            )
+                                            .when(is_mixed_modified, |row| {
+                                                row.child(
+                                                    Button::new("reset-cat-color-mixed")
+                                                        .icon(IconName::Undo2)
+                                                        .ghost()
+                                                        .with_size(Size::Small)
+                                                        .tooltip("Reset category to default")
+                                                        .on_click(cx.listener(move |_, _, _, cx| {
+                                                            let mut next_colors = *cx.global::<ByteCategoryColors>();
+                                                            next_colors.mixed = default_mixed_color;
+                                                            let next_coloring = ByteColoring::from_colors(next_colors);
+                                                            cx.update_global::<ByteCategoryColors, _>(|current, _| {
+                                                                *current = next_colors;
+                                                            });
+                                                            cx.update_global::<ByteColoring, _>(|current, _| {
+                                                                *current = next_coloring;
+                                                            });
+                                                            crate::settings::save_current(cx);
+                                                        })),
+                                                )
+                                            })
+                                    }),
+                            )
                     }),
             )
             .child(
@@ -592,14 +870,14 @@ impl Render for SettingsView {
                         div()
                             .flex()
                             .items_center()
-                            .gap_4()
-                            .child(div().w_32().child("YAML SHA Threshold"))
+                            .gap(row_gap)
+                            .child(div().w(label_width).flex_shrink_0().whitespace_nowrap().child("YAML SHA Threshold"))
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
                                     .gap_2()
-                                    .child(div().w_48().child(NumberInput::new(&self.structure_yaml_sha_threshold_input)))
+                                    .child(div().w(control_width).child(NumberInput::new(&self.structure_yaml_sha_threshold_input)))
                                     .child(div().text_xs().text_color(cx.theme().muted_foreground).child("bytes")),
                             )
                             .when(is_modified, |row| {
@@ -630,10 +908,10 @@ impl Render for SettingsView {
                         div()
                             .flex()
                             .items_center()
-                            .gap_4()
-                            .child(div().w_32().child("YAML Include Offsets"))
+                            .gap(row_gap)
+                            .child(div().w(label_width).flex_shrink_0().whitespace_nowrap().child("YAML Include Offsets"))
                             .child(
-                                div().w_48().child(
+                                div().w(control_width).child(
                                     Button::new("yaml-include-offsets")
                                         .label(if include_offsets { "Enabled" } else { "Disabled" })
                                         .outline()

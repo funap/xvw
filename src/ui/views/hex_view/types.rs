@@ -259,3 +259,62 @@ pub struct LayoutInput {
     pub content_padding: f32,
     pub scrollbar_width: f32,
 }
+
+use crate::core::radix::{ByteCategory, ByteCategoryColors, CategoryColor};
+use gpui_kit::component::theme::Theme;
+
+/// Resolves an individual category color choice into an `Hsla` color from the active theme.
+#[inline]
+pub fn resolve_category_color(choice: CategoryColor, theme: &Theme) -> Hsla {
+    match choice {
+        CategoryColor::Default => theme.foreground,
+        CategoryColor::Muted => theme.muted_foreground.opacity(0.5),
+        CategoryColor::Red => theme.red,
+        CategoryColor::Green => theme.green,
+        CategoryColor::Blue => theme.blue,
+        CategoryColor::Yellow => theme.yellow,
+        CategoryColor::Cyan => theme.cyan,
+        CategoryColor::Magenta => theme.magenta,
+    }
+}
+
+/// Color configuration for each byte category and mixed groups in `HexView`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ByteCategoryPalette {
+    pub null: Hsla,
+    pub ascii_printable: Hsla,
+    pub ascii_whitespace: Hsla,
+    pub ascii_control: Hsla,
+    pub non_ascii: Hsla,
+    pub max: Hsla,
+    pub mixed: Hsla,
+}
+
+impl ByteCategoryPalette {
+    /// Returns the color configured for the given byte category, or the mixed color if `None`.
+    #[inline]
+    pub fn color_for(&self, category: Option<ByteCategory>) -> Hsla {
+        match category {
+            Some(ByteCategory::Null) => self.null,
+            Some(ByteCategory::AsciiPrintable) => self.ascii_printable,
+            Some(ByteCategory::AsciiWhitespace) => self.ascii_whitespace,
+            Some(ByteCategory::AsciiControl) => self.ascii_control,
+            Some(ByteCategory::NonAscii) => self.non_ascii,
+            Some(ByteCategory::Max) => self.max,
+            None => self.mixed,
+        }
+    }
+
+    /// Resolves a category palette from explicit category colors and the active theme.
+    pub fn from_colors(colors: ByteCategoryColors, theme: &Theme) -> Self {
+        Self {
+            null: resolve_category_color(colors.null, theme),
+            ascii_printable: resolve_category_color(colors.ascii_printable, theme),
+            ascii_whitespace: resolve_category_color(colors.ascii_whitespace, theme),
+            ascii_control: resolve_category_color(colors.ascii_control, theme),
+            non_ascii: resolve_category_color(colors.non_ascii, theme),
+            max: resolve_category_color(colors.max, theme),
+            mixed: resolve_category_color(colors.mixed, theme),
+        }
+    }
+}

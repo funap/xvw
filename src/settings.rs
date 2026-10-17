@@ -1,6 +1,6 @@
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
-use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
+use crate::core::radix::{ByteCategoryColors, ByteColoring, ByteGroupSize, ByteOrder, DisplayRadix};
 pub use crate::core::structure::{DEFAULT_STRUCTURE_YAML_INCLUDE_OFFSETS, DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD, MAX_STRUCTURE_YAML_SHA_THRESHOLD};
 use crate::core::structure::{DefinitionHistory, FileHistory, RecentFileEntry};
 use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
@@ -39,6 +39,10 @@ pub struct Settings {
     pub default_endianness: ByteOrder,
     #[serde(default = "default_bytes_per_row")]
     pub bytes_per_row: usize,
+    #[serde(default)]
+    pub byte_coloring: ByteColoring,
+    #[serde(default)]
+    pub byte_category_colors: ByteCategoryColors,
     #[serde(
         default = "default_structure_yaml_sha_threshold",
         alias = "structure_yaml_sha256_threshold",
@@ -172,6 +176,8 @@ impl Default for Settings {
             default_group_size: ByteGroupSize::default(),
             default_endianness: ByteOrder::default(),
             bytes_per_row: DEFAULT_BYTES_PER_ROW,
+            byte_coloring: ByteColoring::default(),
+            byte_category_colors: ByteCategoryColors::default(),
             structure_yaml_sha_threshold: DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD,
             structure_yaml_include_offsets: true,
             recent_definition_paths: Vec::new(),
@@ -223,6 +229,8 @@ impl Settings {
             default_group_size: *cx.global::<ByteGroupSize>(),
             default_endianness: *cx.global::<ByteOrder>(),
             bytes_per_row: cx.global::<BytesPerRow>().0,
+            byte_coloring: *cx.global::<ByteColoring>(),
+            byte_category_colors: *cx.global::<ByteCategoryColors>(),
             structure_yaml_sha_threshold: cx.global::<crate::core::structure::StructureYamlShaThreshold>().0,
             structure_yaml_include_offsets: cx.global::<crate::core::structure::StructureYamlIncludeOffsets>().0,
             recent_definition_paths: recent_history.definitions.paths().to_vec(),
@@ -286,6 +294,11 @@ impl Settings {
         }
         if !(MIN_BYTES_PER_ROW..=MAX_BYTES_PER_ROW).contains(&self.bytes_per_row) {
             self.bytes_per_row = DEFAULT_BYTES_PER_ROW;
+        }
+        if self.byte_coloring == ByteColoring::Custom || self.byte_category_colors != ByteCategoryColors::default() {
+            self.byte_coloring = ByteColoring::from_colors(self.byte_category_colors);
+        } else if let Some(preset_colors) = self.byte_coloring.colors() {
+            self.byte_category_colors = preset_colors;
         }
         if self.structure_yaml_sha_threshold > MAX_STRUCTURE_YAML_SHA_THRESHOLD {
             self.structure_yaml_sha_threshold = DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD;
@@ -410,6 +423,8 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
+        use crate::core::radix::CategoryColor;
+
         let file = TestSettingsFile::new("round-trip");
         let settings = Settings {
             appearance: Appearance {
@@ -424,6 +439,16 @@ mod tests {
             default_group_size: ByteGroupSize::Four,
             default_endianness: ByteOrder::BigEndian,
             bytes_per_row: 24,
+            byte_coloring: ByteColoring::Custom,
+            byte_category_colors: ByteCategoryColors {
+                null: CategoryColor::Muted,
+                ascii_printable: CategoryColor::Default,
+                ascii_whitespace: CategoryColor::Green,
+                ascii_control: CategoryColor::Red,
+                non_ascii: CategoryColor::Yellow,
+                max: CategoryColor::Magenta,
+                mixed: CategoryColor::Cyan,
+            },
             structure_yaml_sha_threshold: 64,
             structure_yaml_include_offsets: false,
             recent_definition_paths: vec![PathBuf::from("definition.ksy")],
@@ -634,5 +659,78 @@ panel_width = 99999.0
         assert_eq!(settings.scratchpad.split_ratio, DEFAULT_SPLIT_RATIO);
         assert_eq!(settings.scratchpad.split_width, None);
         assert_eq!(settings.scratchpad.panel_width, DEFAULT_SCRATCHPAD_PANEL_WIDTH);
+    }
+
+    #[test]
+    fn byte_coloring_setting_round_trip() {
+        let file = TestSettingsFile::new("byte-coloring");
+        fs::write(&file.path, "byte_coloring = \"uniform\"\n").expect("write settings");
+
+        let settings = Settings::load_from(&file.path).expect("load settings");
+        assert_eq!(settings.byte_coloring, ByteColoring::Uniform);
+        assert_eq!(settings.byte_category_colors, ByteColoring::Uniform.colors().unwrap());
+
+        let file_padding = TestSettingsFile::new("byte-coloring-padding");
+        fs::write(&file_padding.path, "byte_coloring = \"dim_padding\"\n").expect("write settings");
+
+        let settings_padding = Settings::load_from(&file_padding.path).expect("load settings");
+        assert_eq!(settings_padding.byte_coloring, ByteColoring::DimPadding);
+        assert_eq!(settings_padding.byte_category_colors, ByteColoring::DimPadding.colors().unwrap());
+
+        let file_category = TestSettingsFile::new("byte-coloring-category");
+        fs::write(&file_category.path, "byte_coloring = \"category\"\n").expect("write settings");
+
+        let settings_category = Settings::load_from(&file_category.path).expect("load settings");
+        assert_eq!(settings_category.byte_coloring, ByteColoring::Category);
+        assert_eq!(settings_category.byte_category_colors, ByteColoring::Category.colors().unwrap());
+
+        let file_dim_zero = TestSettingsFile::new("byte-coloring-dim-zero");
+        fs::write(&file_dim_zero.path, "byte_coloring = \"dim_zero\"\n").expect("write settings");
+
+        let settings_dim_zero = Settings::load_from(&file_dim_zero.path).expect("load settings");
+        assert_eq!(settings_dim_zero.byte_coloring, ByteColoring::DimZero);
+        assert_eq!(settings_dim_zero.byte_category_colors, ByteColoring::DimZero.colors().unwrap());
+
+        let file_default = TestSettingsFile::new("byte-coloring-default");
+        fs::write(&file_default.path, "").expect("write settings");
+
+        let settings_default = Settings::load_from(&file_default.path).expect("load settings");
+        assert_eq!(settings_default.byte_coloring, ByteColoring::Uniform);
+        assert_eq!(settings_default.byte_category_colors, ByteColoring::Uniform.colors().unwrap());
+    }
+
+    #[test]
+    fn byte_category_colors_setting_round_trip() {
+        use crate::core::radix::CategoryColor;
+
+        let file = TestSettingsFile::new("category-colors");
+        let toml_str = r#"
+[byte_category_colors]
+null = "muted"
+ascii_printable = "default"
+ascii_whitespace = "green"
+ascii_control = "red"
+non_ascii = "yellow"
+max = "magenta"
+mixed = "cyan"
+"#;
+        fs::write(&file.path, toml_str).expect("write settings");
+
+        let settings = Settings::load_from(&file.path).expect("load settings");
+        assert_eq!(settings.byte_coloring, ByteColoring::Custom);
+        assert_eq!(settings.byte_category_colors.null, CategoryColor::Muted);
+        assert_eq!(settings.byte_category_colors.ascii_printable, CategoryColor::Default);
+        assert_eq!(settings.byte_category_colors.ascii_whitespace, CategoryColor::Green);
+        assert_eq!(settings.byte_category_colors.ascii_control, CategoryColor::Red);
+        assert_eq!(settings.byte_category_colors.non_ascii, CategoryColor::Yellow);
+        assert_eq!(settings.byte_category_colors.max, CategoryColor::Magenta);
+        assert_eq!(settings.byte_category_colors.mixed, CategoryColor::Cyan);
+
+        let file_default = TestSettingsFile::new("category-colors-default");
+        fs::write(&file_default.path, "").expect("write settings");
+
+        let settings_default = Settings::load_from(&file_default.path).expect("load settings");
+        assert_eq!(settings_default.byte_coloring, ByteColoring::Uniform);
+        assert_eq!(settings_default.byte_category_colors, ByteCategoryColors::default());
     }
 }

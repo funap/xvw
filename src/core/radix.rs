@@ -104,6 +104,268 @@ impl ByteOrder {
     }
 }
 
+/// Byte coloring mode and preset selection for rendering values in the hex view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ByteColoring {
+    DimZero,
+    DimPadding,
+    #[default]
+    #[serde(alias = "none", alias = "plain")]
+    Uniform,
+    Category,
+    Custom,
+}
+
+#[allow(dead_code)]
+impl ByteColoring {
+    /// All selectable preset modes (excluding `Custom`).
+    pub const PRESETS: [ByteColoring; 4] = [ByteColoring::Uniform, ByteColoring::DimZero, ByteColoring::DimPadding, ByteColoring::Category];
+
+    /// All modes including `Custom`.
+    pub const ALL: [ByteColoring; 5] = [
+        ByteColoring::Uniform,
+        ByteColoring::DimZero,
+        ByteColoring::DimPadding,
+        ByteColoring::Category,
+        ByteColoring::Custom,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            ByteColoring::Uniform => "None",
+            ByteColoring::DimZero => "Dim Zero",
+            ByteColoring::DimPadding => "Dim Padding",
+            ByteColoring::Category => "Category",
+            ByteColoring::Custom => "Custom",
+        }
+    }
+
+    /// Returns the explicit category color mapping for this preset, or `None` if `Custom`.
+    pub const fn colors(self) -> Option<ByteCategoryColors> {
+        match self {
+            ByteColoring::DimZero => Some(ByteCategoryColors {
+                null: CategoryColor::Muted,
+                ascii_printable: CategoryColor::Default,
+                ascii_whitespace: CategoryColor::Default,
+                ascii_control: CategoryColor::Default,
+                non_ascii: CategoryColor::Default,
+                max: CategoryColor::Default,
+                mixed: CategoryColor::Default,
+            }),
+            ByteColoring::DimPadding => Some(ByteCategoryColors {
+                null: CategoryColor::Muted,
+                ascii_printable: CategoryColor::Default,
+                ascii_whitespace: CategoryColor::Default,
+                ascii_control: CategoryColor::Default,
+                non_ascii: CategoryColor::Default,
+                max: CategoryColor::Muted,
+                mixed: CategoryColor::Default,
+            }),
+            ByteColoring::Uniform => Some(ByteCategoryColors {
+                null: CategoryColor::Default,
+                ascii_printable: CategoryColor::Default,
+                ascii_whitespace: CategoryColor::Default,
+                ascii_control: CategoryColor::Default,
+                non_ascii: CategoryColor::Default,
+                max: CategoryColor::Default,
+                mixed: CategoryColor::Default,
+            }),
+            ByteColoring::Category => Some(ByteCategoryColors {
+                null: CategoryColor::Muted,
+                ascii_printable: CategoryColor::Cyan,
+                ascii_whitespace: CategoryColor::Green,
+                ascii_control: CategoryColor::Magenta,
+                non_ascii: CategoryColor::Yellow,
+                max: CategoryColor::Red,
+                mixed: CategoryColor::Default,
+            }),
+            ByteColoring::Custom => None,
+        }
+    }
+
+    /// Determines the matching `ByteColoring` preset for the given category colors,
+    /// or `ByteColoring::Custom` if it does not match any preset.
+    pub fn from_colors(colors: ByteCategoryColors) -> Self {
+        Self::PRESETS
+            .into_iter()
+            .find(|preset| preset.colors() == Some(colors))
+            .unwrap_or(ByteColoring::Custom)
+    }
+}
+
+impl gpui_kit::Global for ByteColoring {}
+
+/// Semantic byte classification for category-based coloring.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ByteCategory {
+    /// Zero byte (0x00)
+    Null,
+    /// ASCII control characters (0x01..=0x1F, 0x7F)
+    AsciiControl,
+    /// ASCII whitespace character (space: 0x20)
+    AsciiWhitespace,
+    /// Printable ASCII characters (0x21..=0x7E)
+    AsciiPrintable,
+    /// Non-ASCII bytes (0x80..=0xFE)
+    NonAscii,
+    /// 0xFF (often unprogrammed flash / padding / broadcast)
+    Max,
+}
+
+impl ByteCategory {
+    pub const ALL: &'static [ByteCategory] = &[
+        ByteCategory::Null,
+        ByteCategory::AsciiControl,
+        ByteCategory::AsciiWhitespace,
+        ByteCategory::AsciiPrintable,
+        ByteCategory::NonAscii,
+        ByteCategory::Max,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ByteCategory::Null => "Null (0x00)",
+            ByteCategory::AsciiControl => "ASCII Control (0x01..0x1F, 0x7F)",
+            ByteCategory::AsciiWhitespace => "ASCII Whitespace (0x20)",
+            ByteCategory::AsciiPrintable => "ASCII Printable (0x21..0x7E)",
+            ByteCategory::NonAscii => "Non-ASCII (0x80..0xFE)",
+            ByteCategory::Max => "0xFF",
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            ByteCategory::Null => "null",
+            ByteCategory::AsciiControl => "ascii-control",
+            ByteCategory::AsciiWhitespace => "ascii-whitespace",
+            ByteCategory::AsciiPrintable => "ascii-printable",
+            ByteCategory::NonAscii => "non-ascii",
+            ByteCategory::Max => "0xff",
+        }
+    }
+}
+
+/// Explicit color choices available for an individual byte category from the active theme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CategoryColor {
+    #[default]
+    Default,
+    Muted,
+    Red,
+    Green,
+    Blue,
+    Yellow,
+    Cyan,
+    Magenta,
+}
+
+impl CategoryColor {
+    pub const ALL: &'static [CategoryColor] = &[
+        CategoryColor::Default,
+        CategoryColor::Muted,
+        CategoryColor::Red,
+        CategoryColor::Green,
+        CategoryColor::Blue,
+        CategoryColor::Yellow,
+        CategoryColor::Cyan,
+        CategoryColor::Magenta,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CategoryColor::Default => "Default",
+            CategoryColor::Muted => "Gray",
+            CategoryColor::Red => "Red",
+            CategoryColor::Green => "Green",
+            CategoryColor::Blue => "Blue",
+            CategoryColor::Yellow => "Yellow",
+            CategoryColor::Cyan => "Cyan",
+            CategoryColor::Magenta => "Magenta",
+        }
+    }
+}
+
+/// Configuration for individual byte category colors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ByteCategoryColors {
+    pub null: CategoryColor,
+    pub ascii_printable: CategoryColor,
+    pub ascii_whitespace: CategoryColor,
+    pub ascii_control: CategoryColor,
+    pub non_ascii: CategoryColor,
+    pub max: CategoryColor,
+    pub mixed: CategoryColor,
+}
+
+impl Default for ByteCategoryColors {
+    fn default() -> Self {
+        ByteColoring::Uniform.colors().expect("Uniform preset has explicit colors")
+    }
+}
+
+impl gpui_kit::Global for ByteCategoryColors {}
+
+impl ByteCategoryColors {
+    /// Resets all category colors to the default (`ByteColoring::Uniform`) mapping.
+    pub fn reset_all(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Returns the color configured for the given byte category, or the mixed color if `None`.
+    #[inline]
+    pub fn color_for(&self, category: Option<ByteCategory>) -> CategoryColor {
+        match category {
+            Some(ByteCategory::Null) => self.null,
+            Some(ByteCategory::AsciiPrintable) => self.ascii_printable,
+            Some(ByteCategory::AsciiWhitespace) => self.ascii_whitespace,
+            Some(ByteCategory::AsciiControl) => self.ascii_control,
+            Some(ByteCategory::NonAscii) => self.non_ascii,
+            Some(ByteCategory::Max) => self.max,
+            None => self.mixed,
+        }
+    }
+
+    /// Sets the color for the given byte category.
+    pub fn set(&mut self, category: ByteCategory, color: CategoryColor) {
+        match category {
+            ByteCategory::Null => self.null = color,
+            ByteCategory::AsciiControl => self.ascii_control = color,
+            ByteCategory::AsciiWhitespace => self.ascii_whitespace = color,
+            ByteCategory::AsciiPrintable => self.ascii_printable = color,
+            ByteCategory::NonAscii => self.non_ascii = color,
+            ByteCategory::Max => self.max = color,
+        }
+    }
+}
+
+/// Classifies a single byte into a `ByteCategory`.
+pub fn byte_category(b: u8) -> ByteCategory {
+    match b {
+        0x00 => ByteCategory::Null,
+        0x01..=0x1F | 0x7F => ByteCategory::AsciiControl,
+        0x20 => ByteCategory::AsciiWhitespace,
+        0x21..=0x7E => ByteCategory::AsciiPrintable,
+        0x80..=0xFE => ByteCategory::NonAscii,
+        0xFF => ByteCategory::Max,
+    }
+}
+
+/// Classifies a slice of bytes into a `ByteCategory` if all bytes share the same category.
+pub fn group_category(bytes: &[u8]) -> Option<ByteCategory> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let first = byte_category(bytes[0]);
+    if bytes.iter().all(|&b| byte_category(b) == first) {
+        Some(first)
+    } else {
+        None
+    }
+}
+
 /// Returns the fixed character width for a given radix and group size combination.
 pub fn digit_count(radix: DisplayRadix, group_size: ByteGroupSize) -> usize {
     match (group_size, radix) {
@@ -258,11 +520,6 @@ pub fn format_group(bytes: &[u8], start_slot: usize, radix: DisplayRadix, group_
         }
         formatted
     }
-}
-
-/// Checks if all bytes in the slice are zero.
-pub fn is_group_zero(bytes: &[u8]) -> bool {
-    !bytes.is_empty() && bytes.iter().all(|&b| b == 0)
 }
 
 /// Returns the next byte offset in visual reading order (left to right) on screen.
@@ -533,10 +790,74 @@ mod tests {
     }
 
     #[test]
-    fn test_is_group_zero() {
-        assert!(is_group_zero(&[0, 0, 0, 0]));
-        assert!(!is_group_zero(&[0, 1, 0, 0]));
-        assert!(!is_group_zero(&[]));
+    fn test_byte_coloring_labels_and_serde() {
+        for coloring in ByteColoring::ALL {
+            assert!(!coloring.label().is_empty());
+        }
+
+        let serialized = serde_json::to_string(&ByteColoring::DimZero).expect("serialize");
+        assert_eq!(serialized, "\"dim_zero\"");
+        let deserialized: ByteColoring = serde_json::from_str("\"dim_zero\"").expect("deserialize");
+        assert_eq!(deserialized, ByteColoring::DimZero);
+
+        let deserialized_uniform: ByteColoring = serde_json::from_str("\"uniform\"").expect("deserialize");
+        assert_eq!(deserialized_uniform, ByteColoring::Uniform);
+
+        let deserialized_padding: ByteColoring = serde_json::from_str("\"dim_padding\"").expect("deserialize");
+        assert_eq!(deserialized_padding, ByteColoring::DimPadding);
+
+        let deserialized_category: ByteColoring = serde_json::from_str("\"category\"").expect("deserialize");
+        assert_eq!(deserialized_category, ByteColoring::Category);
+
+        let deserialized_custom: ByteColoring = serde_json::from_str("\"custom\"").expect("deserialize");
+        assert_eq!(deserialized_custom, ByteColoring::Custom);
+
+        assert_eq!(ByteColoring::default(), ByteColoring::Uniform);
+    }
+
+    #[test]
+    fn test_byte_coloring_presets_and_from_colors() {
+        for preset in ByteColoring::PRESETS {
+            let colors = preset.colors().expect("preset must have colors");
+            assert_eq!(ByteColoring::from_colors(colors), preset);
+        }
+        assert_eq!(ByteColoring::Custom.colors(), None);
+
+        let mut custom = ByteCategoryColors::default();
+        custom.set(ByteCategory::Null, CategoryColor::Red);
+        assert_eq!(ByteColoring::from_colors(custom), ByteColoring::Custom);
+    }
+
+    #[test]
+    fn test_byte_category() {
+        assert_eq!(byte_category(0x00), ByteCategory::Null);
+        assert_eq!(byte_category(0x01), ByteCategory::AsciiControl);
+        assert_eq!(byte_category(b'\t'), ByteCategory::AsciiControl);
+        assert_eq!(byte_category(b'\n'), ByteCategory::AsciiControl);
+        assert_eq!(byte_category(0x0B), ByteCategory::AsciiControl);
+        assert_eq!(byte_category(0x0C), ByteCategory::AsciiControl);
+        assert_eq!(byte_category(b'\r'), ByteCategory::AsciiControl);
+        assert_eq!(byte_category(0x7F), ByteCategory::AsciiControl);
+        assert_eq!(byte_category(b' '), ByteCategory::AsciiWhitespace);
+        assert_eq!(byte_category(b'A'), ByteCategory::AsciiPrintable);
+        assert_eq!(byte_category(b'~'), ByteCategory::AsciiPrintable);
+        assert_eq!(byte_category(0x80), ByteCategory::NonAscii);
+        assert_eq!(byte_category(0xFE), ByteCategory::NonAscii);
+        assert_eq!(byte_category(0xFF), ByteCategory::Max);
+    }
+
+    #[test]
+    fn test_group_category() {
+        assert_eq!(group_category(&[]), None);
+        assert_eq!(group_category(&[0x00, 0x00]), Some(ByteCategory::Null));
+        assert_eq!(group_category(&[0x01, b'\t']), Some(ByteCategory::AsciiControl));
+        assert_eq!(group_category(b"  "), Some(ByteCategory::AsciiWhitespace));
+        assert_eq!(group_category(b"AB"), Some(ByteCategory::AsciiPrintable));
+        assert_eq!(group_category(&[0x80, 0x81]), Some(ByteCategory::NonAscii));
+        assert_eq!(group_category(&[0xFF, 0xFF]), Some(ByteCategory::Max));
+        assert_eq!(group_category(b" \t"), None);
+        assert_eq!(group_category(&[0x00, 0xFF]), None);
+        assert_eq!(group_category(&[b'A', 0x00]), None);
     }
 
     #[test]
@@ -673,5 +994,39 @@ mod tests {
         assert_eq!(prev_visual_byte(1, total, ByteGroupSize::Four, false), 2);
         assert_eq!(prev_visual_byte(2, total, ByteGroupSize::Four, false), 3);
         assert_eq!(prev_visual_byte(3, total, ByteGroupSize::Four, false), 3);
+    }
+
+    #[test]
+    fn test_category_color_labels_and_serde() {
+        for color in CategoryColor::ALL {
+            assert!(!color.label().is_empty());
+            let serialized = serde_json::to_string(color).expect("serialize");
+            let deserialized: CategoryColor = serde_json::from_str(&serialized).expect("deserialize");
+            assert_eq!(*color, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_byte_category_colors_color_for_and_set() {
+        let mut colors = ByteCategoryColors::default();
+        assert_eq!(ByteColoring::from_colors(colors), ByteColoring::Uniform);
+        assert_eq!(colors.color_for(Some(ByteCategory::Null)), CategoryColor::Default);
+        assert_eq!(colors.color_for(None), CategoryColor::Default);
+        assert_eq!(colors.color_for(Some(ByteCategory::AsciiPrintable)), CategoryColor::Default);
+
+        colors.set(ByteCategory::Null, CategoryColor::Red);
+        assert_eq!(colors.color_for(Some(ByteCategory::Null)), CategoryColor::Red);
+        assert_eq!(ByteColoring::from_colors(colors), ByteColoring::Custom);
+
+        colors.set(ByteCategory::AsciiPrintable, CategoryColor::Cyan);
+        assert_eq!(colors.color_for(Some(ByteCategory::AsciiPrintable)), CategoryColor::Cyan);
+
+        colors.mixed = CategoryColor::Yellow;
+        assert_eq!(colors.color_for(None), CategoryColor::Yellow);
+
+        colors.reset_all();
+        assert_eq!(ByteColoring::from_colors(colors), ByteColoring::Uniform);
+        assert_eq!(colors.color_for(Some(ByteCategory::Null)), CategoryColor::Default);
+        assert_eq!(colors.color_for(None), CategoryColor::Default);
     }
 }
