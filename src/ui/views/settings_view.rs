@@ -19,7 +19,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Action, Anchor, AnyElement, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, KeyDownEvent, ParentElement, Render,
-    SharedString, Subscription, Window, div, px,
+    SharedString, Subscription, WeakEntity, Window, div, px,
 };
 
 use std::cell::RefCell;
@@ -59,6 +59,7 @@ impl ThemePreviewState {
 
     /// Steps selection index up or down across `total_items`, matching PopupMenu keyboard behavior.
     /// Returns the newly selected index.
+    #[allow(dead_code)]
     pub fn step_index(&mut self, step_down: bool, total_items: usize) -> Option<usize> {
         if total_items == 0 {
             return None;
@@ -133,11 +134,31 @@ pub fn cycle_theme_index(current_index: usize, step_down: bool, total: usize) ->
 pub struct ThemeListDelegate {
     themes: Vec<SharedString>,
     preview_state: Rc<RefCell<ThemePreviewState>>,
+    select_handle: Rc<RefCell<Option<WeakEntity<SelectState<Self>>>>>,
 }
 
 impl ThemeListDelegate {
     pub fn new(themes: Vec<SharedString>, preview_state: Rc<RefCell<ThemePreviewState>>) -> Self {
-        Self { themes, preview_state }
+        Self {
+            themes,
+            preview_state,
+            select_handle: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    pub fn with_select_handle(mut self, select_handle: Rc<RefCell<Option<WeakEntity<SelectState<Self>>>>>) -> Self {
+        self.select_handle = select_handle;
+        self
+    }
+
+    /// Checks whether an item should display the checkmark.
+    /// When actively previewing, the checkmark stays firmly on the original saved theme.
+    pub fn check_item(&self, item: &SharedString, current_selection: &[(IndexPath, SharedString)]) -> bool {
+        if let Some(origin) = self.preview_state.borrow().origin() {
+            item == origin
+        } else {
+            current_selection.iter().any(|(_, selected_item)| selected_item.value() == item.value())
+        }
     }
 }
 
@@ -160,9 +181,14 @@ impl SearchableListDelegate for ThemeListDelegate {
         self.themes.iter().position(|item| item.value() == value).map(IndexPath::new)
     }
 
+    fn is_item_checked(&self, _ix: IndexPath, item: &Self::Item, current_selection: &[(IndexPath, Self::Item)], _cx: &App) -> bool {
+        self.check_item(item, current_selection)
+    }
+
     fn render_item(&self, ix: IndexPath, item: &Self::Item, checked: bool, _window: &mut Window, cx: &mut App) -> Option<AnyElement> {
         let name = item.clone();
         let preview_state = self.preview_state.clone();
+        let select_handle = self.select_handle.clone();
         {
             let mut state = preview_state.borrow_mut();
             state.set_open(true);
@@ -184,6 +210,17 @@ impl SearchableListDelegate for ThemeListDelegate {
                 .when(checked, |this| this.child(Icon::new(IconName::Check).size(px(14.0)).flex_shrink_0()))
                 .on_hover(move |hovered, window, cx| {
                     if *hovered {
+                        let weak = select_handle.borrow().clone();
+                        if let Some(weak) = weak
+                            && let Some(theme_select) = weak.upgrade()
+                        {
+                            theme_select.update(cx, |select, cx| {
+                                if select.selected_index(cx) != Some(ix) {
+                                    select.set_selected_index(Some(ix), window, cx);
+                                }
+                            });
+                        }
+
                         let (need_apply, theme_name) = {
                             let mut state = preview_state.borrow_mut();
                             state.set_hover_index(ix.row);
@@ -226,8 +263,10 @@ impl SettingsView {
         let all_themes = crate::theme::all_theme_names(cx);
         let active_theme_name = cx.theme().theme_name().clone();
         let current_idx = all_themes.iter().position(|t| t == &active_theme_name).unwrap_or(0);
-        let delegate = ThemeListDelegate::new(all_themes.clone(), theme_preview_state.clone());
+        let select_handle = Rc::new(RefCell::new(None));
+        let delegate = ThemeListDelegate::new(all_themes.clone(), theme_preview_state.clone()).with_select_handle(select_handle.clone());
         let theme_select = cx.new(|cx| SelectState::new(delegate, Some(IndexPath::new(current_idx)), window, cx));
+        *select_handle.borrow_mut() = Some(theme_select.downgrade());
 
         let font_family_input = cx.new(|cx| InputState::new(window, cx));
         let font_size_input = cx.new(|cx| InputState::new(window, cx).step(1.0).min(MIN_FONT_SIZE as f64).max(MAX_FONT_SIZE as f64));
@@ -390,6 +429,7 @@ impl SettingsView {
             let origin = this.theme_preview_state.borrow_mut().cancel();
             if let Some(origin) = origin {
                 crate::theme::apply_theme_by_name(&origin, None, cx);
+                cx.dispatch_action(&UpdateSettingInput);
                 cx.notify();
             }
         }));
@@ -399,26 +439,23 @@ impl SettingsView {
         let sub = cx.observe_keystrokes(move |_this, event, window, cx| {
             let is_list = event.context_stack.iter().any(|c| c.contains("List"));
             if is_list && !event.keystroke.modifiers.modified() {
-                let step_down = if event.keystroke.key == "down" || event.action.as_ref().map(|a| a.name() == "SelectDown").unwrap_or(false) {
-                    Some(true)
-                } else if event.keystroke.key == "up" || event.action.as_ref().map(|a| a.name() == "SelectUp").unwrap_or(false) {
-                    Some(false)
-                } else {
-                    None
-                };
+                let is_nav = event.keystroke.key == "down"
+                    || event.keystroke.key == "up"
+                    || event
+                        .action
+                        .as_ref()
+                        .map(|a| a.name() == "SelectDown" || a.name() == "SelectUp")
+                        .unwrap_or(false);
 
-                if let Some(step_down) = step_down {
-                    let next_theme = {
-                        let mut state = preview_state.borrow_mut();
-                        state.start_preview(cx.theme().theme_name().clone());
-                        let next_idx = state.step_index(step_down, all_themes_for_sub.len());
-                        next_idx.and_then(|idx| all_themes_for_sub.get(idx).cloned())
-                    };
-
-                    if let Some(theme_name) = next_theme
-                        && cx.theme().theme_name() != theme_name.as_ref()
-                    {
-                        crate::theme::apply_theme_by_name(&theme_name, Some(window), cx);
+                if is_nav
+                    && let Some(selected_ix) = _this.theme_select.read(cx).selected_index(cx)
+                    && let Some(theme_name) = all_themes_for_sub.get(selected_ix.row)
+                {
+                    let mut state = preview_state.borrow_mut();
+                    state.start_preview(cx.theme().theme_name().clone());
+                    state.set_hover_index(selected_ix.row);
+                    if cx.theme().theme_name() != theme_name.as_ref() {
+                        crate::theme::apply_theme_by_name(theme_name, Some(window), cx);
                     }
                 }
             }
@@ -475,11 +512,20 @@ impl SettingsView {
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let label_width = px(312.0);
         let sub_label_width = px(280.0);
         let row_gap = px(20.0);
         let control_width = px(200.0);
+
+        if !self.theme_preview_state.borrow().is_open() {
+            let active_theme = cx.theme().theme_name().clone();
+            self.theme_select.update(cx, |select, cx| {
+                if select.selected_value() != Some(&active_theme) {
+                    select.set_selected_value(&active_theme, window, cx);
+                }
+            });
+        }
 
         let container = div().p_4().flex().flex_col().gap_6();
 
@@ -1464,5 +1510,20 @@ mod tests {
         assert_eq!(delegate.position(&SharedString::from("Light")), Some(IndexPath::new(0)));
         assert_eq!(delegate.position(&SharedString::from("Dark")), Some(IndexPath::new(1)));
         assert_eq!(delegate.position(&SharedString::from("Unknown")), None);
+    }
+
+    #[test]
+    fn test_theme_list_delegate_is_item_checked() {
+        let themes = vec![SharedString::from("Light"), SharedString::from("Dark")];
+        let state = Rc::new(RefCell::new(ThemePreviewState::default()));
+        let delegate = ThemeListDelegate::new(themes, state.clone());
+
+        let selection = vec![(IndexPath::new(0), SharedString::from("Light"))];
+        assert!(delegate.check_item(&SharedString::from("Light"), &selection));
+        assert!(!delegate.check_item(&SharedString::from("Dark"), &selection));
+
+        state.borrow_mut().start_preview(SharedString::from("Dark"));
+        assert!(!delegate.check_item(&SharedString::from("Light"), &selection));
+        assert!(delegate.check_item(&SharedString::from("Dark"), &selection));
     }
 }
