@@ -1829,7 +1829,6 @@ mod tests {
             ascii_control: CategoryColor::Red,
             non_ascii: CategoryColor::Yellow,
             max: CategoryColor::Magenta,
-            mixed: CategoryColor::Cyan,
         };
 
         let custom_palette = ByteCategoryPalette::from_colors(custom_colors, &theme);
@@ -1839,6 +1838,6 @@ mod tests {
         assert_eq!(custom_palette.ascii_control, theme.red);
         assert_eq!(custom_palette.non_ascii, theme.yellow);
         assert_eq!(custom_palette.max, theme.magenta);
-        assert_eq!(custom_palette.mixed, theme.cyan);
+        assert_eq!(custom_palette.default, theme.foreground);
     }
 }

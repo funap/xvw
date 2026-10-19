@@ -546,7 +546,6 @@ mod tests {
                 ascii_control: CategoryColor::Red,
                 non_ascii: CategoryColor::Yellow,
                 max: CategoryColor::Magenta,
-                mixed: CategoryColor::Cyan,
             },
             structure_yaml_sha_threshold: 64,
             structure_yaml_include_offsets: false,
@@ -811,7 +810,6 @@ ascii_whitespace = "green"
 ascii_control = "red"
 non_ascii = "yellow"
 max = "magenta"
-mixed = "cyan"
 "#;
         fs::write(&file.path, toml_str).expect("write settings");
 
@@ -823,7 +821,6 @@ mixed = "cyan"
         assert_eq!(settings.byte_category_colors.ascii_control, CategoryColor::Red);
         assert_eq!(settings.byte_category_colors.non_ascii, CategoryColor::Yellow);
         assert_eq!(settings.byte_category_colors.max, CategoryColor::Magenta);
-        assert_eq!(settings.byte_category_colors.mixed, CategoryColor::Cyan);
 
         let file_default = TestSettingsFile::new("category-colors-default");
         fs::write(&file_default.path, "").expect("write settings");

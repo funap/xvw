@@ -278,7 +278,7 @@ pub fn resolve_category_color(choice: CategoryColor, theme: &Theme) -> Hsla {
     }
 }
 
-/// Color configuration for each byte category and mixed groups in `HexView`.
+/// Color configuration for each byte category in `HexView`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ByteCategoryPalette {
     pub null: Hsla,
@@ -287,11 +287,11 @@ pub struct ByteCategoryPalette {
     pub ascii_control: Hsla,
     pub non_ascii: Hsla,
     pub max: Hsla,
-    pub mixed: Hsla,
+    pub default: Hsla,
 }
 
 impl ByteCategoryPalette {
-    /// Returns the color configured for the given byte category, or the mixed color if `None`.
+    /// Returns the color configured for the given byte category, or the default foreground color if `None`.
     #[inline]
     pub fn color_for(&self, category: Option<ByteCategory>) -> Hsla {
         match category {
@@ -301,7 +301,7 @@ impl ByteCategoryPalette {
             Some(ByteCategory::AsciiControl) => self.ascii_control,
             Some(ByteCategory::NonAscii) => self.non_ascii,
             Some(ByteCategory::Max) => self.max,
-            None => self.mixed,
+            None => self.default,
         }
     }
 
@@ -314,7 +314,7 @@ impl ByteCategoryPalette {
             ascii_control: resolve_category_color(colors.ascii_control, theme),
             non_ascii: resolve_category_color(colors.non_ascii, theme),
             max: resolve_category_color(colors.max, theme),
-            mixed: resolve_category_color(colors.mixed, theme),
+            default: theme.foreground,
         }
     }
 }

@@ -151,7 +151,6 @@ impl ByteColoring {
                 ascii_control: CategoryColor::Default,
                 non_ascii: CategoryColor::Default,
                 max: CategoryColor::Default,
-                mixed: CategoryColor::Default,
             }),
             ByteColoring::DimPadding => Some(ByteCategoryColors {
                 null: CategoryColor::Muted,
@@ -160,7 +159,6 @@ impl ByteColoring {
                 ascii_control: CategoryColor::Default,
                 non_ascii: CategoryColor::Default,
                 max: CategoryColor::Muted,
-                mixed: CategoryColor::Default,
             }),
             ByteColoring::Uniform => Some(ByteCategoryColors {
                 null: CategoryColor::Default,
@@ -169,7 +167,6 @@ impl ByteColoring {
                 ascii_control: CategoryColor::Default,
                 non_ascii: CategoryColor::Default,
                 max: CategoryColor::Default,
-                mixed: CategoryColor::Default,
             }),
             ByteColoring::Category => Some(ByteCategoryColors {
                 null: CategoryColor::Muted,
@@ -178,7 +175,6 @@ impl ByteColoring {
                 ascii_control: CategoryColor::Magenta,
                 non_ascii: CategoryColor::Yellow,
                 max: CategoryColor::Red,
-                mixed: CategoryColor::Default,
             }),
             ByteColoring::Custom => None,
         }
@@ -298,7 +294,6 @@ pub struct ByteCategoryColors {
     pub ascii_control: CategoryColor,
     pub non_ascii: CategoryColor,
     pub max: CategoryColor,
-    pub mixed: CategoryColor,
 }
 
 impl Default for ByteCategoryColors {
@@ -315,7 +310,7 @@ impl ByteCategoryColors {
         *self = Self::default();
     }
 
-    /// Returns the color configured for the given byte category, or the mixed color if `None`.
+    /// Returns the color configured for the given byte category, or `CategoryColor::Default` for mixed groups (`None`).
     #[inline]
     pub fn color_for(&self, category: Option<ByteCategory>) -> CategoryColor {
         match category {
@@ -325,7 +320,7 @@ impl ByteCategoryColors {
             Some(ByteCategory::AsciiControl) => self.ascii_control,
             Some(ByteCategory::NonAscii) => self.non_ascii,
             Some(ByteCategory::Max) => self.max,
-            None => self.mixed,
+            None => CategoryColor::Default,
         }
     }
 
@@ -1021,9 +1016,6 @@ mod tests {
 
         colors.set(ByteCategory::AsciiPrintable, CategoryColor::Cyan);
         assert_eq!(colors.color_for(Some(ByteCategory::AsciiPrintable)), CategoryColor::Cyan);
-
-        colors.mixed = CategoryColor::Yellow;
-        assert_eq!(colors.color_for(None), CategoryColor::Yellow);
 
         colors.reset_all();
         assert_eq!(ByteColoring::from_colors(colors), ByteColoring::Uniform);
