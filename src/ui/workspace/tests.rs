@@ -417,3 +417,26 @@ fn test_panel_activity_toggle_action_opens_when_panel_hidden() {
         })
     );
 }
+
+#[test]
+fn test_left_panel_width_constants() {
+    use super::{DEFAULT_LEFT_PANEL_WIDTH, MAX_LEFT_PANEL_WIDTH, MIN_LEFT_PANEL_WIDTH};
+
+    const {
+        assert!(MIN_LEFT_PANEL_WIDTH > 0.0);
+        assert!(MIN_LEFT_PANEL_WIDTH <= DEFAULT_LEFT_PANEL_WIDTH);
+        assert!(DEFAULT_LEFT_PANEL_WIDTH <= MAX_LEFT_PANEL_WIDTH);
+    }
+}
+
+#[test]
+fn test_resizable_state_clear_resets_sizes() {
+    use gpui_kit::component::resizable::ResizableState;
+
+    let mut state = ResizableState::default();
+    assert!(state.sizes().is_empty());
+
+    // clearing empty or populated state resets sizes
+    state.clear();
+    assert!(state.sizes().is_empty());
+}

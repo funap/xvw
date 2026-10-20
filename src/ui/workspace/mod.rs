@@ -64,6 +64,10 @@ pub fn next_active_palette_kind(current: Option<PaletteKind>, incoming: PaletteK
     }
 }
 
+pub const DEFAULT_LEFT_PANEL_WIDTH: f32 = 250.0;
+pub const MIN_LEFT_PANEL_WIDTH: f32 = 140.0;
+pub const MAX_LEFT_PANEL_WIDTH: f32 = 800.0;
+
 pub struct Workspace {
     pub pane_tree: Entity<PaneTree>,
     pub title_bar: Entity<AppTitleBar>,
@@ -73,6 +77,8 @@ pub struct Workspace {
     pub recent_definition_history: crate::core::structure::DefinitionHistory,
     pub recent_file_history: crate::core::structure::FileHistory,
     pub is_left_panel_visible: bool,
+    pub left_panel_width: f32,
+    pub left_panel_resizable_state: Entity<ResizableState>,
     pub scratchpad_panel: Entity<crate::ui::views::scratchpad_view::ScratchpadView>,
     pub workspace_resizable_state: Entity<ResizableState>,
     pub is_right_panel_visible: bool,
@@ -544,6 +550,7 @@ impl Workspace {
             crate::ui::views::scratchpad_view::ScratchpadView::new_with_file(id, path, content, window, cx)
         });
 
+        let left_panel_resizable_state = cx.new(|_| ResizableState::default());
         let workspace_resizable_state = cx.new(|_| ResizableState::default());
 
         let workspace = Self {
@@ -555,6 +562,8 @@ impl Workspace {
             recent_definition_history: recent_history.definitions,
             recent_file_history: recent_history.files,
             is_left_panel_visible: true,
+            left_panel_width: DEFAULT_LEFT_PANEL_WIDTH,
+            left_panel_resizable_state,
             scratchpad_panel,
             workspace_resizable_state,
             is_right_panel_visible: false,
@@ -991,31 +1000,46 @@ impl Workspace {
     }
 
     pub(crate) fn set_left_panel_visible(&mut self, visible: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.is_left_panel_visible = visible;
+        if self.is_left_panel_visible != visible {
+            self.is_left_panel_visible = visible;
 
-        if visible {
-            let focus_handle = self.left_panel.read(cx).focus_handle(cx);
-            focus_handle.focus(window, cx);
-        } else {
-            self.restore_editor_focus(window, cx);
+            self.workspace_resizable_state.update(cx, |state, _| {
+                state.clear();
+            });
+            self.left_panel_resizable_state.update(cx, |state, _| {
+                state.clear();
+            });
+
+            if visible {
+                let focus_handle = self.left_panel.read(cx).focus_handle(cx);
+                focus_handle.focus(window, cx);
+            } else {
+                self.restore_editor_focus(window, cx);
+            }
+
+            self.sync_activity_bar(cx);
+            cx.notify();
         }
-
-        self.sync_activity_bar(cx);
-        cx.notify();
     }
 
     pub(crate) fn set_right_panel_visible(&mut self, visible: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.is_right_panel_visible = visible;
+        if self.is_right_panel_visible != visible {
+            self.is_right_panel_visible = visible;
 
-        if visible {
-            self.scratchpad_panel.update(cx, |sp, cx| {
-                sp.focus(window, cx);
+            self.workspace_resizable_state.update(cx, |state, _| {
+                state.clear();
             });
-        } else {
-            self.restore_editor_focus(window, cx);
-        }
 
-        cx.notify();
+            if visible {
+                self.scratchpad_panel.update(cx, |sp, cx| {
+                    sp.focus(window, cx);
+                });
+            } else {
+                self.restore_editor_focus(window, cx);
+            }
+
+            cx.notify();
+        }
     }
 
     fn new_local(cx: &mut App) -> Task<anyhow::Result<(WindowHandle<Root>, Entity<Workspace>)>> {
@@ -1784,46 +1808,33 @@ impl Render for Workspace {
                             .map(|s| s.panel_width)
                             .unwrap_or(crate::settings::DEFAULT_SCRATCHPAD_PANEL_WIDTH);
 
-                        div().flex().flex_col().flex_1().size_full().min_w_0().min_h_0().overflow_hidden().child(
-                            h_resizable("workspace-h-resize")
+                        let center_and_right = if self.is_right_panel_visible {
+                            h_resizable("workspace-scratchpad-resize")
                                 .with_state(&self.workspace_resizable_state)
-                                .on_resize({
-                                    let is_right_visible = self.is_right_panel_visible;
-                                    move |state, _window, cx| {
-                                        if !is_right_visible {
-                                            return;
-                                        }
-                                        let sizes = state.read(cx).sizes();
-                                        if let Some(right_size) = sizes.last() {
-                                            let w = right_size.as_f32();
-                                            if (crate::settings::MIN_SCRATCHPAD_PANEL_WIDTH..=crate::settings::MAX_SCRATCHPAD_PANEL_WIDTH).contains(&w)
-                                                && cx.has_global::<crate::settings::ScratchpadSettings>()
-                                            {
-                                                let current_w = cx.global::<crate::settings::ScratchpadSettings>().panel_width;
-                                                if (current_w - w).abs() > 1.0 {
-                                                    cx.update_global::<crate::settings::ScratchpadSettings, _>(|settings, _| {
-                                                        settings.set_panel_width(w);
-                                                    });
-                                                    crate::settings::save_current(cx);
-                                                }
+                                .on_resize(move |state, _window, cx| {
+                                    let sizes = state.read(cx).sizes();
+                                    if let Some(right_size) = sizes.last() {
+                                        let w = right_size.as_f32();
+                                        if (crate::settings::MIN_SCRATCHPAD_PANEL_WIDTH..=crate::settings::MAX_SCRATCHPAD_PANEL_WIDTH).contains(&w)
+                                            && cx.has_global::<crate::settings::ScratchpadSettings>()
+                                        {
+                                            let current_w = cx.global::<crate::settings::ScratchpadSettings>().panel_width;
+                                            if (current_w - w).abs() > 1.0 {
+                                                cx.update_global::<crate::settings::ScratchpadSettings, _>(|settings, _| {
+                                                    settings.set_panel_width(w);
+                                                });
+                                                crate::settings::save_current(cx);
                                             }
                                         }
                                     }
                                 })
                                 .child(
-                                    resizable_panel()
-                                        .visible(self.is_left_panel_visible)
-                                        .size(px(250.))
-                                        .flex_none()
-                                        .child(div().size_full().min_w_0().min_h_0().overflow_hidden().child(self.left_panel.clone())),
-                                )
-                                .child(
                                     resizable_panel().child(div().relative().size_full().min_w_0().min_h_0().overflow_hidden().child(self.pane_tree.clone())),
                                 )
                                 .child(
                                     resizable_panel()
-                                        .visible(self.is_right_panel_visible)
                                         .size(px(scratchpad_panel_width))
+                                        .size_range(px(crate::settings::MIN_SCRATCHPAD_PANEL_WIDTH)..px(crate::settings::MAX_SCRATCHPAD_PANEL_WIDTH))
                                         .flex_none()
                                         .child(
                                             div()
@@ -1835,8 +1846,63 @@ impl Render for Workspace {
                                                 .border_color(theme.border)
                                                 .child(self.scratchpad_panel.clone()),
                                         ),
-                                ),
-                        )
+                                )
+                                .into_any_element()
+                        } else {
+                            div()
+                                .relative()
+                                .size_full()
+                                .min_w_0()
+                                .min_h_0()
+                                .overflow_hidden()
+                                .child(self.pane_tree.clone())
+                                .into_any_element()
+                        };
+
+                        let main_layout = if self.is_left_panel_visible {
+                            let view = cx.entity().clone();
+                            h_resizable("workspace-left-resize")
+                                .with_state(&self.left_panel_resizable_state)
+                                .on_resize(move |state, _window, cx| {
+                                    let sizes = state.read(cx).sizes();
+                                    if let Some(left_size) = sizes.first() {
+                                        let w = left_size.as_f32();
+                                        if (MIN_LEFT_PANEL_WIDTH..=MAX_LEFT_PANEL_WIDTH).contains(&w) {
+                                            view.update(cx, |this, _| {
+                                                this.left_panel_width = w;
+                                            });
+                                        }
+                                    }
+                                })
+                                .child(
+                                    resizable_panel()
+                                        .size(px(self.left_panel_width))
+                                        .size_range(px(MIN_LEFT_PANEL_WIDTH)..px(MAX_LEFT_PANEL_WIDTH))
+                                        .flex_none()
+                                        .child(div().size_full().min_w_0().min_h_0().overflow_hidden().child(self.left_panel.clone())),
+                                )
+                                .child(resizable_panel().child(div().relative().size_full().min_w_0().min_h_0().overflow_hidden().child(center_and_right)))
+                                .into_any_element()
+                        } else {
+                            div()
+                                .relative()
+                                .size_full()
+                                .min_w_0()
+                                .min_h_0()
+                                .overflow_hidden()
+                                .child(center_and_right)
+                                .into_any_element()
+                        };
+
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .size_full()
+                            .min_w_0()
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child(main_layout)
                     }),
             )
             .child(self.status_bar.clone())
