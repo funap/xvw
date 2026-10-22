@@ -81,12 +81,12 @@ pub fn crc32(data: &[u8]) -> u32 {
     !crc
 }
 
-pub fn md5(data: &[u8]) -> [u8; 16] {
-    let s: [u32; 64] = [
+fn process_md5_block(state: &mut [u32; 4], chunk: &[u8; 64]) {
+    const S: [u32; 64] = [
         7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4,
         11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
     ];
-    let k: [u32; 64] = [
+    const K: [u32; 64] = [
         0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be,
         0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821, 0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
         0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a, 0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c,
@@ -95,61 +95,74 @@ pub fn md5(data: &[u8]) -> [u8; 16] {
         0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
     ];
 
-    let mut h0 = 0x67452301u32;
-    let mut h1 = 0xefcdab89u32;
-    let mut h2 = 0x98badcfeu32;
-    let mut h3 = 0x10325476u32;
-
-    let mut msg = data.to_vec();
-    let bit_len = (data.len() as u64) * 8;
-    msg.push(0x80);
-    while !(msg.len() + 8).is_multiple_of(64) {
-        msg.push(0x00);
+    let mut w = [0u32; 16];
+    for i in 0..16 {
+        w[i] = u32::from_le_bytes([chunk[i * 4], chunk[i * 4 + 1], chunk[i * 4 + 2], chunk[i * 4 + 3]]);
     }
-    msg.extend_from_slice(&bit_len.to_le_bytes());
 
-    for chunk in msg.as_chunks::<64>().0 {
-        let mut w = [0u32; 16];
-        for i in 0..16 {
-            w[i] = u32::from_le_bytes([chunk[i * 4], chunk[i * 4 + 1], chunk[i * 4 + 2], chunk[i * 4 + 3]]);
-        }
+    let mut a = state[0];
+    let mut b = state[1];
+    let mut c = state[2];
+    let mut d = state[3];
 
-        let mut a = h0;
-        let mut b = h1;
-        let mut c = h2;
-        let mut d = h3;
+    for i in 0..64 {
+        let (f, g) = if i < 16 {
+            ((b & c) | (!b & d), i)
+        } else if i < 32 {
+            ((d & b) | (!d & c), (5 * i + 1) % 16)
+        } else if i < 48 {
+            (b ^ c ^ d, (3 * i + 5) % 16)
+        } else {
+            (c ^ (b | !d), (7 * i) % 16)
+        };
 
-        for i in 0..64 {
-            let (f, g) = if i < 16 {
-                ((b & c) | (!b & d), i)
-            } else if i < 32 {
-                ((d & b) | (!d & c), (5 * i + 1) % 16)
-            } else if i < 48 {
-                (b ^ c ^ d, (3 * i + 5) % 16)
-            } else {
-                (c ^ (b | !d), (7 * i) % 16)
-            };
+        let temp = d;
+        d = c;
+        c = b;
+        let val = a.wrapping_add(f).wrapping_add(K[i]).wrapping_add(w[g]);
+        let shift = S[i];
+        b = b.wrapping_add(val.rotate_left(shift));
+        a = temp;
+    }
 
-            let temp = d;
-            d = c;
-            c = b;
-            let val = a.wrapping_add(f).wrapping_add(k[i]).wrapping_add(w[g]);
-            let shift = s[i];
-            b = b.wrapping_add(val.rotate_left(shift));
-            a = temp;
-        }
+    state[0] = state[0].wrapping_add(a);
+    state[1] = state[1].wrapping_add(b);
+    state[2] = state[2].wrapping_add(c);
+    state[3] = state[3].wrapping_add(d);
+}
 
-        h0 = h0.wrapping_add(a);
-        h1 = h1.wrapping_add(b);
-        h2 = h2.wrapping_add(c);
-        h3 = h3.wrapping_add(d);
+/// Computes the MD5 digest of `data` without heap-allocating a padded copy of the input.
+pub fn md5(data: &[u8]) -> [u8; 16] {
+    let mut state = [0x67452301u32, 0xefcdab89u32, 0x98badcfeu32, 0x10325476u32];
+
+    let (chunks, remainder) = data.as_chunks::<64>();
+    for chunk in chunks {
+        process_md5_block(&mut state, chunk);
+    }
+
+    let bit_len = (data.len() as u64).wrapping_mul(8);
+    let mut tail = [0u8; 128];
+    let rem_len = remainder.len();
+    tail[..rem_len].copy_from_slice(remainder);
+    tail[rem_len] = 0x80;
+
+    if rem_len < 56 {
+        tail[56..64].copy_from_slice(&bit_len.to_le_bytes());
+        let first_block: &[u8; 64] = tail[0..64].try_into().expect("64-byte block");
+        process_md5_block(&mut state, first_block);
+    } else {
+        tail[120..128].copy_from_slice(&bit_len.to_le_bytes());
+        let first_block: &[u8; 64] = tail[0..64].try_into().expect("64-byte block");
+        let second_block: &[u8; 64] = tail[64..128].try_into().expect("64-byte block");
+        process_md5_block(&mut state, first_block);
+        process_md5_block(&mut state, second_block);
     }
 
     let mut result = [0u8; 16];
-    result[0..4].copy_from_slice(&h0.to_le_bytes());
-    result[4..8].copy_from_slice(&h1.to_le_bytes());
-    result[8..12].copy_from_slice(&h2.to_le_bytes());
-    result[12..16].copy_from_slice(&h3.to_le_bytes());
+    result[0..4].copy_from_slice(&state[0].to_le_bytes());
+    result[4..8].copy_from_slice(&state[1].to_le_bytes());
+    result[8..12].copy_from_slice(&state[2].to_le_bytes());
+    result[12..16].copy_from_slice(&state[3].to_le_bytes());
     result
 }
 
@@ -238,6 +251,42 @@ impl ChecksumAlgorithm {
     }
 }
 
+/// Normalizes a user-provided checksum or hash string into lowercase hex digits without prefixes or separators.
+///
+/// Strips an optional `0x` / `0X` prefix and common byte separators (spaces, colons, hyphens, underscores).
+/// Returns `None` if the cleaned string is empty or contains non-hexadecimal characters.
+pub fn normalize_checksum_query(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let without_prefix = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")).unwrap_or(trimmed);
+    let mut normalized = String::with_capacity(without_prefix.len());
+    for ch in without_prefix.chars() {
+        if matches!(ch, ' ' | '\t' | '\n' | '\r' | ':' | '-' | '_') {
+            continue;
+        }
+        if !ch.is_ascii_hexdigit() {
+            return None;
+        }
+        normalized.push(ch.to_ascii_lowercase());
+    }
+    if normalized.is_empty() { None } else { Some(normalized) }
+}
+
+/// Result of comparing a user-supplied verification string against computed checksums.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChecksumCompareStatus {
+    /// The query is empty or whitespace-only.
+    Empty,
+    /// The query contains invalid (non-hexadecimal) characters.
+    InvalidHex,
+    /// One or more algorithms match the query.
+    Matched(Vec<ChecksumAlgorithm>),
+    /// The query is valid hex, but no computed algorithm matches it.
+    NoMatch,
+}
+
 /// Consolidated checksum and hash computation results for a byte range.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChecksumResults {
@@ -281,7 +330,7 @@ impl ChecksumResults {
         self.format_hex(algo)
     }
 
-    /// Formats the raw hex value of a specific algorithm (typically used for copying to clipboard).
+    /// Formats the hex value of a specific algorithm (with `0x` prefix for integer sums/CRCs, lowercase hex for hashes).
     pub fn format_hex(&self, algo: ChecksumAlgorithm) -> String {
         match algo {
             ChecksumAlgorithm::Sum8 => format!("0x{:02X}", self.sum8),
@@ -294,6 +343,61 @@ impl ChecksumResults {
             ChecksumAlgorithm::Crc32 => format!("0x{:08X}", self.crc32),
             ChecksumAlgorithm::Md5 => self.md5.iter().map(|b| format!("{:02x}", b)).collect(),
             ChecksumAlgorithm::Sha256 => self.sha256.iter().map(|b| format!("{:02x}", b)).collect(),
+        }
+    }
+
+    /// Formats the raw hex digits of a specific algorithm without a `0x` prefix.
+    pub fn format_raw_hex(&self, algo: ChecksumAlgorithm) -> String {
+        match algo {
+            ChecksumAlgorithm::Sum8 => format!("{:02X}", self.sum8),
+            ChecksumAlgorithm::Sum16 => format!("{:04X}", self.sum16),
+            ChecksumAlgorithm::Sum32 => format!("{:08X}", self.sum32),
+            ChecksumAlgorithm::Sum64 => format!("{:016X}", self.sum64),
+            ChecksumAlgorithm::Adler32 => format!("{:08X}", self.adler32),
+            ChecksumAlgorithm::Crc16Ccitt => format!("{:04X}", self.crc16_ccitt),
+            ChecksumAlgorithm::Crc16Arc => format!("{:04X}", self.crc16_arc),
+            ChecksumAlgorithm::Crc32 => format!("{:08X}", self.crc32),
+            ChecksumAlgorithm::Md5 => self.md5.iter().map(|b| format!("{:02x}", b)).collect(),
+            ChecksumAlgorithm::Sha256 => self.sha256.iter().map(|b| format!("{:02x}", b)).collect(),
+        }
+    }
+
+    /// Compares a user-provided query string against all computed algorithms.
+    pub fn compare_query(&self, query: &str) -> ChecksumCompareStatus {
+        if query.trim().is_empty() {
+            return ChecksumCompareStatus::Empty;
+        }
+        let Some(normalized) = normalize_checksum_query(query) else {
+            return ChecksumCompareStatus::InvalidHex;
+        };
+
+        let mut exact_matches = Vec::new();
+        for &algo in ChecksumAlgorithm::ALL {
+            if self.format_raw_hex(algo).to_ascii_lowercase() == normalized {
+                exact_matches.push(algo);
+            }
+        }
+        if !exact_matches.is_empty() {
+            return ChecksumCompareStatus::Matched(exact_matches);
+        }
+
+        // Fallback for non-cryptographic integer checksums when leading zeros were omitted (e.g. "0x489" vs "0x0489").
+        let mut unpadded_matches = Vec::new();
+        let trimmed_query = normalized.trim_start_matches('0');
+        for &algo in ChecksumAlgorithm::ALL {
+            if algo.category() == ChecksumCategory::Crypto {
+                continue;
+            }
+            let raw = self.format_raw_hex(algo).to_ascii_lowercase();
+            if normalized.len() < raw.len() && raw.trim_start_matches('0') == trimmed_query {
+                unpadded_matches.push(algo);
+            }
+        }
+
+        if unpadded_matches.is_empty() {
+            ChecksumCompareStatus::NoMatch
+        } else {
+            ChecksumCompareStatus::Matched(unpadded_matches)
         }
     }
 
@@ -366,6 +470,28 @@ mod tests {
     }
 
     #[test]
+    fn test_md5_boundary_lengths() {
+        // Empty input (0 bytes)
+        let empty_hex: String = md5(b"").iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(empty_hex, "d41d8cd98f00b204e9800998ecf8427e");
+
+        // 55 bytes (fits in 1 block with 0x80 + 8-byte length)
+        let data_55 = vec![b'a'; 55];
+        let hex_55: String = md5(&data_55).iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(hex_55, "ef1772b6dff9a122358552954ad0df65");
+
+        // 56 bytes (spills length into 2nd tail block)
+        let data_56 = vec![b'a'; 56];
+        let hex_56: String = md5(&data_56).iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(hex_56, "3b0c8ac703f828b04c6c197006d17218");
+
+        // 64 bytes (exact 1 full block + 1 tail block)
+        let data_64 = vec![b'a'; 64];
+        let hex_64: String = md5(&data_64).iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(hex_64, "014842d480b571495a4a0363793f7367");
+    }
+
+    #[test]
     fn test_sha256() {
         let res = sha256(b"The quick brown fox jumps over the lazy dog");
         let hex_str: String = res.iter().map(|b| format!("{:02x}", b)).collect();
@@ -394,6 +520,8 @@ mod tests {
             assert!(!algo.label().is_empty());
             assert!(!results.format_display(algo).is_empty());
             assert!(!results.format_hex(algo).is_empty());
+            assert!(!results.format_raw_hex(algo).is_empty());
+            assert!(!results.format_raw_hex(algo).starts_with("0x"));
         }
 
         let all_str = results.format_all();
@@ -407,5 +535,40 @@ mod tests {
         assert_eq!(ChecksumAlgorithm::Sum8.category(), ChecksumCategory::Sums);
         assert_eq!(ChecksumAlgorithm::Crc32.category(), ChecksumCategory::Crc);
         assert_eq!(ChecksumAlgorithm::Sha256.category(), ChecksumCategory::Crypto);
+    }
+
+    #[test]
+    fn test_normalize_and_compare_query() {
+        let data = b"123456789";
+        let results = ChecksumResults::compute(data, 0, data.len());
+
+        assert_eq!(results.compare_query("   "), ChecksumCompareStatus::Empty);
+        assert_eq!(results.compare_query("0xZZZ"), ChecksumCompareStatus::InvalidHex);
+        assert_eq!(results.compare_query("0xDEADBEEF"), ChecksumCompareStatus::NoMatch);
+
+        // Exact CRC-32 match with 0x prefix, hyphens, or lowercase
+        assert_eq!(
+            results.compare_query("0xCBF43926"),
+            ChecksumCompareStatus::Matched(vec![ChecksumAlgorithm::Crc32])
+        );
+        assert_eq!(
+            results.compare_query("cbf4-3926"),
+            ChecksumCompareStatus::Matched(vec![ChecksumAlgorithm::Crc32])
+        );
+
+        // Exact CRC-16 CCITT match
+        assert_eq!(
+            results.compare_query("29b1"),
+            ChecksumCompareStatus::Matched(vec![ChecksumAlgorithm::Crc16Ccitt])
+        );
+
+        // Unpadded integer sum match ("0x1dd" -> Sum16 = 0x01DD, Sum32 = 0x000001DD, Sum64 = 0x00000000000001DD)
+        assert_eq!(
+            results.compare_query("0x1dd"),
+            ChecksumCompareStatus::Matched(vec![ChecksumAlgorithm::Sum16, ChecksumAlgorithm::Sum32, ChecksumAlgorithm::Sum64])
+        );
+
+        // Padded 4-digit "01DD" matches specifically Sum16
+        assert_eq!(results.compare_query("01DD"), ChecksumCompareStatus::Matched(vec![ChecksumAlgorithm::Sum16]));
     }
 }

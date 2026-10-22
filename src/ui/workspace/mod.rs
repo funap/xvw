@@ -394,6 +394,7 @@ impl Workspace {
                     left_read.data_inspector.read(cx).focus_handle(cx),
                     left_read.visual_map.read(cx).focus_handle(cx),
                     left_read.checksum_panel.read(cx).focus_handle(cx),
+                    left_read.checksum_panel.read(cx).compare_input.read(cx).focus_handle(cx),
                     left_read.bookmark_panel.read(cx).focus_handle(cx),
                 ],
                 left_read.bookmark_panel.clone(),
@@ -495,6 +496,25 @@ impl Workspace {
                             view.scroll_to_byte_if_needed(*offset, cx);
                         });
                     }
+                }
+            },
+        )
+        .detach();
+
+        cx.subscribe_in(
+            &left_panel,
+            window,
+            |this, _, event: &crate::ui::panels::checksum_panel::ChecksumPanelEvent, window, cx| match event {
+                crate::ui::panels::checksum_panel::ChecksumPanelEvent::NavigateTo { offset, len } => {
+                    if let Some(editor_view) = this.effective_editor_view(cx) {
+                        editor_view.update(cx, |view, cx| {
+                            let match_len = (*len).max(1);
+                            view.scroll_to_range_if_needed(*offset..offset.saturating_add(match_len), cx);
+                        });
+                    }
+                }
+                crate::ui::panels::checksum_panel::ChecksumPanelEvent::FocusEditor => {
+                    this.restore_editor_focus(window, cx);
                 }
             },
         )
@@ -1608,6 +1628,10 @@ impl Workspace {
     fn sync_activity_bar(&self, cx: &mut Context<Self>) {
         let is_visible = self.is_left_panel_visible;
         let active_tab = self.left_panel.read(cx).active_tab;
+        let checksum_panel = self.left_panel.read(cx).checksum_panel.clone();
+        checksum_panel.update(cx, |panel, cx| {
+            panel.set_panel_active(is_visible && active_tab == LeftPanelTab::Checksum, cx);
+        });
         self.activity_bar.update(cx, |activity_bar, cx| {
             if is_visible {
                 match active_tab {

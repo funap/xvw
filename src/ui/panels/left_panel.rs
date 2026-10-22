@@ -2,7 +2,7 @@ use gpui_kit::*;
 
 use crate::core::editor::Editor;
 use crate::ui::panels::bookmark_panel::BookmarkPanel;
-use crate::ui::panels::checksum_panel::ChecksumPanel;
+use crate::ui::panels::checksum_panel::{ChecksumPanel, ChecksumPanelEvent};
 use crate::ui::panels::data_inspector::DataInspector;
 use crate::ui::panels::file_tree_view::{FileTreeView, FileTreeViewEvent};
 use crate::ui::panels::search_panel::{SearchPanel, SearchPanelEvent};
@@ -39,6 +39,7 @@ impl EventEmitter<FileTreeViewEvent> for LeftPanel {}
 impl EventEmitter<SearchPanelEvent> for LeftPanel {}
 impl EventEmitter<StringsPanelEvent> for LeftPanel {}
 impl EventEmitter<VisualMapPanelEvent> for LeftPanel {}
+impl EventEmitter<ChecksumPanelEvent> for LeftPanel {}
 
 impl LeftPanel {
     pub fn new(file_tree: Entity<FileTreeView>, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -47,7 +48,11 @@ impl LeftPanel {
         let struct_tree = cx.new(|cx| StructTreeView::new(None, None, cx));
         let data_inspector = cx.new(|cx| DataInspector::new(None, window, cx));
         let visual_map = cx.new(|cx| VisualMapPanel::new(None, cx));
-        let checksum_panel = cx.new(|cx| ChecksumPanel::new(None, cx));
+        let checksum_panel = cx.new(|cx| {
+            let mut panel = ChecksumPanel::new(None, window, cx);
+            panel.set_panel_active(false, cx);
+            panel
+        });
         let bookmark_panel = cx.new(|cx| BookmarkPanel::new(None, window, cx));
 
         cx.subscribe(&file_tree, |_, _, event: &FileTreeViewEvent, cx| match event {
@@ -70,6 +75,11 @@ impl LeftPanel {
         .detach();
 
         cx.subscribe(&visual_map, |_, _, event: &VisualMapPanelEvent, cx| {
+            cx.emit(event.clone());
+        })
+        .detach();
+
+        cx.subscribe(&checksum_panel, |_, _, event: &ChecksumPanelEvent, cx| {
             cx.emit(event.clone());
         })
         .detach();
@@ -127,6 +137,10 @@ impl LeftPanel {
 
     pub fn set_tab(&mut self, tab: LeftPanelTab, cx: &mut Context<Self>) {
         self.active_tab = tab;
+        let is_checksum = tab == LeftPanelTab::Checksum;
+        self.checksum_panel.update(cx, |panel, cx| {
+            panel.set_panel_active(is_checksum, cx);
+        });
         cx.notify();
     }
 }
