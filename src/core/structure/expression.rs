@@ -157,11 +157,11 @@ impl<'a> Lexer<'a> {
     fn skip_whitespace(&mut self) {
         loop {
             while self.pos < self.input.len() && self.current_char().is_whitespace() {
-                self.pos += 1;
+                self.pos += self.current_char().len_utf8();
             }
             if self.pos < self.input.len() && self.current_char() == '#' {
                 while self.pos < self.input.len() && self.current_char() != '\n' {
-                    self.pos += 1;
+                    self.pos += self.current_char().len_utf8();
                 }
             } else {
                 break;
@@ -178,10 +178,11 @@ impl<'a> Lexer<'a> {
                 if next == 'x' || next == 'X' {
                     self.pos += 1;
                     let hex_start = self.pos;
-                    while self.pos < self.input.len() && self.current_char().is_ascii_hexdigit() {
+                    while self.pos < self.input.len() && (self.current_char().is_ascii_hexdigit() || self.current_char() == '_') {
                         self.pos += 1;
                     }
-                    let val = i64::from_str_radix(&self.input[hex_start..self.pos], 16).unwrap_or(0);
+                    let hex_str: String = self.input[hex_start..self.pos].chars().filter(|c| *c != '_').collect();
+                    let val = u64::from_str_radix(&hex_str, 16).map(|v| v as i64).unwrap_or(0);
                     return Token::Number(val);
                 }
                 if next == 'b' || next == 'B' {
@@ -191,48 +192,157 @@ impl<'a> Lexer<'a> {
                         self.pos += 1;
                     }
                     let bin_str: String = self.input[bin_start..self.pos].chars().filter(|c| *c != '_').collect();
-                    let val = i64::from_str_radix(&bin_str, 2).unwrap_or(0);
+                    let val = u64::from_str_radix(&bin_str, 2).map(|v| v as i64).unwrap_or(0);
+                    return Token::Number(val);
+                }
+                if next == 'o' || next == 'O' {
+                    self.pos += 1;
+                    let oct_start = self.pos;
+                    while self.pos < self.input.len() && (matches!(self.current_char(), '0'..='7') || self.current_char() == '_') {
+                        self.pos += 1;
+                    }
+                    let oct_str: String = self.input[oct_start..self.pos].chars().filter(|c| *c != '_').collect();
+                    let val = u64::from_str_radix(&oct_str, 8).map(|v| v as i64).unwrap_or(0);
                     return Token::Number(val);
                 }
             }
         }
-        while self.pos < self.input.len() && self.current_char().is_ascii_digit() {
+        while self.pos < self.input.len() && (self.current_char().is_ascii_digit() || self.current_char() == '_') {
             self.pos += 1;
         }
-        // Check for float
+        let mut is_float = false;
+        // Check for fractional part
         if self.pos < self.input.len() && self.current_char() == '.' {
             let next_pos = self.pos + 1;
             if next_pos < self.input.len() && self.input[next_pos..].chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                is_float = true;
                 self.pos += 1; // consume '.'
-                while self.pos < self.input.len() && self.current_char().is_ascii_digit() {
+                while self.pos < self.input.len() && (self.current_char().is_ascii_digit() || self.current_char() == '_') {
                     self.pos += 1;
                 }
-                let val: f64 = self.input[start..self.pos].parse().unwrap_or(0.0);
-                return Token::Float(val);
             }
         }
-        let val = self.input[start..self.pos].parse().unwrap_or(0);
+        // Check for scientific notation exponent (e.g. 1.5e3, 2e-4)
+        if self.pos < self.input.len() && (self.current_char() == 'e' || self.current_char() == 'E') {
+            let mut exp_pos = self.pos + 1;
+            if exp_pos < self.input.len() {
+                let sign_ch = self.input[exp_pos..].chars().next().unwrap_or('\0');
+                if sign_ch == '+' || sign_ch == '-' {
+                    exp_pos += 1;
+                }
+                if exp_pos < self.input.len() && self.input[exp_pos..].chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                    is_float = true;
+                    self.pos = exp_pos;
+                    while self.pos < self.input.len() && (self.current_char().is_ascii_digit() || self.current_char() == '_') {
+                        self.pos += 1;
+                    }
+                }
+            }
+        }
+        let clean_str: String = self.input[start..self.pos].chars().filter(|c| *c != '_').collect();
+        if is_float {
+            let val: f64 = clean_str.parse().unwrap_or(0.0);
+            return Token::Float(val);
+        }
+        let val = clean_str.parse::<i64>().or_else(|_| clean_str.parse::<u64>().map(|v| v as i64)).unwrap_or(0);
         Token::Number(val)
     }
 
     fn lex_identifier(&mut self) -> Token {
         let start = self.pos;
         while self.pos < self.input.len() && (self.current_char().is_alphanumeric() || self.current_char() == '_') {
-            self.pos += 1;
+            self.pos += self.current_char().len_utf8();
         }
         Token::Identifier(self.input[start..self.pos].to_string())
     }
 
     fn lex_string(&mut self) -> Token {
         let quote = self.current_char();
-        self.pos += 1;
-        let start = self.pos;
-        while self.pos < self.input.len() && self.current_char() != quote {
-            self.pos += 1;
+        self.pos += quote.len_utf8();
+        if quote == '\'' {
+            let start = self.pos;
+            while self.pos < self.input.len() && self.current_char() != quote {
+                self.pos += self.current_char().len_utf8();
+            }
+            let s = self.input[start..self.pos].to_string();
+            if self.pos < self.input.len() {
+                self.pos += quote.len_utf8();
+            }
+            return Token::String(s);
         }
-        let s = self.input[start..self.pos].to_string();
-        if self.pos < self.input.len() {
-            self.pos += 1;
+
+        let mut s = String::new();
+        while self.pos < self.input.len() {
+            let ch = self.current_char();
+            if ch == quote {
+                self.pos += ch.len_utf8();
+                break;
+            }
+            if ch == '\\' {
+                self.pos += 1;
+                if self.pos >= self.input.len() {
+                    break;
+                }
+                let esc = self.current_char();
+                self.pos += esc.len_utf8();
+                match esc {
+                    'n' => s.push('\n'),
+                    'r' => s.push('\r'),
+                    't' => s.push('\t'),
+                    '\\' => s.push('\\'),
+                    '"' => s.push('"'),
+                    '\'' => s.push('\''),
+                    'a' => s.push('\x07'),
+                    'b' => s.push('\x08'),
+                    'v' => s.push('\x0b'),
+                    'f' => s.push('\x0c'),
+                    'e' => s.push('\x1b'),
+                    'x' => {
+                        let hex_start = self.pos;
+                        let mut count = 0;
+                        while count < 2 && self.pos < self.input.len() && self.current_char().is_ascii_hexdigit() {
+                            self.pos += 1;
+                            count += 1;
+                        }
+                        if let Ok(code) = u32::from_str_radix(&self.input[hex_start..self.pos], 16)
+                            && let Some(c) = char::from_u32(code)
+                        {
+                            s.push(c);
+                        }
+                    }
+                    'u' => {
+                        let hex_start = self.pos;
+                        let mut count = 0;
+                        while count < 4 && self.pos < self.input.len() && self.current_char().is_ascii_hexdigit() {
+                            self.pos += 1;
+                            count += 1;
+                        }
+                        if let Ok(code) = u32::from_str_radix(&self.input[hex_start..self.pos], 16)
+                            && let Some(c) = char::from_u32(code)
+                        {
+                            s.push(c);
+                        }
+                    }
+                    '0'..='7' => {
+                        let mut oct_str = String::from(esc);
+                        let mut count = 1;
+                        while count < 3 && self.pos < self.input.len() && matches!(self.current_char(), '0'..='7') {
+                            oct_str.push(self.current_char());
+                            self.pos += 1;
+                            count += 1;
+                        }
+                        if let Ok(code) = u32::from_str_radix(&oct_str, 8)
+                            && let Some(c) = char::from_u32(code)
+                        {
+                            s.push(c);
+                        }
+                    }
+                    other => s.push(other),
+                }
+            } else {
+                s.push(ch);
+                self.pos += ch.len_utf8();
+            }
         }
         Token::String(s)
     }
@@ -385,7 +495,7 @@ pub fn decode_bytes(bytes: &[u8], encoding: &str) -> String {
     }
 }
 
-/// Expression value - can be integer, float, string, bool, or byte array
+/// Expression value - can be integer, float, string, bool, byte array, or general array
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprValue {
     Int(i64),
@@ -393,6 +503,7 @@ pub enum ExprValue {
     Str(String),
     Bool(bool),
     Bytes(Vec<u8>),
+    Array(Vec<ExprValue>),
 }
 
 impl ExprValue {
@@ -408,7 +519,7 @@ impl ExprValue {
                     0
                 }
             }
-            ExprValue::Bytes(_) => 0,
+            ExprValue::Bytes(_) | ExprValue::Array(_) => 0,
         }
     }
     pub fn to_bool(&self) -> bool {
@@ -418,6 +529,7 @@ impl ExprValue {
             ExprValue::Str(s) => !s.is_empty(),
             ExprValue::Bool(v) => *v,
             ExprValue::Bytes(b) => !b.is_empty(),
+            ExprValue::Array(a) => !a.is_empty(),
         }
     }
     pub fn to_string_val(&self) -> String {
@@ -427,12 +539,16 @@ impl ExprValue {
             ExprValue::Str(s) => s.clone(),
             ExprValue::Bool(v) => v.to_string(),
             ExprValue::Bytes(b) => String::from_utf8_lossy(b).to_string(),
+            ExprValue::Array(a) => {
+                let parts: Vec<String> = a.iter().map(|v| v.to_string_val()).collect();
+                format!("[{}]", parts.join(", "))
+            }
         }
     }
-    fn is_float(&self) -> bool {
+    pub fn is_float(&self) -> bool {
         matches!(self, ExprValue::Float(_))
     }
-    fn to_f64(&self) -> f64 {
+    pub fn to_f64(&self) -> f64 {
         match self {
             ExprValue::Int(v) => *v as f64,
             ExprValue::Float(v) => *v,
@@ -444,7 +560,24 @@ impl ExprValue {
                     0.0
                 }
             }
-            ExprValue::Bytes(_) => 0.0,
+            ExprValue::Bytes(_) | ExprValue::Array(_) => 0.0,
+        }
+    }
+    /// Coerces a byte array or an array of byte integers `[0x41, 0x42]` to a `Vec<u8>`.
+    pub fn as_bytes(&self) -> Option<Vec<u8>> {
+        match self {
+            ExprValue::Bytes(b) => Some(b.clone()),
+            ExprValue::Array(items) => {
+                let mut bytes = Vec::with_capacity(items.len());
+                for item in items {
+                    match item {
+                        ExprValue::Int(n) => bytes.push(*n as u8),
+                        _ => return None,
+                    }
+                }
+                Some(bytes)
+            }
+            _ => None,
         }
     }
 }
@@ -999,6 +1132,7 @@ pub enum ExprAST {
     Float(f64),
     Str(String),
     Bool(bool),
+    Array(Vec<ExprAST>),
     Identifier(String),
     MemberAccess {
         base: Box<ExprAST>,
@@ -1059,6 +1193,63 @@ pub enum BinaryOp {
     LogicalOr,
 }
 
+#[derive(Debug, Clone)]
+enum PathSegment {
+    Ident(String),
+    Index(i64),
+}
+
+fn parse_str_to_int(s: &str, radix: u32) -> i64 {
+    let cleaned: String = s.trim().chars().filter(|&c| c != '_').collect();
+    if cleaned.is_empty() {
+        return 0;
+    }
+    let (is_neg, rest) = if let Some(r) = cleaned.strip_prefix('-') {
+        (true, r)
+    } else if let Some(r) = cleaned.strip_prefix('+') {
+        (false, r)
+    } else {
+        (false, cleaned.as_str())
+    };
+    let parsed = if (rest.starts_with("0x") || rest.starts_with("0X")) && (radix == 16 || radix == 10) {
+        i64::from_str_radix(&rest[2..], 16)
+    } else if (rest.starts_with("0b") || rest.starts_with("0B")) && (radix == 2 || radix == 10) {
+        i64::from_str_radix(&rest[2..], 2)
+    } else if (rest.starts_with("0o") || rest.starts_with("0O")) && (radix == 8 || radix == 10) {
+        i64::from_str_radix(&rest[2..], 8)
+    } else {
+        i64::from_str_radix(rest, radix.clamp(2, 36))
+    };
+    match parsed {
+        Ok(v) => {
+            if is_neg {
+                -v
+            } else {
+                v
+            }
+        }
+        Err(_) => 0,
+    }
+}
+
+fn eval_array_min(items: &[ExprValue]) -> Option<ExprValue> {
+    let first = items.first()?;
+    match first {
+        ExprValue::Str(_) => items.iter().map(|v| v.to_string_val()).min().map(ExprValue::Str),
+        ExprValue::Float(_) => items.iter().map(|v| v.to_f64()).reduce(f64::min).map(ExprValue::Float),
+        _ => items.iter().map(|v| v.to_i64()).min().map(ExprValue::Int),
+    }
+}
+
+fn eval_array_max(items: &[ExprValue]) -> Option<ExprValue> {
+    let first = items.first()?;
+    match first {
+        ExprValue::Str(_) => items.iter().map(|v| v.to_string_val()).max().map(ExprValue::Str),
+        ExprValue::Float(_) => items.iter().map(|v| v.to_f64()).reduce(f64::max).map(ExprValue::Float),
+        _ => items.iter().map(|v| v.to_i64()).max().map(ExprValue::Int),
+    }
+}
+
 impl ExprAST {
     pub fn compile(expr: &str) -> Option<ExprAST> {
         let trimmed = expr.trim();
@@ -1069,86 +1260,219 @@ impl ExprAST {
         Some(parser.parse_expression())
     }
 
+    fn lookup_ctx_path(path: &str, ctx: &EvalContext) -> Option<ExprValue> {
+        if path.is_empty() {
+            return None;
+        }
+        if let Some(&bits) = ctx.values.get(&format!("__float__:{path}")) {
+            return Some(ExprValue::Float(f64::from_bits(bits as u64)));
+        }
+        if let Some(&b) = ctx.values.get(&format!("__bool__:{path}")) {
+            return Some(ExprValue::Bool(b != 0));
+        }
+        if let Some(val) = ctx.string_values.get(path) {
+            return Some(ExprValue::Str(val.clone()));
+        }
+        if let Some(val) = ctx.byte_arrays.get(path) {
+            return Some(ExprValue::Bytes(val.clone()));
+        }
+        if let Some(&val) = ctx.values.get(path) {
+            return Some(ExprValue::Int(val));
+        }
+        None
+    }
+
+    fn eval_builtin_property(base_val: ExprValue, member: &str) -> Option<ExprValue> {
+        match member {
+            "to_s" => match base_val {
+                ExprValue::Array(_) => {
+                    if let Some(bytes) = base_val.as_bytes() {
+                        Some(ExprValue::Str(String::from_utf8_lossy(&bytes).into_owned()))
+                    } else {
+                        Some(ExprValue::Str(base_val.to_string_val()))
+                    }
+                }
+                other => Some(ExprValue::Str(other.to_string_val())),
+            },
+            "to_i" => match base_val {
+                ExprValue::Str(ref s) => Some(ExprValue::Int(parse_str_to_int(s, 10))),
+                other => Some(ExprValue::Int(other.to_i64())),
+            },
+            "length" | "size" => match base_val {
+                ExprValue::Bytes(ref b) => Some(ExprValue::Int(b.len() as i64)),
+                ExprValue::Str(ref s) => Some(ExprValue::Int(s.chars().count() as i64)),
+                ExprValue::Array(ref a) => Some(ExprValue::Int(a.len() as i64)),
+                _ => None,
+            },
+            "reverse" => match base_val {
+                ExprValue::Str(ref s) => Some(ExprValue::Str(s.chars().rev().collect())),
+                ExprValue::Bytes(ref b) => Some(ExprValue::Bytes(b.iter().copied().rev().collect())),
+                ExprValue::Array(ref a) => Some(ExprValue::Array(a.iter().cloned().rev().collect())),
+                _ => None,
+            },
+            "first" => match base_val {
+                ExprValue::Bytes(ref b) => Some(ExprValue::Int(b.first().copied().unwrap_or(0) as i64)),
+                ExprValue::Array(ref a) => Some(a.first().cloned().unwrap_or(ExprValue::Int(0))),
+                _ => None,
+            },
+            "last" => match base_val {
+                ExprValue::Bytes(ref b) => Some(ExprValue::Int(b.last().copied().unwrap_or(0) as i64)),
+                ExprValue::Array(ref a) => Some(a.last().cloned().unwrap_or(ExprValue::Int(0))),
+                _ => None,
+            },
+            "min" => match base_val {
+                ExprValue::Bytes(ref b) => Some(ExprValue::Int(b.iter().copied().min().unwrap_or(0) as i64)),
+                ExprValue::Array(ref a) => eval_array_min(a),
+                _ => None,
+            },
+            "max" => match base_val {
+                ExprValue::Bytes(ref b) => Some(ExprValue::Int(b.iter().copied().max().unwrap_or(0) as i64)),
+                ExprValue::Array(ref a) => eval_array_max(a),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn extract_path_segments(&self, ctx: &EvalContext) -> Option<Vec<PathSegment>> {
+        let mut segments = Vec::new();
+        let mut curr = self;
+        loop {
+            match curr {
+                ExprAST::Identifier(id) => {
+                    segments.push(PathSegment::Ident(id.clone()));
+                    break;
+                }
+                ExprAST::MemberAccess { base, member, is_enum } => {
+                    if *is_enum {
+                        return None;
+                    }
+                    segments.push(PathSegment::Ident(member.clone()));
+                    curr = base;
+                }
+                ExprAST::IndexAccess { base, index } => {
+                    let idx = index.eval(ctx).to_i64();
+                    segments.push(PathSegment::Index(idx));
+                    curr = base;
+                }
+                _ => return None,
+            }
+        }
+        segments.reverse();
+        Some(segments)
+    }
+
+    fn apply_segments(mut stack: Vec<String>, segments: &[PathSegment], resolve_first_last: bool, ctx: &EvalContext) -> String {
+        for (idx, seg) in segments.iter().enumerate() {
+            match seg {
+                PathSegment::Ident(name) => {
+                    if name == "_root" {
+                        stack.clear();
+                    } else if name == "_parent" {
+                        stack.pop();
+                    } else if name == "_" && idx == 0 {
+                        stack.push("_".to_string());
+                    } else if resolve_first_last && (name == "first" || name == "last") && !stack.is_empty() && idx + 1 < segments.len() {
+                        let current_prefix = stack.join(".");
+                        let last_ident = stack.last().cloned().unwrap_or_default();
+                        if name == "first" {
+                            if let Some(last) = stack.last_mut() {
+                                *last = format!("{last}[0]");
+                            }
+                        } else if let Some(&len) = ctx
+                            .values
+                            .get(&format!("__array_len__:{current_prefix}"))
+                            .or_else(|| ctx.values.get(&format!("__array_len__:{last_ident}")))
+                            && len > 0
+                        {
+                            if let Some(last) = stack.last_mut() {
+                                *last = format!("{last}[{}]", len - 1);
+                            }
+                        } else {
+                            stack.push(name.clone());
+                        }
+                    } else {
+                        stack.push(name.clone());
+                    }
+                }
+                PathSegment::Index(i) => {
+                    if let Some(last) = stack.last_mut() {
+                        *last = format!("{last}[{i}]");
+                    }
+                }
+            }
+        }
+        stack.join(".")
+    }
+
+    fn collect_candidate_paths(&self, ctx: &EvalContext) -> Option<Vec<String>> {
+        let segments = self.extract_path_segments(ctx)?;
+        let root_id = match segments.first()? {
+            PathSegment::Ident(s) => s.as_str(),
+            _ => return None,
+        };
+
+        let mut paths = Vec::new();
+        let mut push_unique = |s: String| {
+            if !s.is_empty() && !paths.contains(&s) {
+                paths.push(s);
+            }
+        };
+
+        // 1. Walk from full base_path down to empty root
+        for i in (0..=ctx.base_path.len()).rev() {
+            let base = ctx.base_path[..i].to_vec();
+            push_unique(Self::apply_segments(base.clone(), &segments, false, ctx));
+            push_unique(Self::apply_segments(base, &segments, true, ctx));
+        }
+
+        // 2. If root_id matches an element in base_path (e.g. "header" or "sections[0]" when root_id is "sections")
+        if let Some(idx) = ctx.base_path.iter().rposition(|x| {
+            let base_name = x.split('[').next().unwrap_or(x);
+            base_name == root_id
+        }) {
+            let mut replaced = segments.clone();
+            replaced[0] = PathSegment::Ident(ctx.base_path[idx].clone());
+            let base = ctx.base_path[..idx].to_vec();
+            push_unique(Self::apply_segments(base.clone(), &replaced, false, ctx));
+            push_unique(Self::apply_segments(base, &replaced, true, ctx));
+        }
+
+        Some(paths)
+    }
+
     pub fn eval(&self, ctx: &EvalContext) -> ExprValue {
         match self {
             ExprAST::Number(n) => ExprValue::Int(*n),
             ExprAST::Float(f) => ExprValue::Float(*f),
             ExprAST::Str(s) => ExprValue::Str(s.clone()),
             ExprAST::Bool(b) => ExprValue::Bool(*b),
+            ExprAST::Array(items) => ExprValue::Array(items.iter().map(|item| item.eval(ctx)).collect()),
             ExprAST::Identifier(id) => self.eval_identifier(id, ctx),
-            ExprAST::MemberAccess { base, member, is_enum } => {
-                if !*is_enum {
-                    let base_val = base.eval(ctx);
-                    match member.as_str() {
-                        "to_s" => return ExprValue::Str(base_val.to_string_val()),
-                        "to_i" => match base_val {
-                            ExprValue::Str(ref s) => {
-                                let trimmed = s.trim();
-                                if (trimmed.starts_with("0x") || trimmed.starts_with("0X"))
-                                    && let Ok(v) = i64::from_str_radix(&trimmed[2..], 16)
-                                {
-                                    return ExprValue::Int(v);
-                                }
-                                if let Ok(v) = trimmed.parse::<i64>() {
-                                    return ExprValue::Int(v);
-                                }
-                                return ExprValue::Int(0);
-                            }
-                            _ => return ExprValue::Int(base_val.to_i64()),
-                        },
-                        "length" | "size" => match base_val {
-                            ExprValue::Bytes(ref b) => return ExprValue::Int(b.len() as i64),
-                            ExprValue::Str(ref s) => return ExprValue::Int(s.len() as i64),
-                            _ => {}
-                        },
-                        _ => {}
+            ExprAST::MemberAccess { base, member, is_enum } => self.eval_member_access(base, member, *is_enum, ctx),
+            ExprAST::IndexAccess { base, index } => {
+                let idx_i64 = index.eval(ctx).to_i64();
+                if idx_i64 < 0 {
+                    return ExprValue::Int(0);
+                }
+                let idx_val = idx_i64 as usize;
+
+                // First check if `base[idx]` is a repeated field element in context
+                if let Some(candidates) = self.collect_candidate_paths(ctx) {
+                    for path in &candidates {
+                        if let Some(val) = Self::lookup_ctx_path(path, ctx) {
+                            return val;
+                        }
                     }
                 }
-                self.eval_member_access(base, member, *is_enum, ctx)
-            }
-            ExprAST::IndexAccess { base, index } => {
-                let idx_val = index.eval(ctx).to_i64() as usize;
+
                 let base_val = base.eval(ctx);
                 match base_val {
-                    ExprValue::Bytes(ref b) => {
-                        if idx_val < b.len() {
-                            return ExprValue::Int(b[idx_val] as i64);
-                        }
-                        return ExprValue::Int(0);
-                    }
-                    ExprValue::Str(ref s) => {
-                        if idx_val < s.len() {
-                            return ExprValue::Int(s.as_bytes()[idx_val] as i64);
-                        }
-                        return ExprValue::Int(0);
-                    }
-                    _ => {}
+                    ExprValue::Array(ref arr) => arr.get(idx_val).cloned().unwrap_or(ExprValue::Int(0)),
+                    ExprValue::Bytes(ref b) => ExprValue::Int(b.get(idx_val).copied().unwrap_or(0) as i64),
+                    ExprValue::Str(ref s) => ExprValue::Int(s.as_bytes().get(idx_val).copied().unwrap_or(0) as i64),
+                    _ => ExprValue::Int(0),
                 }
-                let mut path = String::new();
-                if let ExprAST::Identifier(id) = &**base {
-                    path = id.clone();
-                }
-                if let Some(bytes) = ctx.byte_arrays.get(&path)
-                    && idx_val < bytes.len()
-                {
-                    return ExprValue::Int(bytes[idx_val] as i64);
-                }
-                let scoped_path = if ctx.base_path.is_empty() {
-                    path.clone()
-                } else {
-                    format!("{}.{}", ctx.base_path.join("."), path)
-                };
-                if let Some(bytes) = ctx.byte_arrays.get(&scoped_path)
-                    && idx_val < bytes.len()
-                {
-                    return ExprValue::Int(bytes[idx_val] as i64);
-                }
-                if let Some(s) = ctx.string_values.get(&path).or_else(|| ctx.string_values.get(&scoped_path))
-                    && idx_val < s.len()
-                {
-                    return ExprValue::Int(s.as_bytes()[idx_val] as i64);
-                }
-                ExprValue::Int(0)
             }
             ExprAST::MethodCall { base, method, args } => {
                 let base_val = base.eval(ctx);
@@ -1157,6 +1481,13 @@ impl ExprAST {
                         let encoding = args.first().map(|a| a.eval(ctx).to_string_val()).unwrap_or_else(|| "UTF-8".to_string());
                         match base_val {
                             ExprValue::Bytes(ref b) => ExprValue::Str(decode_bytes(b, &encoding)),
+                            ExprValue::Array(_) => {
+                                if let Some(b) = base_val.as_bytes() {
+                                    ExprValue::Str(decode_bytes(&b, &encoding))
+                                } else {
+                                    ExprValue::Str(base_val.to_string_val())
+                                }
+                            }
                             ExprValue::Int(v) => ExprValue::Str(v.to_string()),
                             ExprValue::Float(v) => ExprValue::Str(v.to_string()),
                             ExprValue::Bool(v) => ExprValue::Str(v.to_string()),
@@ -1166,39 +1497,21 @@ impl ExprAST {
                     "to_i" => {
                         let radix = args.first().map(|a| a.eval(ctx).to_i64() as u32).unwrap_or(10);
                         match base_val {
-                            ExprValue::Str(ref s) => {
-                                let trimmed = s.trim();
-                                if (trimmed.starts_with("0x") || trimmed.starts_with("0X")) && radix == 16 {
-                                    if let Ok(v) = i64::from_str_radix(&trimmed[2..], 16) {
-                                        ExprValue::Int(v)
-                                    } else {
-                                        ExprValue::Int(0)
-                                    }
-                                } else if let Ok(v) = i64::from_str_radix(trimmed, radix) {
-                                    ExprValue::Int(v)
-                                } else {
-                                    ExprValue::Int(0)
-                                }
-                            }
+                            ExprValue::Str(ref s) => ExprValue::Int(parse_str_to_int(s, radix)),
                             _ => ExprValue::Int(base_val.to_i64()),
                         }
                     }
                     "substring" => {
                         let s = base_val.to_string_val();
                         let from = args.first().map(|a| a.eval(ctx).to_i64().max(0) as usize).unwrap_or(0);
-                        let to = args.get(1).map(|a| a.eval(ctx).to_i64().max(0) as usize).unwrap_or(s.len());
+                        let to = args.get(1).map(|a| a.eval(ctx).to_i64().max(0) as usize).unwrap_or_else(|| s.chars().count());
                         let chars: Vec<char> = s.chars().collect();
                         let start = from.min(chars.len());
                         let end = to.min(chars.len()).max(start);
                         let sub: String = chars[start..end].iter().collect();
                         ExprValue::Str(sub)
                     }
-                    "length" | "size" => match base_val {
-                        ExprValue::Bytes(ref b) => ExprValue::Int(b.len() as i64),
-                        ExprValue::Str(ref s) => ExprValue::Int(s.len() as i64),
-                        _ => ExprValue::Int(0),
-                    },
-                    _ => ExprValue::Int(0),
+                    other => Self::eval_builtin_property(base_val, other).unwrap_or(ExprValue::Int(0)),
                 }
             }
             ExprAST::Unary { op, operand } => {
@@ -1248,7 +1561,9 @@ impl ExprAST {
                     let r = right.eval(ctx);
                     match op {
                         BinaryOp::Add => {
-                            if l.is_float() || r.is_float() {
+                            if matches!(l, ExprValue::Str(_)) || matches!(r, ExprValue::Str(_)) {
+                                ExprValue::Str(format!("{}{}", l.to_string_val(), r.to_string_val()))
+                            } else if l.is_float() || r.is_float() {
                                 ExprValue::Float(l.to_f64() + r.to_f64())
                             } else {
                                 ExprValue::Int(l.to_i64().wrapping_add(r.to_i64()))
@@ -1302,8 +1617,10 @@ impl ExprAST {
                             }
                         }
                         BinaryOp::Mod => {
+                            let l_val = l.to_i64();
                             let r_val = r.to_i64();
-                            if let Some(res) = l.to_i64().checked_rem(r_val) {
+                            if let Some(rem) = l_val.checked_rem(r_val) {
+                                let res = if r_val > 0 && rem < 0 { rem + r_val } else { rem };
                                 ExprValue::Int(res)
                             } else {
                                 if let Some(err_cell) = ctx.errors {
@@ -1325,10 +1642,14 @@ impl ExprAST {
                         BinaryOp::BitOr => ExprValue::Int(l.to_i64() | r.to_i64()),
                         BinaryOp::BitXor => ExprValue::Int(l.to_i64() ^ r.to_i64()),
                         BinaryOp::Equal => {
-                            if matches!(l, ExprValue::Str(_)) || matches!(r, ExprValue::Str(_)) {
-                                ExprValue::Bool(l.to_string_val() == r.to_string_val())
-                            } else if let (ExprValue::Bytes(b1), ExprValue::Bytes(b2)) = (&l, &r) {
+                            if (matches!(l, ExprValue::Bytes(_)) || matches!(r, ExprValue::Bytes(_)))
+                                && let (Some(b1), Some(b2)) = (l.as_bytes(), r.as_bytes())
+                            {
                                 ExprValue::Bool(b1 == b2)
+                            } else if let (ExprValue::Array(a1), ExprValue::Array(a2)) = (&l, &r) {
+                                ExprValue::Bool(a1 == a2)
+                            } else if matches!(l, ExprValue::Str(_)) || matches!(r, ExprValue::Str(_)) {
+                                ExprValue::Bool(l.to_string_val() == r.to_string_val())
                             } else if matches!(l, ExprValue::Bool(_)) || matches!(r, ExprValue::Bool(_)) {
                                 ExprValue::Bool(l.to_bool() == r.to_bool())
                             } else if l.is_float() || r.is_float() {
@@ -1338,10 +1659,14 @@ impl ExprAST {
                             }
                         }
                         BinaryOp::NotEqual => {
-                            if matches!(l, ExprValue::Str(_)) || matches!(r, ExprValue::Str(_)) {
-                                ExprValue::Bool(l.to_string_val() != r.to_string_val())
-                            } else if let (ExprValue::Bytes(b1), ExprValue::Bytes(b2)) = (&l, &r) {
+                            if (matches!(l, ExprValue::Bytes(_)) || matches!(r, ExprValue::Bytes(_)))
+                                && let (Some(b1), Some(b2)) = (l.as_bytes(), r.as_bytes())
+                            {
                                 ExprValue::Bool(b1 != b2)
+                            } else if let (ExprValue::Array(a1), ExprValue::Array(a2)) = (&l, &r) {
+                                ExprValue::Bool(a1 != a2)
+                            } else if matches!(l, ExprValue::Str(_)) || matches!(r, ExprValue::Str(_)) {
+                                ExprValue::Bool(l.to_string_val() != r.to_string_val())
                             } else if matches!(l, ExprValue::Bool(_)) || matches!(r, ExprValue::Bool(_)) {
                                 ExprValue::Bool(l.to_bool() != r.to_bool())
                             } else if l.is_float() || r.is_float() {
@@ -1351,28 +1676,52 @@ impl ExprAST {
                             }
                         }
                         BinaryOp::Greater => {
-                            if l.is_float() || r.is_float() {
+                            if (matches!(l, ExprValue::Bytes(_)) || matches!(r, ExprValue::Bytes(_)))
+                                && let (Some(b1), Some(b2)) = (l.as_bytes(), r.as_bytes())
+                            {
+                                ExprValue::Bool(b1 > b2)
+                            } else if matches!(l, ExprValue::Str(_)) || matches!(r, ExprValue::Str(_)) {
+                                ExprValue::Bool(l.to_string_val() > r.to_string_val())
+                            } else if l.is_float() || r.is_float() {
                                 ExprValue::Bool(l.to_f64() > r.to_f64())
                             } else {
                                 ExprValue::Bool(l.to_i64() > r.to_i64())
                             }
                         }
                         BinaryOp::GreaterEqual => {
-                            if l.is_float() || r.is_float() {
+                            if (matches!(l, ExprValue::Bytes(_)) || matches!(r, ExprValue::Bytes(_)))
+                                && let (Some(b1), Some(b2)) = (l.as_bytes(), r.as_bytes())
+                            {
+                                ExprValue::Bool(b1 >= b2)
+                            } else if matches!(l, ExprValue::Str(_)) || matches!(r, ExprValue::Str(_)) {
+                                ExprValue::Bool(l.to_string_val() >= r.to_string_val())
+                            } else if l.is_float() || r.is_float() {
                                 ExprValue::Bool(l.to_f64() >= r.to_f64())
                             } else {
                                 ExprValue::Bool(l.to_i64() >= r.to_i64())
                             }
                         }
                         BinaryOp::Less => {
-                            if l.is_float() || r.is_float() {
+                            if (matches!(l, ExprValue::Bytes(_)) || matches!(r, ExprValue::Bytes(_)))
+                                && let (Some(b1), Some(b2)) = (l.as_bytes(), r.as_bytes())
+                            {
+                                ExprValue::Bool(b1 < b2)
+                            } else if matches!(l, ExprValue::Str(_)) || matches!(r, ExprValue::Str(_)) {
+                                ExprValue::Bool(l.to_string_val() < r.to_string_val())
+                            } else if l.is_float() || r.is_float() {
                                 ExprValue::Bool(l.to_f64() < r.to_f64())
                             } else {
                                 ExprValue::Bool(l.to_i64() < r.to_i64())
                             }
                         }
                         BinaryOp::LessEqual => {
-                            if l.is_float() || r.is_float() {
+                            if (matches!(l, ExprValue::Bytes(_)) || matches!(r, ExprValue::Bytes(_)))
+                                && let (Some(b1), Some(b2)) = (l.as_bytes(), r.as_bytes())
+                            {
+                                ExprValue::Bool(b1 <= b2)
+                            } else if matches!(l, ExprValue::Str(_)) || matches!(r, ExprValue::Str(_)) {
+                                ExprValue::Bool(l.to_string_val() <= r.to_string_val())
+                            } else if l.is_float() || r.is_float() {
                                 ExprValue::Bool(l.to_f64() <= r.to_f64())
                             } else {
                                 ExprValue::Bool(l.to_i64() <= r.to_i64())
@@ -1395,14 +1744,8 @@ impl ExprAST {
 
         // Fast path: if base_path is empty, direct lookup
         if ctx.base_path.is_empty() {
-            if let Some(val) = ctx.string_values.get(id) {
-                return ExprValue::Str(val.clone());
-            }
-            if let Some(val) = ctx.byte_arrays.get(id) {
-                return ExprValue::Bytes(val.clone());
-            }
-            if let Some(val) = ctx.values.get(id) {
-                return ExprValue::Int(*val);
+            if let Some(val) = Self::lookup_ctx_path(id, ctx) {
+                return val;
             }
             if let Some(resolver) = ctx.instance_resolver
                 && let Some(val) = resolver(id)
@@ -1431,14 +1774,8 @@ impl ExprAST {
             format!("{}.{}", ctx.base_path.join("."), id)
         };
 
-        if let Some(val) = ctx.string_values.get(&full_id) {
-            return ExprValue::Str(val.clone());
-        }
-        if let Some(val) = ctx.byte_arrays.get(&full_id) {
-            return ExprValue::Bytes(val.clone());
-        }
-        if let Some(val) = ctx.values.get(&full_id) {
-            return ExprValue::Int(*val);
+        if let Some(val) = Self::lookup_ctx_path(&full_id, ctx) {
+            return val;
         }
 
         // Walk up scope hierarchy from base_path
@@ -1449,27 +1786,15 @@ impl ExprAST {
                 } else {
                     format!("{}.{}", ctx.base_path[..i].join("."), id)
                 };
-                if let Some(val) = ctx.string_values.get(&scope_id) {
-                    return ExprValue::Str(val.clone());
-                }
-                if let Some(val) = ctx.byte_arrays.get(&scope_id) {
-                    return ExprValue::Bytes(val.clone());
-                }
-                if let Some(val) = ctx.values.get(&scope_id) {
-                    return ExprValue::Int(*val);
+                if let Some(val) = Self::lookup_ctx_path(&scope_id, ctx) {
+                    return val;
                 }
             }
         }
 
         // Fallback for direct bare identifier if present at top-level
-        if let Some(val) = ctx.string_values.get(id) {
-            return ExprValue::Str(val.clone());
-        }
-        if let Some(val) = ctx.byte_arrays.get(id) {
-            return ExprValue::Bytes(val.clone());
-        }
-        if let Some(val) = ctx.values.get(id) {
-            return ExprValue::Int(*val);
+        if let Some(val) = Self::lookup_ctx_path(id, ctx) {
+            return val;
         }
 
         // Try instance resolver if provided
@@ -1495,18 +1820,23 @@ impl ExprAST {
     }
 
     fn eval_member_access(&self, base: &ExprAST, member: &str, is_enum: bool, ctx: &EvalContext) -> ExprValue {
-        if is_enum
-            && let ExprAST::Identifier(enum_name) = base
-            && let Some(enum_def) = ctx.enums.get(enum_name)
-        {
-            for (key, label) in enum_def {
-                if label == member
-                    && let Ok(v) = key.parse::<i64>()
-                {
-                    return ExprValue::Int(v);
+        if is_enum {
+            let enum_name = match base {
+                ExprAST::Identifier(name) => Some(name.as_str()),
+                ExprAST::MemberAccess { member: name, .. } => Some(name.as_str()),
+                _ => None,
+            };
+            if let Some(ename) = enum_name
+                && let Some(enum_def) = ctx.enums.get(ename)
+            {
+                for (key, label) in enum_def {
+                    if label == member {
+                        let v = parse_str_to_int(key, 10);
+                        return ExprValue::Int(v);
+                    }
                 }
+                return ExprValue::Int(0);
             }
-            return ExprValue::Int(0);
         }
 
         if let ExprAST::Identifier(id) = base
@@ -1520,114 +1850,59 @@ impl ExprAST {
             };
         }
 
-        if member == "to_i" {
-            return base.eval(ctx);
+        if let ExprAST::MemberAccess {
+            base: io_owner,
+            member: io_member,
+            is_enum: false,
+        } = base
+            && io_member == "_io"
+        {
+            if let Some(owner_candidates) = io_owner.collect_candidate_paths(ctx) {
+                for owner_path in &owner_candidates {
+                    if let Some(val) = Self::lookup_ctx_path(&format!("{owner_path}._io.{member}"), ctx) {
+                        return val;
+                    }
+                }
+            }
+            if let ExprAST::Identifier(owner_id) = &**io_owner
+                && owner_id == "_root"
+                && let Some(val) = Self::lookup_ctx_path(&format!("_root._io.{member}"), ctx)
+            {
+                return val;
+            }
+            return match member {
+                "eof" => ExprValue::Bool(ctx.stream_eof),
+                "size" => ExprValue::Int(ctx.stream_size as i64),
+                "pos" => ExprValue::Int(ctx.stream_pos as i64),
+                _ => ExprValue::Int(0),
+            };
         }
 
-        let candidate_paths = {
-            let mut paths = Vec::new();
-
-            // Extract chain of member access identifiers, e.g. header.len_body_compressed
-            let mut parts = Vec::new();
-            parts.push(member.to_string());
-            let mut curr = base;
-            let mut valid = true;
-            while let ExprAST::MemberAccess { base: b, member: m, is_enum } = curr {
-                if *is_enum {
-                    valid = false;
-                    break;
-                }
-                parts.push(m.clone());
-                curr = b;
-            }
-
-            if valid {
-                if let ExprAST::Identifier(root_id) = curr {
-                    let (prefix, matched_element) = if root_id == "_root" {
-                        (Vec::new(), None)
-                    } else if root_id == "_parent" {
-                        let mut p = ctx.base_path.to_vec();
-                        if !p.is_empty() {
-                            p.pop();
-                        }
-                        (p, None)
-                    } else if root_id == "_" {
-                        let mut p = ctx.base_path.to_vec();
-                        p.push("_".to_string());
-                        (p, None)
-                    } else {
-                        let mut p = ctx.base_path.to_vec();
-                        if let Some(idx) = p.iter().rposition(|x| {
-                            let base_name = x.split('[').next().unwrap_or(x);
-                            base_name == root_id
-                        }) {
-                            let elem = p[idx].clone();
-                            p.truncate(idx);
-                            (p, Some(elem))
-                        } else {
-                            (p, None)
-                        }
-                    };
-
-                    // 1. Exact path appending root_id and parts to current base_path
-                    let mut p1 = ctx.base_path.to_vec();
-                    p1.push(root_id.clone());
-                    p1.extend(parts.iter().cloned().rev());
-                    paths.push(p1.join("."));
-
-                    // 2. Truncated path if root_id is already in base_path
-                    let mut p2 = prefix.clone();
-                    if let Some(ref elem) = matched_element {
-                        p2.push(elem.clone());
-                    } else if root_id != "_root" && root_id != "_parent" && root_id != "_" {
-                        p2.push(root_id.clone());
-                    }
-                    p2.extend(parts.iter().cloned().rev());
-                    paths.push(p2.join("."));
-
-                    // 3. Walk up scope hierarchy from base_path
-                    let mut scope = ctx.base_path.to_vec();
-                    while !scope.is_empty() {
-                        scope.pop();
-                        let mut p = scope.clone();
-                        if root_id != "_root" && root_id != "_parent" && root_id != "_" {
-                            p.push(root_id.clone());
-                        }
-                        p.extend(parts.iter().cloned().rev());
-                        paths.push(p.join("."));
-                    }
-
-                    // 4. Relative path without base_path
-                    let mut root_parts = vec![root_id.clone()];
-                    root_parts.extend(parts.iter().cloned().rev());
-                    paths.push(root_parts.join("."));
-                }
-            } else {
-                let base_val = base.eval(ctx);
-                let base_str = base_val.to_string_val();
-                if base_str.is_empty() {
-                    paths.push(member.to_string());
-                } else {
-                    paths.push(format!("{}.{}", base_str, member));
-                }
-            }
-            paths
+        let full_node = ExprAST::MemberAccess {
+            base: Box::new(base.clone()),
+            member: member.to_string(),
+            is_enum: false,
         };
+        let candidate_paths = full_node.collect_candidate_paths(ctx);
 
-        for path in &candidate_paths {
-            if let Some(val) = ctx.string_values.get(path) {
-                return ExprValue::Str(val.clone());
-            }
-            if let Some(val) = ctx.byte_arrays.get(path) {
-                return ExprValue::Bytes(val.clone());
-            }
-            if let Some(val) = ctx.values.get(path) {
-                return ExprValue::Int(*val);
+        if let Some(ref paths) = candidate_paths {
+            for path in paths {
+                if let Some(val) = Self::lookup_ctx_path(path, ctx) {
+                    return val;
+                }
             }
         }
 
-        let first_path = candidate_paths.first().cloned().unwrap_or_default();
+        // Try built-in property evaluation on `base` (using silent context if `base` is an identifier/path)
+        let silent_ctx = EvalContext { errors: None, ..*ctx };
+        let base_val = base.eval(if candidate_paths.is_some() { &silent_ctx } else { ctx });
+        if let Some(prop_val) = Self::eval_builtin_property(base_val, member) {
+            return prop_val;
+        }
+
+        let first_path = candidate_paths.and_then(|p| p.into_iter().next()).unwrap_or_else(|| member.to_string());
         if !first_path.contains("extra")
+            && !first_path.starts_with('_')
             && let Some(err_cell) = ctx.errors
         {
             err_cell.borrow_mut().push(crate::core::structure::types::ParseError {
@@ -1849,6 +2124,10 @@ impl<'a> ASTParser<'a> {
                     operand: Box::new(operand),
                 }
             }
+            Token::Plus => {
+                self.advance();
+                self.parse_unary()
+            }
             Token::Minus => {
                 self.advance();
                 let operand = self.parse_unary();
@@ -1897,6 +2176,23 @@ impl<'a> ASTParser<'a> {
                     self.advance();
                 }
                 inner
+            }
+            Token::LBracket => {
+                let mut elements = Vec::new();
+                if self.current_token != Token::RBracket && self.current_token != Token::EOF {
+                    loop {
+                        elements.push(self.parse_expression());
+                        if self.current_token == Token::Comma {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                if self.current_token == Token::RBracket {
+                    self.advance();
+                }
+                ExprAST::Array(elements)
             }
             _ => ExprAST::Number(0),
         };

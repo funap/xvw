@@ -4,6 +4,7 @@
 /// supporting bit-level reading, endian-specific integer/float reads, and substreams.
 pub struct KaitaiStream<'a> {
     data: &'a [u8],
+    root_data: &'a [u8],
     pos: usize,
     bits: u64,
     bits_left: usize,
@@ -13,10 +14,25 @@ impl<'a> KaitaiStream<'a> {
     pub fn new(data: &'a [u8]) -> Self {
         Self {
             data,
+            root_data: data,
             pos: 0,
             bits: 0,
             bits_left: 0,
         }
+    }
+
+    pub fn new_with_root(data: &'a [u8], root_data: &'a [u8]) -> Self {
+        Self {
+            data,
+            root_data,
+            pos: 0,
+            bits: 0,
+            bits_left: 0,
+        }
+    }
+
+    pub fn root_data(&self) -> &'a [u8] {
+        self.root_data
     }
 
     pub fn pos(&self) -> u64 {
@@ -228,7 +244,7 @@ impl<'a> KaitaiStream<'a> {
 
         let start = self.pos;
         self.pos += size;
-        Some(KaitaiStream::new(&self.data[start..start + size]))
+        Some(KaitaiStream::new_with_root(&self.data[start..start + size], self.root_data))
     }
 
     #[inline(always)]
@@ -320,6 +336,11 @@ pub mod process {
         let amount = amount % 8;
         let result = data.iter().map(|&b| b.rotate_left(amount)).collect();
         Ok(result)
+    }
+
+    pub fn rotate_right(data: &[u8], amount: u32, group_size: usize) -> Result<Vec<u8>, String> {
+        let amount = amount % 8;
+        rotate_left(data, (8 - amount) % 8, group_size)
     }
 
     pub fn zlib_decompress(data: &[u8]) -> Option<Vec<u8>> {

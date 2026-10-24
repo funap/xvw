@@ -29,11 +29,73 @@ pub struct KsyParam {
     pub doc: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct KsyMeta {
     #[serde(default)]
     pub id: String,
-    pub endian: Option<String>,
+    pub endian: Option<serde_yaml::Value>,
+    #[serde(rename = "bit-endian")]
+    pub bit_endian: Option<String>,
+    pub encoding: Option<String>,
+}
+
+impl KsyMeta {
+    /// Returns the static endianness string (`"le"` or `"be"`) if `endian` is a plain string.
+    pub fn fixed_endian(&self) -> Option<&str> {
+        self.endian.as_ref().and_then(|v| v.as_str())
+    }
+
+    /// Returns `(switch_on_expr, cases_map)` if `endian` is a calculated `switch-on` mapping.
+    pub fn switch_endian(&self) -> Option<(String, HashMap<String, String>)> {
+        self.endian.as_ref().and_then(parse_switch_map)
+    }
+}
+
+/// Extracts `(switch_on, cases)` from a YAML mapping with `switch-on` and `cases` keys.
+pub fn parse_switch_map(val: &serde_yaml::Value) -> Option<(String, HashMap<String, String>)> {
+    let map = val.as_mapping()?;
+    let switch_on = map.get("switch-on")?.as_str()?.to_string();
+    let cases_map = map.get("cases")?.as_mapping()?;
+    let mut cases = HashMap::new();
+    for (k, v) in cases_map {
+        let key = match k {
+            serde_yaml::Value::String(s) => s.clone(),
+            serde_yaml::Value::Number(n) => n.to_string(),
+            serde_yaml::Value::Bool(b) => b.to_string(),
+            serde_yaml::Value::Sequence(seq) => {
+                let parts: Vec<String> = seq
+                    .iter()
+                    .map(|item| match item {
+                        serde_yaml::Value::Number(n) => n.to_string(),
+                        serde_yaml::Value::String(s) => s.clone(),
+                        _ => String::new(),
+                    })
+                    .collect();
+                format!("[{}]", parts.join(", "))
+            }
+            _ => continue,
+        };
+        if let Some(s) = v.as_str() {
+            cases.insert(key.clone(), s.to_string());
+            let trimmed = key.trim();
+            if (trimmed.starts_with("0x") || trimmed.starts_with("0X"))
+                && let Ok(int_val) = i64::from_str_radix(&trimmed[2..].replace('_', ""), 16)
+            {
+                cases.insert(int_val.to_string(), s.to_string());
+                cases.insert(format!("0x{:x}", int_val), s.to_string());
+                cases.insert(format!("0x{:X}", int_val), s.to_string());
+                cases.insert(format!("0x{:04x}", int_val), s.to_string());
+                cases.insert(format!("0x{:04X}", int_val), s.to_string());
+            } else if let Ok(int_val) = trimmed.parse::<i64>() {
+                cases.insert(int_val.to_string(), s.to_string());
+                cases.insert(format!("0x{:x}", int_val), s.to_string());
+                cases.insert(format!("0x{:X}", int_val), s.to_string());
+                cases.insert(format!("0x{:04x}", int_val), s.to_string());
+                cases.insert(format!("0x{:04X}", int_val), s.to_string());
+            }
+        }
+    }
+    Some((switch_on, cases))
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -100,6 +162,8 @@ pub enum KsyValue {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct KsyType {
     #[serde(default)]
+    pub meta: Option<KsyMeta>,
+    #[serde(default)]
     pub params: Vec<KsyParam>,
     #[serde(default)]
     pub seq: Vec<KsyAttr>,
@@ -132,39 +196,9 @@ impl KsyAttr {
             self.compiled_pos = ExprAST::compile(expr);
         }
         if let Some(ref val) = self.attr_type
-            && let Some(map) = val.as_mapping()
-            && let Some(switch_on_val) = map.get("switch-on")
-            && let Some(switch_on) = switch_on_val.as_str()
-            && let Some(cases_map) = map.get("cases").and_then(|v| v.as_mapping())
+            && let Some(parsed) = parse_switch_map(val)
         {
-            let mut cases = HashMap::new();
-            for (k, v) in cases_map {
-                let key = match k {
-                    serde_yaml::Value::String(s) => s.clone(),
-                    serde_yaml::Value::Number(n) => n.to_string(),
-                    serde_yaml::Value::Bool(b) => b.to_string(),
-                    _ => continue,
-                };
-                if let Some(s) = v.as_str() {
-                    cases.insert(key.clone(), s.to_string());
-                    let trimmed = key.trim();
-                    if let Ok(int_val) = i64::from_str_radix(trimmed.trim_start_matches("0x").trim_start_matches("0X"), 16) {
-                        cases.insert(int_val.to_string(), s.to_string());
-                        cases.insert(format!("0x{:x}", int_val), s.to_string());
-                        cases.insert(format!("0x{:X}", int_val), s.to_string());
-                        cases.insert(format!("0x{:04x}", int_val), s.to_string());
-                        cases.insert(format!("0x{:04X}", int_val), s.to_string());
-                    }
-                    if let Ok(int_val) = trimmed.parse::<i64>() {
-                        cases.insert(int_val.to_string(), s.to_string());
-                        cases.insert(format!("0x{:x}", int_val), s.to_string());
-                        cases.insert(format!("0x{:X}", int_val), s.to_string());
-                        cases.insert(format!("0x{:04x}", int_val), s.to_string());
-                        cases.insert(format!("0x{:04X}", int_val), s.to_string());
-                    }
-                }
-            }
-            self.compiled_switch = Some((switch_on.to_string(), cases));
+            self.compiled_switch = Some(parsed);
         }
     }
 }
