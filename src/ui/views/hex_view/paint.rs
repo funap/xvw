@@ -383,6 +383,8 @@ pub struct RowPaintParams<'a> {
     pub comment_col_width: f32,
     pub font_family: SharedString,
     pub font_size: Pixels,
+    pub desc_palette: DescriptionPalette,
+    pub active_leaf_field: Option<&'a IndexedField>,
 }
 
 /// Sanitizes a string to guarantee single-line presentation without newlines or carriage returns.
@@ -811,7 +813,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
     let active_row_highlights = row_highlights(params.highlights, params.max_highlight_len, offset, next_offset);
     let is_dark = cx.theme().mode.is_dark();
-    let desc_palette = DescriptionPalette::from_theme(cx.theme());
+    let desc_palette = params.desc_palette;
     let (selection_bg, caret_color, muted_color, fg_color, accent_fg_color, border_color, _sidebar_bg, bg_color_theme) = {
         let theme = cx.theme();
         (
@@ -830,11 +832,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let insert_cursor_active = params.insert_mode && params.is_focused && window.is_window_active();
     let insert_selection_active = params.min_sel <= params.max_sel;
 
-    let active_leaf_field = if is_struct_mode {
-        params.parse_result.and_then(|pr| pr.query_deepest_leaf_at(active_cursor_offset))
-    } else {
-        None
-    };
+    let active_leaf_field = params.active_leaf_field;
 
     // Check for Folded Bookmark or Unbookmarked Region Row
     let fold_summary = params
@@ -1006,14 +1004,44 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
     let physical_address = params.doc.offset_to_address(offset);
     let is_structure_header_row = is_struct_mode && chunk_len == 0;
+    let query_len = chunk_len.max(1);
+    let raw_containers: Cow<'_, [IndexedField]> = if let Some(parse_res) = params.parse_result {
+        if parse_res.is_live() {
+            Cow::Owned(parse_res.find_live_container_structs_starting_at(offset, query_len))
+        } else {
+            Cow::Borrowed(parse_res.find_container_structs_starting_at(offset, query_len))
+        }
+    } else {
+        Cow::Borrowed(&[])
+    };
     let is_collapsed_struct_row = is_struct_mode
         && chunk_len > 0
-        && params.parse_result.is_some_and(|pr| {
-            pr.find_container_structs_starting_at(offset, chunk_len).iter().any(|c| {
-                c.offset == offset
-                    && (c.size == chunk_len || chunk_len == c.size.min(total_size.saturating_sub(offset)))
-                    && (params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id))
-            })
+        && raw_containers.iter().any(|c| {
+            c.offset == offset
+                && (c.size == chunk_len || chunk_len == c.size.min(total_size.saturating_sub(offset)))
+                && (params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id))
+        });
+    let row_leaves: Cow<'_, [IndexedField]> = if is_structure_header_row || is_collapsed_struct_row {
+        Cow::Borrowed(&[])
+    } else if let Some(parse_res) = params.parse_result {
+        if parse_res.is_live() {
+            Cow::Owned(parse_res.find_live_leaf_fields_starting_at(offset, chunk_len))
+        } else {
+            Cow::Borrowed(parse_res.find_leaf_fields_starting_at(offset, chunk_len))
+        }
+    } else {
+        Cow::Borrowed(&[])
+    };
+    let first_leaf = if !is_structure_header_row && !is_collapsed_struct_row && chunk_len > 0 {
+        params.parse_result.and_then(|pr| pr.query_deepest_leaf_at(offset))
+    } else {
+        None
+    };
+    let is_uniform_row_leaf = first_leaf.as_ref().is_none_or(|fl| fl.offset + fl.size >= next_offset)
+        && row_leaves.iter().all(|lf| {
+            first_leaf
+                .as_ref()
+                .is_some_and(|fl| lf.offset == fl.offset && lf.size == fl.size && lf.depth <= fl.depth)
         });
 
     // 1. Draw Left Columns (Address OR Offset)
@@ -1145,7 +1173,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     // grid during the text pass.
     let hex_chunk = if is_structure_header_row || is_collapsed_struct_row { &[] } else { chunk };
     let mut hex_source = build_hex_text_source(hex_chunk, offset, params.radix, params.group_size, params.is_big_endian);
-    let mut hex_text = hex_source.text.to_string();
+    let mut hex_shared_text = hex_source.text.clone();
     let mut pending_byte_char_start: Option<usize> = None;
 
     if let Some((pending_pos, pending_digit)) = params.pending_hex_digit
@@ -1162,12 +1190,12 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     byte_index
                 };
                 let char_start = group.text_start + visual_byte * 2;
-                if char_start + 1 < hex_text.len() {
+                if char_start + 1 < hex_shared_text.len() {
                     let digit_char = char::from_digit(pending_digit as u32, 16).unwrap_or('?');
-                    let mut bytes = hex_text.into_bytes();
+                    let mut bytes = hex_shared_text.to_string().into_bytes();
                     bytes[char_start] = digit_char as u8;
                     bytes[char_start + 1] = b'_';
-                    hex_text = String::from_utf8(bytes).expect("valid utf8");
+                    hex_shared_text = SharedString::from(String::from_utf8(bytes).expect("valid utf8"));
                     pending_byte_char_start = Some(char_start);
                 }
             }
@@ -1175,7 +1203,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             let digit_char = char::from_digit(pending_digit as u32, 16).unwrap_or('?');
             let group_bytes = params.group_size.byte_count();
             if hex_source.groups.is_empty() {
-                hex_text = format!("{}_", digit_char);
+                hex_shared_text = SharedString::from(format!("{}_", digit_char));
                 hex_source.groups.push(HexGroupInfo {
                     chunk_start: 0,
                     chunk_end: 0,
@@ -1189,11 +1217,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 let last_group_len = last_group.chunk_end - last_group.chunk_start;
                 let is_complete = (last_group.start_slot + last_group_len) == group_bytes;
                 if is_complete {
+                    let mut hex_text = hex_shared_text.to_string();
                     hex_text.push(' ');
                     let text_start = hex_text.len();
                     hex_text.push(digit_char);
                     hex_text.push('_');
                     let text_end = hex_text.len();
+                    hex_shared_text = SharedString::from(hex_text);
                     hex_source.groups.push(HexGroupInfo {
                         chunk_start: chunk_len,
                         chunk_end: chunk_len,
@@ -1205,11 +1235,11 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 } else {
                     let visual_slot = last_group.start_slot + last_group_len;
                     let char_start = last_group.text_start + visual_slot * 2;
-                    if char_start + 1 < hex_text.len() {
-                        let mut bytes = hex_text.into_bytes();
+                    if char_start + 1 < hex_shared_text.len() {
+                        let mut bytes = hex_shared_text.to_string().into_bytes();
                         bytes[char_start] = digit_char as u8;
                         bytes[char_start + 1] = b'_';
-                        hex_text = String::from_utf8(bytes).expect("valid utf8");
+                        hex_shared_text = SharedString::from(String::from_utf8(bytes).expect("valid utf8"));
                         pending_byte_char_start = Some(char_start);
                     }
                 }
@@ -1274,12 +1304,15 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         });
     }
 
-    let shaped_hex = window
-        .text_system()
-        .shape_line(SharedString::from(hex_text.clone()), params.font_size, &hex_runs, None);
+    let hex_text_len = hex_shared_text.len();
+    let shaped_hex = if !hex_shared_text.is_empty() {
+        Some(window.text_system().shape_line(hex_shared_text, params.font_size, &hex_runs, None))
+    } else {
+        None
+    };
     let pending_edit_colors = pending_byte_char_start.map(|char_start| (char_start, caret_color, muted_color.opacity(0.6)));
     let text_origin_x = hex_start_x - px(params.hex_scroll_x);
-    let total_data_width = f32::from(hex_grid_width(hex_text.len(), params.hex_cell_width));
+    let total_data_width = f32::from(hex_grid_width(hex_text_len, params.hex_cell_width));
 
     // 2. Background Quads Pass for Data Items (with clipping mask)
     let hex_mask_bounds = Bounds::new(point(hex_start_x, params.bounds.top()), size(px(params.hex_col_width), px(ROW_HEIGHT)));
@@ -1308,10 +1341,12 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
                     // 0. Structure field background tint and active underline
                     if is_struct_mode && let Some(parse_res) = params.parse_result {
-                        let field_at_item = parse_res.query_deepest_leaf_at(item_start_offset);
-                        let is_in_active_field = active_leaf_field
-                            .as_ref()
-                            .is_some_and(|af| item_start_offset >= af.offset && item_start_offset < af.offset + af.size);
+                        let field_at_item: Option<Cow<'_, IndexedField>> = if is_uniform_row_leaf {
+                            first_leaf.as_deref().map(Cow::Borrowed)
+                        } else {
+                            parse_res.query_deepest_leaf_at(item_start_offset)
+                        };
+                        let is_in_active_field = active_leaf_field.is_some_and(|af| item_start_offset >= af.offset && item_start_offset < af.offset + af.size);
 
                         if let Some(ref field) = field_at_item {
                             let field_hsla = field.color.map(Hsla::from).unwrap_or(desc_palette.type_name);
@@ -1469,9 +1504,9 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 }
 
                 // 3. Text Pass for Data Items (same shaped line as the geometry pass)
-                if !hex_source.text.is_empty() {
+                if let Some(ref shaped_hex) = shaped_hex {
                     paint_centered_hex_glyphs(
-                        &shaped_hex,
+                        shaped_hex,
                         &hex_source.groups,
                         &group_text_colors,
                         pending_edit_colors,
@@ -1619,10 +1654,12 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
                         // Structure field background tint and active underline in ASCII
                         if is_struct_mode && let Some(parse_res) = params.parse_result {
-                            let is_ascii_in_active = active_leaf_field
-                                .as_ref()
-                                .is_some_and(|af| byte_pos >= af.offset && byte_pos < af.offset + af.size);
-                            let ascii_field = parse_res.query_deepest_leaf_at(byte_pos);
+                            let is_ascii_in_active = active_leaf_field.is_some_and(|af| byte_pos >= af.offset && byte_pos < af.offset + af.size);
+                            let ascii_field: Option<Cow<'_, IndexedField>> = if is_uniform_row_leaf {
+                                first_leaf.as_deref().map(Cow::Borrowed)
+                            } else {
+                                parse_res.query_deepest_leaf_at(byte_pos)
+                            };
                             if let Some(ref field) = ascii_field {
                                 let field_hsla = field.color.map(Hsla::from).unwrap_or(desc_palette.type_name);
                                 let bg_opacity = if is_ascii_in_active { 0.16 } else { 0.05 };
@@ -1828,12 +1865,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     // 4. Description Column (when structure definition is present)
     if let Some(parse_res) = params.parse_result {
         let is_structure_header_row = chunk_len == 0;
-        let query_len = chunk_len.max(1);
-        let mut container_structs: Cow<'_, [IndexedField]> = if parse_res.is_live() {
-            Cow::Owned(parse_res.find_live_container_structs_starting_at(offset, query_len))
-        } else {
-            Cow::Borrowed(parse_res.find_container_structs_starting_at(offset, query_len))
-        };
+        let mut container_structs: Cow<'_, [IndexedField]> = raw_containers;
 
         // A structure header gets its own zero-byte row. On the following
         // data row, keep only collapsed containers visible so the parent is
@@ -1888,13 +1920,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             }
         }
 
-        let leaf_fields: Cow<'_, [IndexedField]> = if is_structure_header_row || is_collapsed_struct_row {
-            Cow::Owned(Vec::new())
-        } else if parse_res.is_live() {
-            Cow::Owned(parse_res.find_live_leaf_fields_starting_at(offset, chunk_len))
-        } else {
-            Cow::Borrowed(parse_res.find_leaf_fields_starting_at(offset, chunk_len))
-        };
+        let leaf_fields: Cow<'_, [IndexedField]> = row_leaves;
         let active_ranges = if parse_res.is_live() {
             Vec::new()
         } else {
@@ -1908,7 +1934,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 .unwrap_or(false);
 
         let continuation_leaf = if !is_structure_header_row && !is_collapsed_struct_row && container_structs.is_empty() && leaf_fields.is_empty() {
-            parse_res.query_deepest_leaf_at(offset)
+            first_leaf
         } else {
             None
         };
@@ -1957,7 +1983,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         strikethrough: None,
                     });
                 }
-                let is_active_field = active_leaf_field.as_ref().is_some_and(|af| af.offset == f.offset && af.size == f.size);
+                let is_active_field = active_leaf_field.is_some_and(|af| af.offset == f.offset && af.size == f.size);
                 let (leaf_text, leaf_runs) = build_leaf_field_runs(f, font.clone(), &desc_palette, include_doc, is_active_field);
                 desc_full_text.push_str(&leaf_text);
                 desc_runs.extend(leaf_runs);
@@ -2050,12 +2076,12 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         .bookmark_items
         .iter()
         .filter(|h| {
-            if h.comment.trim().is_empty() {
+            let h_end_offset = h.offset.saturating_add(h.size);
+            let h_last_byte = h_end_offset.saturating_sub(1).max(h.offset);
+            if h.offset > next_offset || h_last_byte < offset || h.comment.trim().is_empty() {
                 return false;
             }
             let h_start_row = crate::core::editor::Editor::find_line_index(h.offset, params.line_starts);
-            let h_end_offset = h.offset.saturating_add(h.size);
-            let h_last_byte = h_end_offset.saturating_sub(1).max(h.offset);
             let h_end_row = crate::core::editor::Editor::find_line_index(h_last_byte, params.line_starts);
             let display_row = h_start_row.max(params.top_visible_row);
             params.row_idx == display_row && params.row_idx <= h_end_row

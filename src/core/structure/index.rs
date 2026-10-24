@@ -103,18 +103,63 @@ pub struct StructureIndex {
     pub field_breaks: Arc<Vec<usize>>,
     pub(crate) active_range_tree_base: usize,
     pub(crate) active_range_max_tree: Vec<usize>,
+    pub(crate) leaf_prefix_max_end: Vec<usize>,
+    pub(crate) leaf_tree_base: usize,
+    pub(crate) leaf_max_tree: Vec<usize>,
 }
 
 impl StructureIndex {
     pub fn find_deepest_leaf_at(&self, offset: usize) -> Option<&IndexedField> {
         let idx = self.leaf_fields.partition_point(|f| f.offset <= offset);
-        if idx == 0 {
+        if idx == 0 || self.leaf_prefix_max_end.get(idx - 1).is_none_or(|&max_end| max_end <= offset) {
             return None;
         }
+
+        // Fast path for non-overlapping leaf fields: when no earlier leaf extends past `offset`,
+        // `leaf_fields[idx - 1]` is guaranteed to be the sole leaf covering `offset`.
+        let prev_max = if idx >= 2 { self.leaf_prefix_max_end[idx - 2] } else { 0 };
+        if prev_max <= offset {
+            return Some(&self.leaf_fields[idx - 1]);
+        }
+
         let mut best: Option<&IndexedField> = None;
-        for field in self.leaf_fields[..idx].iter().rev() {
-            if offset < field.offset + field.size && best.is_none_or(|b| field.depth > b.depth) {
-                best = Some(field);
+        let tree = &self.leaf_max_tree;
+        if tree.is_empty() {
+            for (i, field) in self.leaf_fields[..idx].iter().enumerate().rev() {
+                if self.leaf_prefix_max_end[i] <= offset {
+                    break;
+                }
+                if offset < field.offset + field.size && best.is_none_or(|b| field.depth > b.depth) {
+                    best = Some(field);
+                }
+            }
+            return best;
+        }
+
+        let mut work = [(0usize, 0usize, 0usize); 64];
+        let mut work_len = 1;
+        work[0] = (1, 0, self.leaf_tree_base);
+        while work_len > 0 {
+            work_len -= 1;
+            let (node, segment_start, segment_end) = work[work_len];
+            if segment_start >= idx || tree[node] <= offset {
+                continue;
+            }
+
+            if segment_end - segment_start == 1 {
+                let field = &self.leaf_fields[segment_start];
+                if offset < field.offset + field.size && best.is_none_or(|b| field.depth > b.depth) {
+                    best = Some(field);
+                }
+                continue;
+            }
+
+            let middle = segment_start + (segment_end - segment_start) / 2;
+            if work_len + 2 <= work.len() {
+                // Push left first, then right so right is popped first (matching .iter().rev() order).
+                work[work_len] = (node * 2, segment_start, middle);
+                work[work_len + 1] = (node * 2 + 1, middle, segment_end);
+                work_len += 2;
             }
         }
         best
@@ -194,6 +239,8 @@ impl StructureIndexBuilder {
         self.field_breaks.sort_unstable();
         self.field_breaks.dedup();
         let (active_range_tree_base, active_range_max_tree) = Self::build_active_range_tree(&self.active_ranges);
+        let leaf_prefix_max_end = Self::build_leaf_prefix_max_end(&self.leaf_fields);
+        let (leaf_tree_base, leaf_max_tree) = Self::build_leaf_max_tree(&self.leaf_fields);
 
         StructureIndex {
             container_structs: self.container_structs,
@@ -203,15 +250,20 @@ impl StructureIndexBuilder {
             field_breaks: Arc::new(self.field_breaks),
             active_range_tree_base,
             active_range_max_tree,
+            leaf_prefix_max_end,
+            leaf_tree_base,
+            leaf_max_tree,
         }
     }
 
     pub(crate) fn finish_live(mut self) -> LiveIndexBatch {
         self.container_structs.sort_by_key(|field| field.offset);
         self.leaf_fields.sort_by_key(|field| field.offset);
+        let leaf_prefix_max_end = Self::build_leaf_prefix_max_end(&self.leaf_fields);
         LiveIndexBatch {
             container_structs: self.container_structs,
             leaf_fields: self.leaf_fields,
+            leaf_prefix_max_end,
         }
     }
 
@@ -270,6 +322,31 @@ impl StructureIndexBuilder {
 
         (base, tree)
     }
+
+    fn build_leaf_prefix_max_end(leaves: &[IndexedField]) -> Vec<usize> {
+        let mut prefix = Vec::with_capacity(leaves.len());
+        let mut running_max = 0;
+        for leaf in leaves {
+            running_max = running_max.max(leaf.offset + leaf.size);
+            prefix.push(running_max);
+        }
+        prefix
+    }
+
+    fn build_leaf_max_tree(leaves: &[IndexedField]) -> (usize, Vec<usize>) {
+        if leaves.is_empty() {
+            return (0, Vec::new());
+        }
+        let base = leaves.len().next_power_of_two();
+        let mut tree = vec![0; base * 2];
+        for (index, leaf) in leaves.iter().enumerate() {
+            tree[base + index] = leaf.offset + leaf.size;
+        }
+        for index in (1..base).rev() {
+            tree[index] = tree[index * 2].max(tree[index * 2 + 1]);
+        }
+        (base, tree)
+    }
 }
 
 /// Indexes newly parsed chunks for the live structure view.
@@ -282,6 +359,7 @@ impl StructureIndexBuilder {
 pub(crate) struct LiveIndexBatch {
     container_structs: Vec<IndexedField>,
     leaf_fields: Vec<IndexedField>,
+    leaf_prefix_max_end: Vec<usize>,
 }
 
 #[derive(Debug, Default)]
@@ -339,7 +417,10 @@ impl LiveStructureIndex {
         for batch in batches.iter() {
             let leaves = &batch.leaf_fields;
             let idx = leaves.partition_point(|f| f.offset <= offset);
-            for field in leaves[..idx].iter().rev() {
+            for (i, field) in leaves[..idx].iter().enumerate().rev() {
+                if batch.leaf_prefix_max_end[i] <= offset {
+                    break;
+                }
                 if offset < field.offset + field.size && best.as_ref().is_none_or(|b| field.depth > b.depth) {
                     best = Some(field.clone());
                 }

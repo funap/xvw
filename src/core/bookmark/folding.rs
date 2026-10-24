@@ -15,7 +15,7 @@ pub struct FoldedBookmarkSummary {
 
 impl BookmarkStore {
     pub fn unfold_at(&mut self, offset: usize, folded_regions: &BTreeMap<usize, usize>) -> bool {
-        let found = folded_regions.iter().find(|&(&start, &end)| offset >= start && offset < end);
+        let found = folded_regions.range(..=offset).next_back().filter(|&(_, &end)| offset < end);
         if let Some((&start, &end)) = found {
             let mut colors_to_decompose = HashSet::new();
             let mut ids_to_unhide = Vec::new();
@@ -62,13 +62,13 @@ impl BookmarkStore {
     }
 
     pub fn computed_folded_regions(&self, total_size: usize) -> BTreeMap<usize, usize> {
-        if total_size == 0 {
-            return BTreeMap::new();
-        }
-
         let is_hide_unbookmarked = self.hide_unbookmarked;
         let hidden_colors = &self.hidden_colors;
         let hidden_ids = &self.hidden_ids;
+
+        if total_size == 0 || (!is_hide_unbookmarked && hidden_colors.is_empty() && hidden_ids.is_empty()) {
+            return BTreeMap::new();
+        }
 
         let mut bookmarked_ranges = Vec::new();
         let mut hidden_ranges = Vec::new();
@@ -78,7 +78,9 @@ impl BookmarkStore {
                 let start = item.offset.min(total_size);
                 let end = item.offset.saturating_add(item.size).min(total_size);
                 if start < end {
-                    bookmarked_ranges.push((start, end));
+                    if is_hide_unbookmarked {
+                        bookmarked_ranges.push((start, end));
+                    }
                     if hidden_colors.contains(&item.color) || hidden_ids.contains(&item.id) {
                         hidden_ranges.push((start, end));
                     }
@@ -142,6 +144,9 @@ impl BookmarkStore {
     }
 
     pub fn fold_bookmark_summary_at(&self, offset: usize, total_size: usize) -> Option<FoldedBookmarkSummary> {
+        if !self.hide_unbookmarked && self.hidden_colors.is_empty() && self.hidden_ids.is_empty() {
+            return None;
+        }
         let folded = self.computed_folded_regions(total_size);
         let fold_end = folded.get(&offset).copied()?;
 

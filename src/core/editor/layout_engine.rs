@@ -203,27 +203,17 @@ impl LayoutEngine {
                 doc.address_map.collect_segment_breaks(&mut segment_breaks);
                 doc.address_map.collect_gap_lines(&mut empty_line_counts);
 
-                let mut layout_events: Vec<usize> = Vec::new();
-                layout_events.extend(custom_breaks.iter().copied());
-                layout_events.extend(custom_joins.iter().copied());
-                layout_events.extend(segment_breaks.iter().copied());
-                layout_events.extend(empty_line_counts.keys().copied());
-                for (&s, &e) in folded_regions.iter() {
-                    layout_events.push(s);
-                    layout_events.push(e);
-                }
+                let mut field_breaks: Vec<usize> = Vec::new();
                 if show_inline_structure_view
                     && !is_parsing_structure
                     && let Some(parse_res) = &meta.parse_result
                 {
-                    parse_res.collect_field_breaks(&mut layout_events, collapsed_struct_ids);
+                    parse_res.collect_field_breaks(&mut field_breaks, collapsed_struct_ids);
                     parse_res.collect_structure_header_lines(&mut empty_line_counts, collapsed_struct_ids);
                 }
-                layout_events.extend(empty_line_counts.keys().copied());
-                layout_events.sort_unstable();
-                layout_events.dedup();
 
-                let mut break_events: Vec<usize> = Vec::new();
+                let mut break_events: Vec<usize> =
+                    Vec::with_capacity(custom_breaks.len() + segment_breaks.len() + empty_line_counts.len() + folded_regions.len() * 2 + field_breaks.len());
                 break_events.extend(custom_breaks.iter().copied());
                 break_events.extend(segment_breaks.iter().copied());
                 break_events.extend(empty_line_counts.keys().copied());
@@ -231,14 +221,15 @@ impl LayoutEngine {
                     break_events.push(s);
                     break_events.push(e);
                 }
-                if show_inline_structure_view
-                    && !is_parsing_structure
-                    && let Some(parse_res) = &meta.parse_result
-                {
-                    parse_res.collect_field_breaks(&mut break_events, collapsed_struct_ids);
-                }
+                break_events.extend_from_slice(&field_breaks);
                 break_events.sort_unstable();
                 break_events.dedup();
+
+                let mut layout_events: Vec<usize> = Vec::with_capacity(break_events.len() + custom_joins.len());
+                layout_events.extend_from_slice(&break_events);
+                layout_events.extend(custom_joins.iter().copied());
+                layout_events.sort_unstable();
+                layout_events.dedup();
 
                 let mut event_idx = 0;
                 let mut break_idx = 0;

@@ -472,11 +472,13 @@ impl ParseResult {
                     breaks.push(field.offset);
                     breaks.push(field.offset + field.size);
                 }
-                let key = struct_collapse_key(field.offset, depth, &field.id);
-                let is_collapsed = collapsed_structs.contains(&key) || collapsed_structs.contains(&field.id);
-                if !field.children.is_empty() && !is_collapsed {
-                    for child in field.children.iter().rev() {
-                        work.push((child, depth + 1));
+                if !field.children.is_empty() {
+                    let key = struct_collapse_key(field.offset, depth, &field.id);
+                    let is_collapsed = collapsed_structs.contains(&key) || collapsed_structs.contains(&field.id);
+                    if !is_collapsed {
+                        for child in field.children.iter().rev() {
+                            work.push((child, depth + 1));
+                        }
                     }
                 }
             }
@@ -494,9 +496,12 @@ impl ParseResult {
 
         let mut work = self.fields.iter().map(|field| (field, 0, false)).collect::<Vec<_>>();
         while let Some((field, depth, hidden_by_collapsed_parent)) = work.pop() {
+            if !field.is_struct() {
+                continue;
+            }
             let key = struct_collapse_key(field.offset, depth, &field.id);
             let is_collapsed = collapsed_structs.contains(&key) || collapsed_structs.contains(&field.id);
-            if field.is_struct() && !field.is_instance && field.size > 0 && !hidden_by_collapsed_parent && !is_collapsed {
+            if !field.is_instance && field.size > 0 && !hidden_by_collapsed_parent && !is_collapsed {
                 *empty_lines.entry(field.offset).or_default() += 1;
             }
 
@@ -517,9 +522,12 @@ impl ParseResult {
 
         let mut work = self.fields.iter().map(|field| (field, 0, false)).collect::<Vec<_>>();
         while let Some((field, depth, parent_collapsed)) = work.pop() {
+            if !field.is_struct() {
+                continue;
+            }
             let key = struct_collapse_key(field.offset, depth, &field.id);
             let is_collapsed = collapsed_structs.contains(&key) || collapsed_structs.contains(&field.id);
-            if field.is_struct() && !field.is_instance && field.size > 0 && !parent_collapsed && is_collapsed {
+            if !field.is_instance && field.size > 0 && !parent_collapsed && is_collapsed {
                 ranges.insert(field.offset, field.offset + field.size);
                 continue;
             }
@@ -534,7 +542,7 @@ impl ParseResult {
 
     /// Returns whether a visible structure starts at `offset`.
     pub fn has_structure_header_at(&self, offset: usize, collapsed_structs: &HashSet<String>) -> bool {
-        self.index.container_structs.iter().any(|header| {
+        self.find_container_structs_starting_at(offset, 1).iter().any(|header| {
             header.offset == offset
                 && header.size > 0
                 && !header.is_instance
@@ -588,8 +596,12 @@ impl ParseResult {
         }
 
         let tree = &self.index.active_range_max_tree;
-        let mut work = vec![(1, 0, self.index.active_range_tree_base)];
-        while let Some((node, segment_start, segment_end)) = work.pop() {
+        let mut work = [(0usize, 0usize, 0usize); 64];
+        let mut work_len = 1;
+        work[0] = (1, 0, self.index.active_range_tree_base);
+        while work_len > 0 {
+            work_len -= 1;
+            let (node, segment_start, segment_end) = work[work_len];
             if segment_start >= ranges.len() || ranges[segment_start].start >= row_end || tree[node] <= start_offset {
                 continue;
             }
@@ -603,9 +615,12 @@ impl ParseResult {
             }
 
             let middle = segment_start + (segment_end - segment_start) / 2;
-            // Push right first so results remain sorted by the range start.
-            work.push((node * 2 + 1, middle, segment_end));
-            work.push((node * 2, segment_start, middle));
+            if work_len + 2 <= work.len() {
+                // Push right first so results remain sorted by the range start.
+                work[work_len] = (node * 2 + 1, middle, segment_end);
+                work[work_len + 1] = (node * 2, segment_start, middle);
+                work_len += 2;
+            }
         }
         result
     }
@@ -848,5 +863,52 @@ mod tests {
         assert_eq!(result.find_deepest_leaf_at(1).map(|f| f.id.as_str()), Some("magic"));
         assert_eq!(result.find_deepest_leaf_at(4).map(|f| f.id.as_str()), Some("magic"));
         assert!(result.find_deepest_leaf_at(7).is_none());
+    }
+
+    #[test]
+    fn find_deepest_leaf_at_handles_overlapping_and_sparse_leaves() {
+        let mut outer_leaf = test_field("outer_payload", 0);
+        outer_leaf.size = 16;
+
+        let mut inner_leaf = test_field("inner_peek", 4);
+        inner_leaf.size = 4;
+        inner_leaf.is_instance = true;
+
+        let inner_struct = ParsedField {
+            id: "inner_container".into(),
+            field_type: "inner".into(),
+            offset: 4,
+            size: 4,
+            value: FieldValue::Struct,
+            color: RgbaColor::default(),
+            description: None,
+            children: vec![inner_leaf],
+            enum_label: None,
+            is_instance: false,
+        };
+
+        let mut trailing_leaf = test_field("trailing", 20);
+        trailing_leaf.size = 4;
+
+        let result = ParseResult::new("overlapping".into(), vec![outer_leaf, inner_struct, trailing_leaf], 24, Vec::new());
+
+        // Covered only by outer_payload (depth 0)
+        assert_eq!(result.find_deepest_leaf_at(0).map(|f| f.id.as_str()), Some("outer_payload"));
+        assert_eq!(result.find_deepest_leaf_at(3).map(|f| f.id.as_str()), Some("outer_payload"));
+        assert_eq!(result.find_deepest_leaf_at(8).map(|f| f.id.as_str()), Some("outer_payload"));
+        assert_eq!(result.find_deepest_leaf_at(15).map(|f| f.id.as_str()), Some("outer_payload"));
+
+        // Covered by both outer_payload (depth 0) and inner_peek (depth 1): deepest wins
+        assert_eq!(result.find_deepest_leaf_at(4).map(|f| f.id.as_str()), Some("inner_peek"));
+        assert_eq!(result.find_deepest_leaf_at(7).map(|f| f.id.as_str()), Some("inner_peek"));
+
+        // Unmapped gap between 16..20
+        assert!(result.find_deepest_leaf_at(16).is_none());
+        assert!(result.find_deepest_leaf_at(19).is_none());
+
+        // Covered by trailing leaf
+        assert_eq!(result.find_deepest_leaf_at(20).map(|f| f.id.as_str()), Some("trailing"));
+        assert_eq!(result.find_deepest_leaf_at(23).map(|f| f.id.as_str()), Some("trailing"));
+        assert!(result.find_deepest_leaf_at(24).is_none());
     }
 }

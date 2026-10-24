@@ -20,7 +20,7 @@ pub use layout::{
     ascii_byte_index_from_world_x, bounded_auto_fit_range, build_hex_text_source, calculate_scroll_top_for_range, can_chain_to_outer, cursor_in_row_offset,
     hex_grid_width, hex_grid_x, hex_group_x, is_cursor_header_column, make_hex_view_layout, measure_hex_cell_width, weighted_text_width,
 };
-pub use paint::{RowPaintParams, paint_hex_row, paint_scrollbar};
+pub use paint::{DescriptionPalette, RowPaintParams, paint_hex_row, paint_scrollbar};
 pub use types::*;
 
 use crate::actions::{
@@ -3700,6 +3700,9 @@ impl Render for HexView {
                             let colors = *cx.global::<ByteCategoryColors>();
                             ByteCategoryPalette::from_colors(colors, cx.theme())
                         });
+                        let desc_palette = DescriptionPalette::from_theme(cx.theme());
+                        let active_cursor_offset = if insert_mode { insert_cursor_offset } else { cursor_offset };
+                        let active_leaf_field = parse_result.as_deref().and_then(|pr| pr.query_deepest_leaf_at(active_cursor_offset));
 
                         for (k, row_idx) in (top_row..end_row).enumerate() {
                             let row_y = bounds.top() + px((k + top_overscroll_rows) as f32 * ROW_HEIGHT);
@@ -3748,6 +3751,8 @@ impl Render for HexView {
                                     comment_col_width,
                                     font_family: font_family.clone(),
                                     font_size,
+                                    desc_palette,
+                                    active_leaf_field: active_leaf_field.as_deref(),
                                 },
                                 window,
                                 cx,

@@ -931,12 +931,7 @@ impl Editor {
 
     pub fn is_folded(&self, offset: usize) -> bool {
         let regions = self.computed_folded_regions();
-        for (&s, &e) in regions.iter() {
-            if offset >= s && offset < e {
-                return true;
-            }
-        }
-        false
+        regions.range(..=offset).next_back().is_some_and(|(_, &end)| offset < end)
     }
 
     pub fn fold_end_at(&self, start: usize) -> Option<usize> {
@@ -946,12 +941,7 @@ impl Editor {
 
     pub fn fold_containing(&self, offset: usize) -> Option<(usize, usize)> {
         let regions = self.computed_folded_regions();
-        for (&s, &e) in regions.iter() {
-            if offset >= s && offset < e {
-                return Some((s, e));
-            }
-        }
-        None
+        regions.range(..=offset).next_back().and_then(|(&s, &e)| (offset < e).then_some((s, e)))
     }
 
     /// Returns the base address of the document.
