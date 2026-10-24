@@ -106,6 +106,10 @@ impl EditorStructureState {
         self.collapsed_struct_ids.contains(struct_id)
     }
 
+    pub fn is_struct_collapsed(&self, collapse_key: &str, struct_id: &str) -> bool {
+        self.collapsed_struct_ids.contains(collapse_key) || self.collapsed_struct_ids.contains(struct_id)
+    }
+
     pub fn toggle_inline_view(&mut self) {
         self.show_inline_structure_view = !self.show_inline_structure_view;
     }

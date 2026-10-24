@@ -8,6 +8,12 @@ use std::sync::Arc;
 
 pub use crate::core::structure::collection::FieldCollection;
 pub use crate::core::structure::index::{ActiveStructRange, IndexedField, StructureIndex};
+
+/// Builds a unique key for identifying and collapsing a structure container instance.
+#[inline]
+pub fn struct_collapse_key(offset: usize, depth: usize, id: &str) -> String {
+    format!("{}:{}:{}", offset, depth, id)
+}
 pub(crate) use crate::core::structure::index::{LiveStructureIndex, StructureIndexBuilder};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -233,6 +239,23 @@ impl ParsedField {
         !self.children.is_empty() || matches!(self.value, FieldValue::Struct)
     }
 
+    pub fn format_value_compact(&self) -> String {
+        match &self.value {
+            FieldValue::String(s) => format!("\"{}\"", s),
+            FieldValue::Bytes(b) => format!("[{}B]", b.len()),
+            FieldValue::U8(v) => format!("0x{:X} ({})", v, v),
+            FieldValue::U16(v) => format!("0x{:X} ({})", v, v),
+            FieldValue::U32(v) => format!("0x{:X} ({})", v, v),
+            FieldValue::U64(v) => format!("0x{:X} ({})", v, v),
+            FieldValue::I8(v) => format!("{} (0x{:X})", v, *v as u8),
+            FieldValue::I16(v) => format!("{} (0x{:X})", v, *v as u16),
+            FieldValue::I32(v) => format!("{} (0x{:X})", v, *v as u32),
+            FieldValue::I64(v) => format!("{} (0x{:X})", v, *v as u64),
+            FieldValue::Struct => "{...}".to_string(),
+            other => other.to_string(),
+        }
+    }
+
     pub fn format_expression(&self) -> String {
         if self.is_struct() {
             return self.id.clone();
@@ -441,17 +464,19 @@ impl ParseResult {
 
         let mut work = Vec::new();
         for field in self.fields.iter() {
-            work.push(field);
-            while let Some(field) = work.pop() {
+            work.push((field, 0));
+            while let Some((field, depth)) = work.pop() {
                 // Sequence fields define physical stream boundaries and line breaks.
                 // Instance fields (computed values or pos-peeks) do not break the physical stream.
                 if !field.is_instance && field.size > 0 {
                     breaks.push(field.offset);
                     breaks.push(field.offset + field.size);
                 }
-                if !field.children.is_empty() && !collapsed_structs.contains(&field.id) {
+                let key = struct_collapse_key(field.offset, depth, &field.id);
+                let is_collapsed = collapsed_structs.contains(&key) || collapsed_structs.contains(&field.id);
+                if !field.children.is_empty() && !is_collapsed {
                     for child in field.children.iter().rev() {
-                        work.push(child);
+                        work.push((child, depth + 1));
                     }
                 }
             }
@@ -467,16 +492,17 @@ impl ParseResult {
             return;
         }
 
-        let mut work = self.fields.iter().map(|field| (field, false)).collect::<Vec<_>>();
-        while let Some((field, hidden_by_collapsed_parent)) = work.pop() {
-            let is_collapsed = collapsed_structs.contains(&field.id);
+        let mut work = self.fields.iter().map(|field| (field, 0, false)).collect::<Vec<_>>();
+        while let Some((field, depth, hidden_by_collapsed_parent)) = work.pop() {
+            let key = struct_collapse_key(field.offset, depth, &field.id);
+            let is_collapsed = collapsed_structs.contains(&key) || collapsed_structs.contains(&field.id);
             if field.is_struct() && !field.is_instance && field.size > 0 && !hidden_by_collapsed_parent && !is_collapsed {
                 *empty_lines.entry(field.offset).or_default() += 1;
             }
 
             if !hidden_by_collapsed_parent && !is_collapsed {
                 for child in field.children.iter().rev() {
-                    work.push((child, false));
+                    work.push((child, depth + 1, false));
                 }
             }
         }
@@ -484,10 +510,13 @@ impl ParseResult {
 
     /// Returns whether a visible structure starts at `offset`.
     pub fn has_structure_header_at(&self, offset: usize, collapsed_structs: &HashSet<String>) -> bool {
-        self.index
-            .container_structs
-            .iter()
-            .any(|header| header.offset == offset && header.size > 0 && !header.is_instance && !collapsed_structs.contains(&header.id))
+        self.index.container_structs.iter().any(|header| {
+            header.offset == offset
+                && header.size > 0
+                && !header.is_instance
+                && !collapsed_structs.contains(&header.collapse_key)
+                && !collapsed_structs.contains(&header.id)
+        })
     }
 
     pub fn find_container_structs_starting_at(&self, start_offset: usize, len: usize) -> &[IndexedField] {
@@ -504,6 +533,26 @@ impl ParseResult {
         let start_idx = leaves.partition_point(|f| f.offset < start_offset);
         let end_idx = start_idx + leaves[start_idx..].partition_point(|f| f.offset < end_offset);
         &leaves[start_idx..end_idx]
+    }
+
+    pub fn find_deepest_leaf_at(&self, offset: usize) -> Option<&IndexedField> {
+        self.index.find_deepest_leaf_at(offset)
+    }
+
+    pub fn find_container_headers_at(&self, offset: usize) -> Vec<&IndexedField> {
+        self.index.find_container_headers_at(offset)
+    }
+
+    pub fn find_live_deepest_leaf_at(&self, offset: usize) -> Option<IndexedField> {
+        self.live_index.as_ref().and_then(|idx| idx.find_deepest_leaf_at(offset))
+    }
+
+    pub fn query_deepest_leaf_at(&self, offset: usize) -> Option<std::borrow::Cow<'_, IndexedField>> {
+        if self.is_live() {
+            self.find_live_deepest_leaf_at(offset).map(std::borrow::Cow::Owned)
+        } else {
+            self.find_deepest_leaf_at(offset).map(std::borrow::Cow::Borrowed)
+        }
     }
 
     pub fn find_active_struct_ranges(&self, start_offset: usize, len: usize) -> Vec<&ActiveStructRange> {
@@ -673,5 +722,87 @@ mod tests {
 
         let cloned = result.fields.get(0).expect("deep root field").clone();
         assert_eq!(cloned.children.len(), 1);
+    }
+
+    #[test]
+    fn test_indexed_field_metadata_and_unique_collapse_key() {
+        let child1 = ParsedField {
+            id: "magic".into(),
+            field_type: "u2le".into(),
+            offset: 0,
+            size: 2,
+            value: FieldValue::U16(0x3412),
+            color: RgbaColor::new(10, 20, 30, 255),
+            description: Some("magic bytes".into()),
+            children: Vec::new(),
+            enum_label: Some("VALID".into()),
+            is_instance: false,
+        };
+        let section1 = ParsedField {
+            id: "section".into(),
+            field_type: "sec_t".into(),
+            offset: 0,
+            size: 4,
+            value: FieldValue::Struct,
+            color: RgbaColor::new(50, 60, 70, 255),
+            description: None,
+            children: vec![child1],
+            enum_label: None,
+            is_instance: false,
+        };
+        let child2 = ParsedField {
+            id: "magic".into(),
+            field_type: "u2le".into(),
+            offset: 4,
+            size: 2,
+            value: FieldValue::U16(0x7856),
+            color: RgbaColor::new(10, 20, 30, 255),
+            description: Some("magic bytes".into()),
+            children: Vec::new(),
+            enum_label: None,
+            is_instance: false,
+        };
+        let section2 = ParsedField {
+            id: "section".into(),
+            field_type: "sec_t".into(),
+            offset: 4,
+            size: 4,
+            value: FieldValue::Struct,
+            color: RgbaColor::new(50, 60, 70, 255),
+            description: None,
+            children: vec![child2],
+            enum_label: None,
+            is_instance: false,
+        };
+
+        let result = ParseResult::new("test_sections".into(), vec![section1, section2], 8, Vec::new());
+        assert_eq!(result.index.container_structs.len(), 2);
+        let sec1_idx = &result.index.container_structs[0];
+        let sec2_idx = &result.index.container_structs[1];
+        assert_eq!(sec1_idx.id, "section");
+        assert_eq!(sec2_idx.id, "section");
+        assert_ne!(sec1_idx.collapse_key, sec2_idx.collapse_key);
+        assert_eq!(sec1_idx.collapse_key, "0:0:section");
+        assert_eq!(sec2_idx.collapse_key, "4:0:section");
+
+        let leaf1 = &result.index.leaf_fields[0];
+        assert_eq!(leaf1.id, "magic");
+        assert_eq!(leaf1.type_name, "u2le");
+        assert_eq!(leaf1.formatted_value, "0x3412 (13330)");
+        assert_eq!(leaf1.enum_label.as_deref(), Some("VALID"));
+        assert_eq!(leaf1.description.as_deref(), Some("magic bytes"));
+        assert_eq!(leaf1.color, Some(RgbaColor::new(10, 20, 30, 255)));
+
+        let mut collapsed = HashSet::new();
+        collapsed.insert(sec1_idx.collapse_key.clone());
+        let mut header_lines = BTreeMap::new();
+        result.collect_structure_header_lines(&mut header_lines, &collapsed);
+        assert!(!header_lines.contains_key(&0));
+        assert!(header_lines.contains_key(&4));
+
+        assert_eq!(result.find_deepest_leaf_at(0).map(|f| f.id.as_str()), Some("magic"));
+        assert_eq!(result.find_deepest_leaf_at(1).map(|f| f.id.as_str()), Some("magic"));
+        assert_eq!(result.find_deepest_leaf_at(4).map(|f| f.id.as_str()), Some("magic"));
+        assert!(result.find_deepest_leaf_at(7).is_none());
     }
 }

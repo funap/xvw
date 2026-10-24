@@ -17,7 +17,7 @@ pub struct ActiveStructRange {
 /// The index intentionally does not retain `children` or raw byte buffers.
 /// Those values remain in `ParseResult::fields` and are only cloned when a
 /// snapshot itself is created.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IndexedField {
     pub id: String,
     pub offset: usize,
@@ -26,8 +26,14 @@ pub struct IndexedField {
     pub depth: usize,
     /// Whether this field is a computed/positioned instance rather than a physical field.
     pub is_instance: bool,
-    type_name: String,
-    expression: String,
+    pub type_name: String,
+    pub collapse_key: String,
+    pub formatted_value: String,
+    pub enum_label: Option<String>,
+    pub description: Option<String>,
+    pub color: Option<RgbaColor>,
+    pub validation_failed: bool,
+    pub expression: String,
 }
 
 impl IndexedField {
@@ -39,6 +45,12 @@ impl IndexedField {
             depth,
             is_instance: field.is_instance,
             type_name: field.field_type.clone(),
+            collapse_key: crate::core::structure::types::struct_collapse_key(field.offset, depth, &field.id),
+            formatted_value: String::new(),
+            enum_label: field.enum_label.clone(),
+            description: field.description.clone(),
+            color: Some(field.color),
+            validation_failed: false,
             expression: String::new(),
         }
     }
@@ -50,7 +62,13 @@ impl IndexedField {
             size: field.size,
             depth,
             is_instance: field.is_instance,
-            type_name: String::new(),
+            type_name: field.field_type.clone(),
+            collapse_key: crate::core::structure::types::struct_collapse_key(field.offset, depth, &field.id),
+            formatted_value: field.format_value_compact(),
+            enum_label: field.enum_label.clone(),
+            description: field.description.clone(),
+            color: Some(field.color),
+            validation_failed: false,
             expression: field.format_expression(),
         }
     }
@@ -85,6 +103,32 @@ pub struct StructureIndex {
     pub field_breaks: Arc<Vec<usize>>,
     pub(crate) active_range_tree_base: usize,
     pub(crate) active_range_max_tree: Vec<usize>,
+}
+
+impl StructureIndex {
+    pub fn find_deepest_leaf_at(&self, offset: usize) -> Option<&IndexedField> {
+        let idx = self.leaf_fields.partition_point(|f| f.offset <= offset);
+        if idx == 0 {
+            return None;
+        }
+        let mut best: Option<&IndexedField> = None;
+        for field in self.leaf_fields[..idx].iter().rev() {
+            if offset < field.offset + field.size && best.is_none_or(|b| field.depth > b.depth) {
+                best = Some(field);
+            }
+        }
+        best
+    }
+
+    pub fn find_container_headers_at(&self, offset: usize) -> Vec<&IndexedField> {
+        let containers = &self.container_structs;
+        let start_idx = containers.partition_point(|f| f.offset < offset);
+        let end_idx = start_idx + containers[start_idx..].partition_point(|f| f.offset <= offset);
+        containers[start_idx..end_idx]
+            .iter()
+            .filter(|f| f.offset == offset && !f.is_instance && f.size > 0)
+            .collect()
+    }
 }
 
 /// Incrementally collects the byte-range data needed by structure rendering.
@@ -287,5 +331,20 @@ impl LiveStructureIndex {
 
     pub(crate) fn find_leaf_fields_starting_at(&self, start_offset: usize, len: usize) -> Vec<IndexedField> {
         self.fields_starting_at(start_offset, len, |index| &index.leaf_fields)
+    }
+
+    pub(crate) fn find_deepest_leaf_at(&self, offset: usize) -> Option<IndexedField> {
+        let batches = self.batches.read().expect("live structure index read lock");
+        let mut best: Option<IndexedField> = None;
+        for batch in batches.iter() {
+            let leaves = &batch.leaf_fields;
+            let idx = leaves.partition_point(|f| f.offset <= offset);
+            for field in leaves[..idx].iter().rev() {
+                if offset < field.offset + field.size && best.as_ref().is_none_or(|b| field.depth > b.depth) {
+                    best = Some(field.clone());
+                }
+            }
+        }
+        best
     }
 }
