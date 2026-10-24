@@ -467,9 +467,11 @@ pub fn build_leaf_field_runs(
     yellow_color: Hsla,
     red_color: Hsla,
     include_comment: bool,
+    is_active: bool,
 ) -> (String, Vec<TextRun>) {
     let mut text = String::with_capacity(64);
     let mut runs = Vec::new();
+    let bg_color = if is_active { Some(accent_color.opacity(0.16)) } else { None };
 
     // 1. Color pip ("▪ ")
     let pip_color = field.color.map(Hsla::from).unwrap_or(accent_color);
@@ -478,7 +480,7 @@ pub fn build_leaf_field_runs(
         len: "▪ ".len(),
         font: font.clone(),
         color: pip_color,
-        background_color: None,
+        background_color: bg_color,
         underline: None,
         strikethrough: None,
     });
@@ -490,7 +492,7 @@ pub fn build_leaf_field_runs(
         len: text.len() - id_start,
         font: font.clone(),
         color: fg_color,
-        background_color: None,
+        background_color: bg_color,
         underline: None,
         strikethrough: None,
     });
@@ -504,7 +506,7 @@ pub fn build_leaf_field_runs(
             len: text.len() - type_start,
             font: font.clone(),
             color: muted_color,
-            background_color: None,
+            background_color: bg_color,
             underline: None,
             strikethrough: None,
         });
@@ -517,7 +519,7 @@ pub fn build_leaf_field_runs(
         len: text.len() - op_start,
         font: font.clone(),
         color: muted_color.opacity(0.7),
-        background_color: None,
+        background_color: bg_color,
         underline: None,
         strikethrough: None,
     });
@@ -543,7 +545,7 @@ pub fn build_leaf_field_runs(
         len: text.len() - val_start,
         font: font.clone(),
         color: val_color,
-        background_color: None,
+        background_color: bg_color,
         underline: None,
         strikethrough: None,
     });
@@ -558,7 +560,7 @@ pub fn build_leaf_field_runs(
             len: text.len() - enum_start,
             font: font.clone(),
             color: yellow_color,
-            background_color: None,
+            background_color: bg_color,
             underline: None,
             strikethrough: None,
         });
@@ -576,7 +578,7 @@ pub fn build_leaf_field_runs(
             len: text.len() - doc_start,
             font: font.clone(),
             color: muted_color.opacity(0.6),
-            background_color: None,
+            background_color: bg_color,
             underline: None,
             strikethrough: None,
         });
@@ -700,6 +702,12 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let font = font(params.font_family);
     let insert_cursor_active = params.insert_mode && params.is_focused && window.is_window_active();
     let insert_selection_active = params.min_sel <= params.max_sel;
+
+    let active_leaf_field = if is_struct_mode {
+        params.parse_result.and_then(|pr| pr.query_deepest_leaf_at(active_cursor_offset))
+    } else {
+        None
+    };
 
     // Check for Folded Bookmark or Unbookmarked Region Row
     let fold_summary = params
@@ -1156,6 +1164,34 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         group_end_x
                     };
 
+                    // 0. Structure field background tint and active underline
+                    if is_struct_mode && let Some(parse_res) = params.parse_result {
+                        let field_at_item = parse_res.query_deepest_leaf_at(item_start_offset);
+                        let is_in_active_field = active_leaf_field
+                            .as_ref()
+                            .is_some_and(|af| item_start_offset >= af.offset && item_start_offset < af.offset + af.size);
+
+                        if let Some(ref field) = field_at_item {
+                            let field_hsla = field.color.map(Hsla::from).unwrap_or(accent_color);
+                            let bg_opacity = if is_in_active_field { 0.18 } else { 0.06 };
+                            let field_tint = field_hsla.opacity(bg_opacity);
+
+                            let field_fill_bounds = Bounds::new(
+                                point(group_start_x, params.bounds.top() + px(1.0)),
+                                size(group_end_x - group_start_x, px(ROW_HEIGHT - 2.0)),
+                            );
+                            window.paint_quad(fill(field_fill_bounds, field_tint));
+
+                            if is_in_active_field {
+                                let underline_bounds = Bounds::new(
+                                    point(group_start_x, params.bounds.top() + px(ROW_HEIGHT - 2.5)),
+                                    size(group_end_x - group_start_x, px(1.5)),
+                                );
+                                window.paint_quad(fill(underline_bounds, field_hsla.opacity(0.85)));
+                            }
+                        }
+                    }
+
                     // 1. Highlight (bookmark) background quad
                     if let Some(color) = hl_color
                         && color.a > 0.0
@@ -1437,6 +1473,26 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             && hl_color.a > 0.0
                         {
                             window.paint_quad(fill(ascii_item_bounds, hl_color));
+                        }
+
+                        // Structure field background tint and active underline in ASCII
+                        if is_struct_mode && let Some(parse_res) = params.parse_result {
+                            let is_ascii_in_active = active_leaf_field
+                                .as_ref()
+                                .is_some_and(|af| byte_pos >= af.offset && byte_pos < af.offset + af.size);
+                            let ascii_field = parse_res.query_deepest_leaf_at(byte_pos);
+                            if let Some(ref field) = ascii_field {
+                                let field_hsla = field.color.map(Hsla::from).unwrap_or(accent_color);
+                                let bg_opacity = if is_ascii_in_active { 0.16 } else { 0.05 };
+                                window.paint_quad(fill(ascii_item_bounds, field_hsla.opacity(bg_opacity)));
+                                if is_ascii_in_active {
+                                    let underline_bounds = Bounds::new(
+                                        point(ascii_item_bounds.left(), params.bounds.top() + px(ROW_HEIGHT - 2.5)),
+                                        size(ascii_item_bounds.size.width, px(1.5)),
+                                    );
+                                    window.paint_quad(fill(underline_bounds, field_hsla.opacity(0.85)));
+                                }
+                            }
                         }
 
                         // Translucent selection quad (overlaid on top of highlight)
@@ -1744,6 +1800,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         strikethrough: None,
                     });
                 }
+                let is_active_field = active_leaf_field.as_ref().is_some_and(|af| af.offset == f.offset && af.size == f.size);
                 let (leaf_text, leaf_runs) = build_leaf_field_runs(
                     f,
                     font.clone(),
@@ -1754,6 +1811,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     yellow_color,
                     red_color,
                     include_doc,
+                    is_active_field,
                 );
                 desc_full_text.push_str(&leaf_text);
                 desc_runs.extend(leaf_runs);
@@ -2226,10 +2284,27 @@ mod tests {
             theme.yellow,
             theme.red,
             true,
+            false,
         );
 
         assert_eq!(text, "▪ magic: u2le = 0x3412 (13330) (VALID) // magic header");
         assert_eq!(runs.iter().map(|r| r.len).sum::<usize>(), text.len());
+        assert!(runs[0].background_color.is_none());
+
+        // Test active highlight
+        let (_act_text, act_runs) = build_leaf_field_runs(
+            &field,
+            font.clone(),
+            theme.foreground,
+            theme.muted_foreground,
+            theme.accent,
+            theme.green,
+            theme.yellow,
+            theme.red,
+            true,
+            true,
+        );
+        assert!(act_runs[0].background_color.is_some());
 
         let (cont_text, cont_runs) = build_continuation_field_runs("body", 0x10, font, theme.foreground, theme.muted_foreground);
         assert_eq!(cont_text, "↳ body (+0x10)");
