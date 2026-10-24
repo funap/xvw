@@ -241,7 +241,7 @@ impl ParsedField {
 
     pub fn format_value_compact(&self) -> String {
         match &self.value {
-            FieldValue::String(s) => format!("\"{}\"", s),
+            FieldValue::String(s) => format!("\"{}\"", s.escape_debug()),
             FieldValue::Bytes(b) => format!("[{}B]", b.len()),
             FieldValue::U8(v) => format!("0x{:X} ({})", v, v),
             FieldValue::U16(v) => format!("0x{:X} ({})", v, v),
@@ -264,7 +264,7 @@ impl ParsedField {
             return format!("{} = {} ({})", self.id, self.value, label);
         }
         match &self.value {
-            FieldValue::String(s) => format!("{} = \"{}\"", self.id, s),
+            FieldValue::String(s) => format!("{} = \"{}\"", self.id, s.escape_debug()),
             FieldValue::Bytes(b) => format!("{} = [{} bytes]", self.id, b.len()),
             FieldValue::U8(v) => format!("{} = {:X}h ({})", self.id, v, v),
             FieldValue::U16(v) => format!("{} = {:X}h ({})", self.id, v, v),
@@ -684,6 +684,21 @@ mod tests {
         };
         assert!(structure.is_struct());
         assert_eq!(structure.format_expression(), "header");
+
+        let str_field = ParsedField {
+            id: "greeting".into(),
+            field_type: "str".into(),
+            offset: 0,
+            size: 12,
+            value: FieldValue::String("hello\r\nworld\n".into()),
+            color: RgbaColor::default(),
+            description: None,
+            children: vec![],
+            enum_label: None,
+            is_instance: false,
+        };
+        assert_eq!(str_field.format_value_compact(), "\"hello\\r\\nworld\\n\"");
+        assert_eq!(str_field.format_expression(), "greeting = \"hello\\r\\nworld\\n\"");
     }
 
     #[test]

@@ -384,6 +384,16 @@ pub struct RowPaintParams<'a> {
     pub font_size: Pixels,
 }
 
+/// Sanitizes a string to guarantee single-line presentation without newlines or carriage returns.
+#[inline]
+pub fn clean_single_line(s: &str) -> Cow<'_, str> {
+    if s.contains('\n') || s.contains('\r') {
+        Cow::Owned(s.replace("\r\n", " ").replace(['\n', '\r'], " "))
+    } else {
+        Cow::Borrowed(s)
+    }
+}
+
 /// Builds formatted text and syntax-highlighted `TextRun`s for a container structure header.
 pub fn build_structure_header_runs(
     container: &IndexedField,
@@ -411,7 +421,7 @@ pub fn build_structure_header_runs(
 
     // 2. Field Name (id)
     let id_start = text.len();
-    text.push_str(&container.id);
+    text.push_str(&clean_single_line(&container.id));
     runs.push(TextRun {
         len: text.len() - id_start,
         font: font.clone(),
@@ -425,7 +435,7 @@ pub fn build_structure_header_runs(
     if !container.type_name.is_empty() && container.type_name != container.id {
         let type_start = text.len();
         text.push_str(": ");
-        text.push_str(&container.type_name);
+        text.push_str(&clean_single_line(&container.type_name));
         runs.push(TextRun {
             len: text.len() - type_start,
             font: font.clone(),
@@ -487,7 +497,7 @@ pub fn build_leaf_field_runs(
 
     // 2. Field ID
     let id_start = text.len();
-    text.push_str(&field.id);
+    text.push_str(&clean_single_line(&field.id));
     runs.push(TextRun {
         len: text.len() - id_start,
         font: font.clone(),
@@ -501,7 +511,7 @@ pub fn build_leaf_field_runs(
     if !field.type_name.is_empty() && field.type_name != field.id {
         let type_start = text.len();
         text.push_str(": ");
-        text.push_str(&field.type_name);
+        text.push_str(&clean_single_line(&field.type_name));
         runs.push(TextRun {
             len: text.len() - type_start,
             font: font.clone(),
@@ -531,12 +541,13 @@ pub fn build_leaf_field_runs(
     } else {
         field.format_expression()
     };
-    text.push_str(val_str);
+    let val_clean = clean_single_line(val_str);
+    text.push_str(&val_clean);
     let val_color = if field.validation_failed {
         red_color
-    } else if val_str.starts_with('"') {
+    } else if val_clean.starts_with('"') {
         green_color
-    } else if val_str.starts_with('[') {
+    } else if val_clean.starts_with('[') {
         muted_color
     } else {
         accent_color
@@ -554,7 +565,7 @@ pub fn build_leaf_field_runs(
     if let Some(enum_label) = &field.enum_label {
         let enum_start = text.len();
         text.push_str(" (");
-        text.push_str(enum_label);
+        text.push_str(&clean_single_line(enum_label));
         text.push(')');
         runs.push(TextRun {
             len: text.len() - enum_start,
@@ -570,10 +581,11 @@ pub fn build_leaf_field_runs(
     if include_comment
         && let Some(desc) = &field.description
         && !desc.is_empty()
+        && let Some(first_line) = desc.lines().map(str::trim).find(|line| !line.is_empty())
     {
         let doc_start = text.len();
         text.push_str(" // ");
-        text.push_str(desc);
+        text.push_str(&clean_single_line(first_line));
         runs.push(TextRun {
             len: text.len() - doc_start,
             font: font.clone(),
@@ -603,7 +615,7 @@ pub fn build_continuation_field_runs(field_id: &str, relative_offset: usize, fon
     });
 
     let id_start = text.len();
-    text.push_str(field_id);
+    text.push_str(&clean_single_line(field_id));
     runs.push(TextRun {
         len: text.len() - id_start,
         font: font.clone(),
@@ -761,9 +773,14 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 fold_start_addr, fold_end_addr, fold_size, fold_size
             )
         } else if !comment.is_empty() {
+            let clean_comment = if comment.contains('\n') || comment.contains('\r') {
+                comment.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("")
+            } else {
+                comment.as_str()
+            };
             format!(
                 "── {}: 0x{:08X} - 0x{:08X} (0x{:X} / {} bytes) ──",
-                comment, fold_start_addr, fold_end_addr, fold_size, fold_size
+                clean_comment, fold_start_addr, fold_end_addr, fold_size, fold_size
             )
         } else {
             format!(
@@ -1819,6 +1836,20 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         }
 
         if !desc_full_text.is_empty() {
+            // Invariant: GPUI shape_line panics if text contains newlines.
+            // Replace any residual '\n' or '\r' with ' ' to preserve UTF-8 byte lengths and TextRun boundaries.
+            if desc_full_text.contains('\n') || desc_full_text.contains('\r') {
+                let mut sanitized = String::with_capacity(desc_full_text.len());
+                for ch in desc_full_text.chars() {
+                    if ch == '\n' || ch == '\r' {
+                        sanitized.push(' ');
+                    } else {
+                        sanitized.push(ch);
+                    }
+                }
+                desc_full_text = sanitized;
+            }
+
             let expr_shared = SharedString::from(desc_full_text);
             let shaped_expr = window.text_system().shape_line(expr_shared, params.font_size, &desc_runs, None);
             let desc_mask_bounds = Bounds::new(point(desc_start_x, params.bounds.top()), size(px(params.desc_col_width), px(ROW_HEIGHT)));
@@ -1916,15 +1947,21 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         let mut total_content_width = 4.0;
 
         for (badge_color, comment_shared) in &row_bookmark_comments {
+            let clean_comment = if comment_shared.contains('\n') || comment_shared.contains('\r') {
+                let first_line = comment_shared.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+                SharedString::from(first_line.to_string())
+            } else {
+                comment_shared.clone()
+            };
             let run = TextRun {
-                len: comment_shared.len(),
+                len: clean_comment.len(),
                 font: font.clone(),
                 color: muted_color,
                 background_color: None,
                 underline: None,
                 strikethrough: None,
             };
-            let shaped_comment = window.text_system().shape_line(comment_shared.clone(), params.font_size, &[run], None);
+            let shaped_comment = window.text_system().shape_line(clean_comment, params.font_size, &[run], None);
             let text_w = f32::from(shaped_comment.width);
             shaped_items.push((*badge_color, shaped_comment, text_w));
             total_content_width += dot_size + dot_margin_right + text_w + item_spacing;
@@ -2306,8 +2343,45 @@ mod tests {
         );
         assert!(act_runs[0].background_color.is_some());
 
-        let (cont_text, cont_runs) = build_continuation_field_runs("body", 0x10, font, theme.foreground, theme.muted_foreground);
+        let (cont_text, cont_runs) = build_continuation_field_runs("body", 0x10, font.clone(), theme.foreground, theme.muted_foreground);
         assert_eq!(cont_text, "↳ body (+0x10)");
         assert_eq!(cont_runs.iter().map(|r| r.len).sum::<usize>(), cont_text.len());
+
+        // Test multi-line doc comment and values with newlines are sanitized and single-line
+        let multiline_field = IndexedField {
+            id: "data".into(),
+            offset: 0,
+            size: 4,
+            depth: 0,
+            is_instance: false,
+            type_name: "str".into(),
+            collapse_key: "0:0:data".into(),
+            formatted_value: "\"line1\r\nline2\"".into(),
+            enum_label: Some("LABEL\r\nCONTINUED".into()),
+            description: Some("\n  Doc summary line\n  Second explanation line\n".into()),
+            color: None,
+            validation_failed: false,
+            expression: "data = \"line1\r\nline2\"".into(),
+        };
+
+        let (ml_text, ml_runs) = build_leaf_field_runs(
+            &multiline_field,
+            font,
+            theme.foreground,
+            theme.muted_foreground,
+            theme.accent,
+            theme.green,
+            theme.yellow,
+            theme.red,
+            true,
+            false,
+        );
+
+        assert!(!ml_text.contains('\n'));
+        assert!(!ml_text.contains('\r'));
+        assert_eq!(ml_runs.iter().map(|r| r.len).sum::<usize>(), ml_text.len());
+        assert!(ml_text.contains("Doc summary line"));
+        assert!(!ml_text.contains("Second explanation line"));
+        assert_eq!(clean_single_line("hello\r\nworld\n"), "hello world ");
     }
 }
