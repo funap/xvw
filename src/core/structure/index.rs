@@ -8,7 +8,9 @@ use std::sync::RwLock;
 pub struct ActiveStructRange {
     pub start: usize,
     pub end: usize,
+    #[allow(dead_code)]
     pub depth: usize,
+    #[allow(dead_code)]
     pub id: String,
 }
 

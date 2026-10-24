@@ -575,6 +575,136 @@ fn check_cursor_row_and_header_highlight() {
     assert!(is_cursor_header_column(16, 15, group_last, 16));
 }
 
+fn check_description_indentation_with_duplicate_element_names() {
+    use crate::ui::views::hex_view::calculate_description_indent_level;
+
+    let leaf_val = ParsedField {
+        id: "val".into(),
+        field_type: "u2".into(),
+        offset: 8,
+        size: 2,
+        value: FieldValue::U16(0x1234),
+        color: crate::core::color::RgbaColor::default(),
+        description: None,
+        children: vec![],
+        enum_label: None,
+        is_instance: false,
+    };
+    let inner_body = ParsedField {
+        id: "body".into(),
+        field_type: "extended_timestamp".into(),
+        offset: 8,
+        size: 2,
+        value: FieldValue::Struct,
+        color: crate::core::color::RgbaColor::default(),
+        description: None,
+        children: vec![leaf_val],
+        enum_label: None,
+        is_instance: false,
+    };
+    let entries = ParsedField {
+        id: "entries[0]".into(),
+        field_type: "extra_field".into(),
+        offset: 8,
+        size: 2,
+        value: FieldValue::Struct,
+        color: crate::core::color::RgbaColor::default(),
+        description: None,
+        children: vec![inner_body],
+        enum_label: None,
+        is_instance: false,
+    };
+    let extra = ParsedField {
+        id: "extra".into(),
+        field_type: "extras".into(),
+        offset: 8,
+        size: 2,
+        value: FieldValue::Struct,
+        color: crate::core::color::RgbaColor::default(),
+        description: None,
+        children: vec![entries],
+        enum_label: None,
+        is_instance: false,
+    };
+    let header = ParsedField {
+        id: "header".into(),
+        field_type: "local_file_header".into(),
+        offset: 4,
+        size: 6,
+        value: FieldValue::Struct,
+        color: crate::core::color::RgbaColor::default(),
+        description: None,
+        children: vec![extra],
+        enum_label: None,
+        is_instance: false,
+    };
+    let payload_body = ParsedField {
+        id: "body".into(),
+        field_type: "bytes".into(),
+        offset: 10,
+        size: 10,
+        value: FieldValue::Bytes(vec![0; 10]),
+        color: crate::core::color::RgbaColor::default(),
+        description: None,
+        children: vec![],
+        enum_label: None,
+        is_instance: false,
+    };
+    let outer_body = ParsedField {
+        id: "body".into(),
+        field_type: "local_file".into(),
+        offset: 4,
+        size: 16,
+        value: FieldValue::Struct,
+        color: crate::core::color::RgbaColor::default(),
+        description: None,
+        children: vec![header, payload_body],
+        enum_label: None,
+        is_instance: false,
+    };
+    let section = ParsedField {
+        id: "sections[0]".into(),
+        field_type: "pk_section".into(),
+        offset: 0,
+        size: 20,
+        value: FieldValue::Struct,
+        color: crate::core::color::RgbaColor::default(),
+        description: None,
+        children: vec![outer_body],
+        enum_label: None,
+        is_instance: false,
+    };
+
+    let parse_result = ParseResult::new("zip_test".into(), vec![section], 20, vec![]);
+
+    let outer_containers = parse_result.find_container_structs_starting_at(4, 1);
+    let outer_body_field = outer_containers.iter().find(|f| f.id == "body" && f.offset == 4).unwrap();
+    assert_eq!(outer_body_field.depth, 1);
+
+    let inner_containers = parse_result.find_container_structs_starting_at(8, 1);
+    let inner_body_field = inner_containers.iter().find(|f| f.id == "body" && f.offset == 8).unwrap();
+    assert_eq!(inner_body_field.depth, 5);
+
+    let active_ranges = parse_result.find_active_struct_ranges(8, 1);
+    assert!(active_ranges.iter().any(|r| r.id == "body" && r.depth == 1));
+    assert!(active_ranges.iter().any(|r| r.id == "body" && r.depth == 5));
+
+    // Outer body header row indent must be 1
+    let indent_outer = calculate_description_indent_level(None, Some(outer_body_field), None, active_ranges.len());
+    assert_eq!(indent_outer, 1);
+
+    // Inner body header row indent must be 5 (not 1)
+    let indent_inner = calculate_description_indent_level(None, Some(inner_body_field), None, active_ranges.len());
+    assert_eq!(indent_inner, 5);
+
+    // Payload body leaf row indent must be 2
+    let payload_leaves = parse_result.find_leaf_fields_starting_at(10, 1);
+    let payload_field = payload_leaves.iter().find(|f| f.id == "body").unwrap();
+    assert_eq!(payload_field.depth, 2);
+    let indent_payload = calculate_description_indent_level(None, None, Some(payload_field), active_ranges.len());
+    assert_eq!(indent_payload, 2);
+}
+
 #[test]
 fn test_hex_view_layout_suite() {
     check_layout_and_scrolling();
@@ -584,4 +714,5 @@ fn test_hex_view_layout_suite() {
     check_calculate_scroll_top_for_range();
     check_hex_editing_state();
     check_cursor_row_and_header_highlight();
+    check_description_indentation_with_duplicate_element_names();
 }

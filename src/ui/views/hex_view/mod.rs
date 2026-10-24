@@ -20,7 +20,7 @@ pub use layout::{
     ascii_byte_index_from_world_x, bounded_auto_fit_range, build_hex_text_source, calculate_scroll_top_for_range, can_chain_to_outer, cursor_in_row_offset,
     hex_grid_width, hex_grid_x, hex_group_x, is_cursor_header_column, make_hex_view_layout, measure_hex_cell_width, weighted_text_width,
 };
-pub use paint::{CHEVRON_ICON_GAP, CHEVRON_ICON_SIZE, DescriptionPalette, RowPaintParams, paint_hex_row, paint_scrollbar};
+pub use paint::{CHEVRON_ICON_GAP, CHEVRON_ICON_SIZE, DescriptionPalette, RowPaintParams, calculate_description_indent_level, paint_hex_row, paint_scrollbar};
 pub use types::*;
 
 use crate::actions::{
@@ -493,19 +493,12 @@ impl HexView {
                 .map(|c| collapsed_structs.contains(&c.collapse_key) || collapsed_structs.contains(&c.id))
                 .unwrap_or(false);
 
-            let struct_depth = active_ranges.len().saturating_sub(1);
-            let indent_level = if !container_structs.is_empty() {
-                active_ranges
-                    .iter()
-                    .find(|r| container_structs.first().map(|c| c.id == r.id).unwrap_or(false))
-                    .map(|r| r.depth)
-                    .or_else(|| container_structs.first().map(|container| container.depth))
-                    .unwrap_or(struct_depth)
-            } else if active_ranges.is_empty() {
-                leaf_fields.first().map(|field| field.depth).unwrap_or(0)
+            let container_for_indent = if is_collapsed || leaf_fields.is_empty() {
+                container_structs.first()
             } else {
-                active_ranges.len()
+                None
             };
+            let indent_level = calculate_description_indent_level(None, container_for_indent, leaf_fields.first(), active_ranges.len());
             let indent_px = indent_level as f32 * 14.0;
 
             let mut parts_width = 0.0;
@@ -3352,16 +3345,38 @@ impl Render for HexView {
                                                     && editor.structure.is_struct_collapsed(&c.collapse_key, &c.id)
                                             });
 
-                                        if chunk_len == 0 || is_collapsed_container_row {
-                                            let containers = parse_res.find_container_structs_starting_at(line_offset, chunk_len.max(1));
-                                            if let Some(c) = containers.first() {
+                                        if chunk_len == 0 {
+                                            let containers: Vec<_> = parse_res
+                                                .find_container_structs_starting_at(line_offset, 1)
+                                                .iter()
+                                                .filter(|container| !container.is_instance && container.size > 0)
+                                                .cloned()
+                                                .collect();
+                                            let mut same_offset_rows = 0;
+                                            let mut previous_row = row_idx;
+                                            while previous_row > 0 && line_starts.get(previous_row - 1) == Some(line_offset) {
+                                                same_offset_rows += 1;
+                                                previous_row -= 1;
+                                            }
+                                            if let Some(c) = containers.get(same_offset_rows) {
+                                                is_toggle = true;
+                                                collapse_key = Some(c.collapse_key.clone());
+                                            }
+                                        } else if is_collapsed_container_row {
+                                            let containers = parse_res.find_container_structs_starting_at(line_offset, chunk_len);
+                                            if let Some(c) = containers.iter().find(|c| {
+                                                c.offset == line_offset
+                                                    && (c.size == chunk_len || chunk_len == c.size.min(editor.total_size().saturating_sub(line_offset)))
+                                                    && editor.structure.is_struct_collapsed(&c.collapse_key, &c.id)
+                                            }) {
                                                 is_toggle = true;
                                                 collapse_key = Some(c.collapse_key.clone());
                                             }
                                         } else if in_desc {
                                             let containers = parse_res.find_container_structs_starting_at(line_offset, chunk_len);
-                                            if let Some(c) = containers.first()
-                                                && editor.structure.is_struct_collapsed(&c.collapse_key, &c.id)
+                                            if let Some(c) = containers
+                                                .iter()
+                                                .find(|c| c.offset == line_offset && editor.structure.is_struct_collapsed(&c.collapse_key, &c.id))
                                             {
                                                 is_toggle = true;
                                                 collapse_key = Some(c.collapse_key.clone());

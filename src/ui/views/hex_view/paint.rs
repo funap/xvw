@@ -760,6 +760,31 @@ pub fn build_continuation_field_runs(field_id: &str, relative_offset: usize, fon
     (text, runs)
 }
 
+/// Computes the tree indentation depth for a structure description row.
+///
+/// Indentation strictly respects the tree nesting depth (`depth`) of the
+/// field being rendered on this row (container, leaf, or continuation).
+/// This prevents elements sharing identical identifiers (such as `body` in
+/// ZIP specifications) from inheriting the shallower depth of an ancestor.
+pub fn calculate_description_indent_level(
+    continuation_leaf: Option<&IndexedField>,
+    container: Option<&IndexedField>,
+    leaf: Option<&IndexedField>,
+    active_range_count: usize,
+) -> usize {
+    if let Some(leaf) = continuation_leaf {
+        leaf.depth
+    } else if let Some(container) = container {
+        container.depth
+    } else if let Some(leaf) = leaf {
+        leaf.depth
+    } else if active_range_count > 0 {
+        active_range_count
+    } else {
+        0
+    }
+}
+
 pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) {
     let (offset, next_offset) = if params.row_idx < params.line_starts.len() {
         let offset = match params.line_starts.get(params.row_idx) {
@@ -1908,6 +1933,10 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             }
         }
 
+        if !is_structure_header_row && !is_collapsed_struct_row {
+            container_structs = Cow::Owned(Vec::new());
+        }
+
         let leaf_fields: Cow<'_, [IndexedField]> = row_leaves;
         let active_ranges = if parse_res.is_live() {
             Vec::new()
@@ -1927,21 +1956,12 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             None
         };
 
-        let struct_depth = active_ranges.len().saturating_sub(1);
-        let indent_level = if let Some(ref leaf) = continuation_leaf {
-            leaf.depth
-        } else if !container_structs.is_empty() {
-            active_ranges
-                .iter()
-                .find(|r| container_structs.first().map(|c| c.id == r.id).unwrap_or(false))
-                .map(|r| r.depth)
-                .or_else(|| container_structs.first().map(|container| container.depth))
-                .unwrap_or(struct_depth)
-        } else if !active_ranges.is_empty() {
-            active_ranges.len()
-        } else {
-            leaf_fields.first().map(|field| field.depth).unwrap_or(0)
-        };
+        let indent_level = calculate_description_indent_level(
+            continuation_leaf.as_deref(),
+            container_structs.first(),
+            leaf_fields.first(),
+            active_ranges.len(),
+        );
         let indent_px = indent_level as f32 * 14.0;
         let has_chevron = !container_structs.is_empty();
         let chevron_icon_path = if has_chevron {
@@ -2572,5 +2592,78 @@ mod tests {
                 contrast_ratio(palette.comment, bg)
             );
         }
+    }
+
+    #[test]
+    fn test_calculate_description_indent_level_preserves_depth_for_duplicate_element_names() {
+        use super::*;
+
+        // Scenario like zip.ksy:
+        // pk_section.body is at depth 1 (container)
+        // extra_field.body is at depth 5 (container)
+        // local_file.body is at depth 2 (leaf)
+        let outer_body_container = IndexedField {
+            id: "body".into(),
+            offset: 4,
+            size: 100,
+            depth: 1,
+            is_instance: false,
+            type_name: "local_file".into(),
+            collapse_key: "4:1:body".into(),
+            formatted_value: String::new(),
+            enum_label: None,
+            description: None,
+            color: None,
+            validation_failed: false,
+            expression: String::new(),
+        };
+
+        let inner_body_container = IndexedField {
+            id: "body".into(),
+            offset: 40,
+            size: 20,
+            depth: 5,
+            is_instance: false,
+            type_name: "extended_timestamp".into(),
+            collapse_key: "40:5:body".into(),
+            formatted_value: String::new(),
+            enum_label: None,
+            description: None,
+            color: None,
+            validation_failed: false,
+            expression: String::new(),
+        };
+
+        let leaf_body = IndexedField {
+            id: "body".into(),
+            offset: 60,
+            size: 40,
+            depth: 2,
+            is_instance: false,
+            type_name: "bytes".into(),
+            collapse_key: "60:2:body".into(),
+            formatted_value: "[40 bytes]".into(),
+            enum_label: None,
+            description: None,
+            color: None,
+            validation_failed: false,
+            expression: "body = [40 bytes]".into(),
+        };
+
+        // 1. Header row for outer body: container.depth = 1
+        let outer_indent = calculate_description_indent_level(None, Some(&outer_body_container), None, 1);
+        assert_eq!(outer_indent, 1, "outer body must have indent level 1");
+
+        // 2. Header row for inner body: container.depth = 5 (even when active_ranges has 6 items or ancestor has depth 1)
+        let inner_indent = calculate_description_indent_level(None, Some(&inner_body_container), None, 6);
+        assert_eq!(inner_indent, 5, "inner body must have indent level 5, not be overridden to ancestor depth");
+
+        // 3. Leaf row for payload body: leaf.depth = 2 (even when active_ranges has 3 items)
+        let leaf_indent = calculate_description_indent_level(None, None, Some(&leaf_body), 3);
+        assert_eq!(leaf_indent, 2, "leaf body must have indent level 2");
+
+        // 4. Continuation row for payload body: continuation_leaf.depth = 2
+        let cont_indent = calculate_description_indent_level(Some(&leaf_body), None, None, 3);
+        assert_eq!(cont_indent, 2, "continuation body must preserve indent level 2");
     }
 }
