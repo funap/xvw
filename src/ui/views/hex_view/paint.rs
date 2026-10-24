@@ -455,6 +455,176 @@ pub fn build_structure_header_runs(
     (text, runs)
 }
 
+/// Builds formatted text and syntax-highlighted `TextRun`s for a leaf field.
+#[allow(clippy::too_many_arguments)]
+pub fn build_leaf_field_runs(
+    field: &IndexedField,
+    font: Font,
+    fg_color: Hsla,
+    muted_color: Hsla,
+    accent_color: Hsla,
+    green_color: Hsla,
+    yellow_color: Hsla,
+    red_color: Hsla,
+    include_comment: bool,
+) -> (String, Vec<TextRun>) {
+    let mut text = String::with_capacity(64);
+    let mut runs = Vec::new();
+
+    // 1. Color pip ("▪ ")
+    let pip_color = field.color.map(Hsla::from).unwrap_or(accent_color);
+    text.push_str("▪ ");
+    runs.push(TextRun {
+        len: "▪ ".len(),
+        font: font.clone(),
+        color: pip_color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+
+    // 2. Field ID
+    let id_start = text.len();
+    text.push_str(&field.id);
+    runs.push(TextRun {
+        len: text.len() - id_start,
+        font: font.clone(),
+        color: fg_color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+
+    // 3. Optional Type name
+    if !field.type_name.is_empty() && field.type_name != field.id {
+        let type_start = text.len();
+        text.push_str(": ");
+        text.push_str(&field.type_name);
+        runs.push(TextRun {
+            len: text.len() - type_start,
+            font: font.clone(),
+            color: muted_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+    }
+
+    // 4. Operator " = "
+    let op_start = text.len();
+    text.push_str(" = ");
+    runs.push(TextRun {
+        len: text.len() - op_start,
+        font: font.clone(),
+        color: muted_color.opacity(0.7),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+
+    // 5. Value
+    let val_start = text.len();
+    let val_str = if !field.formatted_value.is_empty() {
+        &field.formatted_value
+    } else {
+        field.format_expression()
+    };
+    text.push_str(val_str);
+    let val_color = if field.validation_failed {
+        red_color
+    } else if val_str.starts_with('"') {
+        green_color
+    } else if val_str.starts_with('[') {
+        muted_color
+    } else {
+        accent_color
+    };
+    runs.push(TextRun {
+        len: text.len() - val_start,
+        font: font.clone(),
+        color: val_color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+
+    // 6. Enum label
+    if let Some(enum_label) = &field.enum_label {
+        let enum_start = text.len();
+        text.push_str(" (");
+        text.push_str(enum_label);
+        text.push(')');
+        runs.push(TextRun {
+            len: text.len() - enum_start,
+            font: font.clone(),
+            color: yellow_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+    }
+
+    // 7. Doc comment (if enabled and present)
+    if include_comment
+        && let Some(desc) = &field.description
+        && !desc.is_empty()
+    {
+        let doc_start = text.len();
+        text.push_str(" // ");
+        text.push_str(desc);
+        runs.push(TextRun {
+            len: text.len() - doc_start,
+            font: font.clone(),
+            color: muted_color.opacity(0.6),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+    }
+
+    (text, runs)
+}
+
+/// Builds continuation runs for fields spanning across multiple 16-byte rows.
+pub fn build_continuation_field_runs(field_id: &str, relative_offset: usize, font: Font, fg_color: Hsla, muted_color: Hsla) -> (String, Vec<TextRun>) {
+    let mut text = String::with_capacity(32);
+    let mut runs = Vec::new();
+
+    text.push_str("↳ ");
+    runs.push(TextRun {
+        len: "↳ ".len(),
+        font: font.clone(),
+        color: muted_color.opacity(0.65),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+
+    let id_start = text.len();
+    text.push_str(field_id);
+    runs.push(TextRun {
+        len: text.len() - id_start,
+        font: font.clone(),
+        color: fg_color.opacity(0.8),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+
+    let off_start = text.len();
+    text.push_str(&format!(" (+0x{:X})", relative_offset));
+    runs.push(TextRun {
+        len: text.len() - off_start,
+        font: font.clone(),
+        color: muted_color.opacity(0.65),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+
+    (text, runs)
+}
+
 pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) {
     let (offset, next_offset) = if params.row_idx < params.line_starts.len() {
         let offset = match params.line_starts.get(params.row_idx) {
@@ -496,7 +666,20 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
     let active_row_highlights = row_highlights(params.highlights, params.max_highlight_len, offset, next_offset);
     let is_dark = cx.theme().mode.is_dark();
-    let (selection_bg, caret_color, muted_color, fg_color, accent_fg_color, border_color, _sidebar_bg, bg_color_theme, accent_color) = {
+    let (
+        selection_bg,
+        caret_color,
+        muted_color,
+        fg_color,
+        accent_fg_color,
+        border_color,
+        _sidebar_bg,
+        bg_color_theme,
+        accent_color,
+        green_color,
+        yellow_color,
+        red_color,
+    ) = {
         let theme = cx.theme();
         (
             selection_background_color(theme.selection, params.is_focused, is_dark),
@@ -508,6 +691,9 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             theme.sidebar,
             theme.background,
             theme.accent,
+            theme.green,
+            theme.yellow,
+            theme.red,
         )
     };
     let line_height = px(ROW_HEIGHT);
@@ -1508,8 +1694,16 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             .map(|c| params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id))
             .unwrap_or(false);
 
+        let continuation_leaf = if !is_structure_header_row && container_structs.is_empty() && leaf_fields.is_empty() {
+            parse_res.query_deepest_leaf_at(offset)
+        } else {
+            None
+        };
+
         let struct_depth = active_ranges.len().saturating_sub(1);
-        let indent_level = if !container_structs.is_empty() {
+        let indent_level = if let Some(ref leaf) = continuation_leaf {
+            leaf.depth
+        } else if !container_structs.is_empty() {
             active_ranges
                 .iter()
                 .find(|r| container_structs.first().map(|c| c.id == r.id).unwrap_or(false))
@@ -1531,7 +1725,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             desc_full_text.push_str(&hdr_text);
             desc_runs.extend(hdr_runs);
         }
-        if !is_collapsed {
+        if let Some(ref leaf) = continuation_leaf {
+            let rel_offset = offset.saturating_sub(leaf.offset);
+            let (c_text, c_runs) = build_continuation_field_runs(&leaf.id, rel_offset, font.clone(), fg_color, muted_color);
+            desc_full_text.push_str(&c_text);
+            desc_runs.extend(c_runs);
+        } else if !is_collapsed {
+            let include_doc = leaf_fields.len() == 1 && container_structs.is_empty();
             for f in leaf_fields.iter() {
                 if !desc_full_text.is_empty() {
                     desc_full_text.push_str("  ");
@@ -1544,17 +1744,19 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         strikethrough: None,
                     });
                 }
-                let expr = f.format_expression();
-                let expr_start = desc_full_text.len();
-                desc_full_text.push_str(expr);
-                desc_runs.push(TextRun {
-                    len: desc_full_text.len() - expr_start,
-                    font: font.clone(),
-                    color: fg_color,
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                });
+                let (leaf_text, leaf_runs) = build_leaf_field_runs(
+                    f,
+                    font.clone(),
+                    fg_color,
+                    muted_color,
+                    accent_color,
+                    green_color,
+                    yellow_color,
+                    red_color,
+                    include_doc,
+                );
+                desc_full_text.push_str(&leaf_text);
+                desc_runs.extend(leaf_runs);
             }
         }
 
@@ -1570,6 +1772,19 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 }),
                 |window| {
                     window.with_content_mask(Some(ContentMask { bounds: desc_mask_bounds }), |window| {
+                        // Vertical tree guide lines for indentation depth
+                        if indent_level > 0 {
+                            for lvl in 1..=indent_level {
+                                let guide_x = desc_start_x - px(params.desc_scroll_x) + px((lvl - 1) as f32 * 14.0 + 5.0);
+                                if guide_x >= desc_start_x && guide_x < desc_end_x {
+                                    window.paint_quad(fill(
+                                        Bounds::new(point(guide_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+                                        border_color.opacity(0.35),
+                                    ));
+                                }
+                            }
+                        }
+
                         let _ = shaped_expr.paint(
                             point(desc_start_x - px(params.desc_scroll_x) + px(indent_px), params.bounds.top() + px(2.0)),
                             line_height,
@@ -1976,5 +2191,48 @@ mod tests {
         let (text_col, runs_col) = build_structure_header_runs(&container, "▶", true, font, theme.foreground, theme.muted_foreground, theme.accent);
         assert_eq!(text_col, "▶ sections[0]: section (30B, collapsed)");
         assert_eq!(runs_col.iter().map(|r| r.len).sum::<usize>(), text_col.len());
+    }
+
+    #[test]
+    fn test_build_leaf_field_runs() {
+        use super::*;
+        use gpui::Font;
+
+        let theme = test_theme();
+        let font = Font::default();
+        let field = IndexedField {
+            id: "magic".into(),
+            offset: 0,
+            size: 2,
+            depth: 1,
+            is_instance: false,
+            type_name: "u2le".into(),
+            collapse_key: "0:1:magic".into(),
+            formatted_value: "0x3412 (13330)".into(),
+            enum_label: Some("VALID".into()),
+            description: Some("magic header".into()),
+            color: None,
+            validation_failed: false,
+            expression: "magic = 3412h (13330)".into(),
+        };
+
+        let (text, runs) = build_leaf_field_runs(
+            &field,
+            font.clone(),
+            theme.foreground,
+            theme.muted_foreground,
+            theme.accent,
+            theme.green,
+            theme.yellow,
+            theme.red,
+            true,
+        );
+
+        assert_eq!(text, "▪ magic: u2le = 0x3412 (13330) (VALID) // magic header");
+        assert_eq!(runs.iter().map(|r| r.len).sum::<usize>(), text.len());
+
+        let (cont_text, cont_runs) = build_continuation_field_runs("body", 0x10, font, theme.foreground, theme.muted_foreground);
+        assert_eq!(cont_text, "↳ body (+0x10)");
+        assert_eq!(cont_runs.iter().map(|r| r.len).sum::<usize>(), cont_text.len());
     }
 }
