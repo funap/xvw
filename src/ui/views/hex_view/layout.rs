@@ -84,29 +84,30 @@ pub fn make_hex_view_layout(input: LayoutInput) -> HexViewLayout {
         inner_max: input.hex_inner_max.max(0.0),
     };
 
-    let (ascii, description, comment_start) = if input.is_struct_mode {
-        let description_start = hex.end() + input.section_gap;
+    let ascii = if input.show_ascii {
+        let ascii_start = hex.end() + input.section_gap;
+        Some(ColumnLayout {
+            start: ascii_start,
+            width: input.ascii_col_width,
+            inner_max: input.ascii_inner_max.max(0.0),
+        })
+    } else {
+        None
+    };
+
+    let (description, comment_start) = if input.is_struct_mode {
+        let description_start = ascii.map(|col| col.end() + input.section_gap).unwrap_or_else(|| hex.end() + input.section_gap);
         let description = ColumnLayout {
             start: description_start,
             width: input.desc_col_width,
             inner_max: input.desc_inner_max.max(0.0),
         };
-        (None, Some(description), description.end() + input.section_gap)
+        (Some(description), description.end() + input.section_gap)
     } else {
-        let ascii = if input.show_ascii {
-            let ascii_start = hex.end() + input.section_gap;
-            Some(ColumnLayout {
-                start: ascii_start,
-                width: input.ascii_col_width,
-                inner_max: input.ascii_inner_max.max(0.0),
-            })
-        } else {
-            None
-        };
         let comment_start = ascii
             .map(|column| column.end() + input.section_gap)
             .unwrap_or_else(|| hex.end() + input.section_gap);
-        (ascii, None, comment_start)
+        (None, comment_start)
     };
 
     let comment = ColumnLayout {

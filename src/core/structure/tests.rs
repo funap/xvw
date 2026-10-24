@@ -1140,6 +1140,145 @@ seq:
 }
 
 #[test]
+fn test_toggle_struct_collapsed_folds_child_rows_and_restores() {
+    use crate::core::buffer::Buffer;
+    use crate::core::document::Document;
+    use crate::core::editor::Editor;
+    use std::sync::{Arc, RwLock};
+
+    let ksy_yaml = r#"
+meta:
+  id: container_test
+seq:
+  - id: header
+    type: header_t
+  - id: footer
+    type: u4
+types:
+  header_t:
+    seq:
+      - id: magic
+        type: u2
+      - id: version
+        type: u2
+"#;
+    let ksy = Arc::new(parse_ksy_yaml(ksy_yaml));
+    let bytes = vec![0x12, 0x34, 0x01, 0x00, 0xAA, 0xBB, 0xCC, 0xDD];
+    let doc = Arc::new(RwLock::new(Document::new(std::path::PathBuf::from("test.bin"), Buffer::new(bytes))));
+    let mut editor = Editor::new(doc);
+    editor.set_kaitai_definition(ksy);
+
+    assert!(editor.structure.show_inline_structure_view);
+    let map = editor.line_starts();
+    let expanded_starts: Vec<usize> = (0..map.len()).filter_map(|i| map.get(i)).collect();
+    assert!(expanded_starts.len() >= 4, "expanded_starts was: {expanded_starts:?}");
+    assert_eq!(expanded_starts[0], 0);
+    assert_eq!(expanded_starts[1], 0);
+
+    let collapse_key = "0:0:header";
+    assert!(!editor.structure.is_collapsed(collapse_key));
+
+    // Collapse the 'header' structure
+    editor.toggle_struct_collapsed(collapse_key);
+    assert!(editor.structure.is_collapsed(collapse_key));
+
+    let map_collapsed = editor.line_starts();
+    let collapsed_starts: Vec<usize> = (0..map_collapsed.len()).filter_map(|i| map_collapsed.get(i)).collect();
+    // When collapsed:
+    // Header struct takes row 0 (covers bytes 0..4).
+    // All child fields of 'header' (magic at 0, version at 2) are hidden!
+    // The next row is footer at offset 4!
+    assert_eq!(
+        collapsed_starts,
+        vec![0, 4],
+        "Collapsed line starts should omit all child elements: {collapsed_starts:?}"
+    );
+
+    // Expand again
+    editor.toggle_struct_collapsed(collapse_key);
+    assert!(!editor.structure.is_collapsed(collapse_key));
+    let map_restored = editor.line_starts();
+    let restored_starts: Vec<usize> = (0..map_restored.len()).filter_map(|i| map_restored.get(i)).collect();
+    assert_eq!(restored_starts, expanded_starts, "Restored starts must match original expanded starts");
+}
+
+#[test]
+fn test_nested_struct_collapse_folds_descendants() {
+    use crate::core::buffer::Buffer;
+    use crate::core::document::Document;
+    use crate::core::editor::Editor;
+    use std::sync::{Arc, RwLock};
+
+    let ksy_yaml = r#"
+meta:
+  id: nested_test
+seq:
+  - id: body
+    type: body_t
+  - id: footer
+    type: u4
+types:
+  body_t:
+    seq:
+      - id: sub
+        type: sub_t
+      - id: padding
+        type: u4
+  sub_t:
+    seq:
+      - id: val1
+        type: u2
+      - id: val2
+        type: u2
+"#;
+    let ksy = Arc::new(parse_ksy_yaml(ksy_yaml));
+    let bytes = vec![0u8; 16]; // 4 (sub) + 4 (padding) + 4 (footer) + 4 (extra) = 16 bytes
+    let doc = Arc::new(RwLock::new(Document::new(std::path::PathBuf::from("test.bin"), Buffer::new(bytes))));
+    let mut editor = Editor::new(doc);
+    editor.set_kaitai_definition(ksy);
+
+    let map = editor.line_starts();
+    let expanded: Vec<usize> = (0..map.len()).filter_map(|i| map.get(i)).collect();
+    // expanded:
+    // 0: empty header line for body
+    // 0: empty header line for sub
+    // 0: val1 (0..2)
+    // 2: val2 (2..4)
+    // 4: padding (4..8)
+    // 8: footer (8..12)
+    // 12: extra (12..16)
+    assert!(expanded.len() >= 6, "expanded was: {expanded:?}");
+
+    // Collapse sub_t (offset 0..4)
+    let sub_key = "0:1:sub";
+    editor.toggle_struct_collapsed(sub_key);
+    let map_sub = editor.line_starts();
+    let starts_sub: Vec<usize> = (0..map_sub.len()).filter_map(|i| map_sub.get(i)).collect();
+    // Body header is still at 0 (empty line, chunk_len=0).
+    // Sub is collapsed into a single row at offset 0 (chunk_len=4).
+    // val1 and val2 are hidden!
+    // Next row is padding at offset 4!
+    assert_eq!(starts_sub, vec![0, 0, 4, 8, 12], "starts_sub was: {starts_sub:?}");
+
+    // Uncollapse sub, and collapse body (offset 0..8)
+    editor.toggle_struct_collapsed(sub_key);
+    let body_key = "0:0:body";
+    editor.toggle_struct_collapsed(body_key);
+    let map_body = editor.line_starts();
+    let starts_body: Vec<usize> = (0..map_body.len()).filter_map(|i| map_body.get(i)).collect();
+    // Body is collapsed into a single row at offset 0 (chunk_len=8).
+    // All of body's children (sub, val1, val2, padding) are hidden!
+    // Next row is footer at offset 8!
+    assert_eq!(starts_body, vec![0, 8, 12], "starts_body was: {starts_body:?}");
+
+    // Restore body
+    editor.toggle_struct_collapsed(body_key);
+    let map_restored = editor.line_starts();
+    let starts_restored: Vec<usize> = (0..map_restored.len()).filter_map(|i| map_restored.get(i)).collect();
+    assert_eq!(starts_restored, expanded);
+}
+
+#[test]
 fn test_deduplicate_leaf_fields_sharing_offset() {
     use crate::core::structure::types::{FieldValue, ParseResult, ParsedField};
 

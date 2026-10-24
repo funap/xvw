@@ -20,7 +20,7 @@ pub use layout::{
     ascii_byte_index_from_world_x, bounded_auto_fit_range, build_hex_text_source, calculate_scroll_top_for_range, can_chain_to_outer, cursor_in_row_offset,
     hex_grid_width, hex_grid_x, hex_group_x, is_cursor_header_column, make_hex_view_layout, measure_hex_cell_width, weighted_text_width,
 };
-pub use paint::{RowPaintParams, paint_hex_row, paint_scrollbar};
+pub use paint::{CHEVRON_ICON_GAP, CHEVRON_ICON_SIZE, DescriptionPalette, RowPaintParams, paint_hex_row, paint_scrollbar};
 pub use types::*;
 
 use crate::actions::{
@@ -457,12 +457,12 @@ impl HexView {
                     Cow::Borrowed(parse_result.find_container_structs_starting_at(offset, 1))
                 };
                 for container in containers.iter().filter(|container| !container.is_instance && container.size > 0) {
-                    let text = if collapsed_structs.contains(&container.id) {
-                        format!("▶ {} ({} bytes)", container.format_container_label(), container.size)
+                    let text = if collapsed_structs.contains(&container.collapse_key) || collapsed_structs.contains(&container.id) {
+                        format!("{} ({} bytes)", container.format_container_label(), container.size)
                     } else {
-                        format!("▼ {}", container.format_container_label())
+                        container.format_container_label()
                     };
-                    let row_width = container.depth as f32 * 14.0 + weighted_text_width(&text, char_w) + 8.0;
+                    let row_width = container.depth as f32 * 14.0 + (CHEVRON_ICON_SIZE + CHEVRON_ICON_GAP) + weighted_text_width(&text, char_w) + 8.0;
                     max_width = max_width.max(row_width);
                 }
                 continue;
@@ -488,7 +488,10 @@ impl HexView {
             } else {
                 parse_result.find_active_struct_ranges(offset, chunk_len)
             };
-            let is_collapsed = container_structs.first().map(|c| collapsed_structs.contains(&c.id)).unwrap_or(false);
+            let is_collapsed = container_structs
+                .first()
+                .map(|c| collapsed_structs.contains(&c.collapse_key) || collapsed_structs.contains(&c.id))
+                .unwrap_or(false);
 
             let struct_depth = active_ranges.len().saturating_sub(1);
             let indent_level = if !container_structs.is_empty() {
@@ -510,11 +513,11 @@ impl HexView {
 
             if let Some(container) = container_structs.first() {
                 let text = if is_collapsed {
-                    format!("▶ {} ({} bytes)", container.format_container_label(), container.size)
+                    format!("{} ({} bytes)", container.format_container_label(), container.size)
                 } else {
-                    format!("▼ {}", container.format_container_label())
+                    container.format_container_label()
                 };
-                parts_width += weighted_text_width(&text, char_w);
+                parts_width += (CHEVRON_ICON_SIZE + CHEVRON_ICON_GAP) + weighted_text_width(&text, char_w);
                 part_count += 1;
             }
 
@@ -610,7 +613,7 @@ impl HexView {
             is_struct_mode,
             show_ascii: self.show_ascii,
             ascii_col_width: self.effective_ascii_col_width(max_bytes_per_row),
-            ascii_inner_max: if !is_struct_mode && self.show_ascii {
+            ascii_inner_max: if self.show_ascii {
                 (Self::default_ascii_col_width(max_bytes_per_row) - self.effective_ascii_col_width(max_bytes_per_row)).max(0.0)
             } else {
                 0.0
@@ -2913,88 +2916,11 @@ impl Render for HexView {
                             .child(
                                 div()
                                     .flex_shrink_0()
-                                    .child(if is_struct_mode {
-                                        h_flex()
-                                            .child(
-                                                h_flex()
-                                                    .w(px(self.desc_col_width + SECTION_GAP))
-                                                    .child(
-                                                        div()
-                                                            .w(px(self.desc_col_width))
-                                                            .text_xs()
-                                                            .text_color(theme.muted_foreground)
-                                                            .overflow_hidden()
-                                                            .relative()
-                                                            .child("Description")
-                                                            .when(is_desc_clipped_left, |el| {
-                                                                el.child(
-                                                                    div()
-                                                                        .absolute()
-                                                                        .left_0()
-                                                                        .top_0()
-                                                                        .bottom_0()
-                                                                        .w(px(14.0))
-                                                                        .bg(theme.sidebar.opacity(0.85))
-                                                                        .child("…"),
-                                                                )
-                                                            })
-                                                            .when(is_desc_clipped_right, |el| {
-                                                                el.child(
-                                                                    div()
-                                                                        .absolute()
-                                                                        .right_0()
-                                                                        .top_0()
-                                                                        .bottom_0()
-                                                                        .w(px(14.0))
-                                                                        .bg(theme.sidebar.opacity(0.85))
-                                                                        .child("…"),
-                                                                )
-                                                            })
-                                                            .on_mouse_down(
-                                                                MouseButton::Left,
-                                                                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                                                                    if event.click_count >= 2 {
-                                                                        this.auto_fit_column(ResizingColumn::Description, cx);
-                                                                    }
-                                                                }),
-                                                            ),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .w(px(SECTION_GAP))
-                                                            .h_full()
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .cursor(CursorStyle::ResizeLeftRight)
-                                                            .hover(|s| s.bg(theme.accent.opacity(0.2)))
-                                                            .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
-                                                            .on_mouse_down(
-                                                                MouseButton::Left,
-                                                                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                                                                    if event.click_count >= 2 {
-                                                                        this.resizing_column = None;
-                                                                        this.auto_fit_column(ResizingColumn::Description, cx);
-                                                                    } else {
-                                                                        this.resizing_column =
-                                                                            Some((ResizingColumn::Description, event.position.x.into(), this.desc_col_width));
-                                                                        cx.notify();
-                                                                    }
-                                                                }),
-                                                            ),
-                                                    ),
-                                            )
-                                            .child(comment_header_el(
-                                                self.comment_col_width,
-                                                is_comment_clipped_left,
-                                                is_comment_clipped_right,
-                                                theme,
-                                            ))
-                                            .into_any_element()
-                                    } else if self.show_ascii {
-                                        let label = self.encoding.label();
-                                        h_flex()
-                                            .child(
+                                    .child({
+                                        let mut trailing = h_flex();
+                                        if self.show_ascii {
+                                            let label = self.encoding.label();
+                                            trailing = trailing.child(
                                                 h_flex()
                                                     .w(px(ascii_col_width + SECTION_GAP))
                                                     .child(
@@ -3068,16 +2994,86 @@ impl Render for HexView {
                                                                 }),
                                                             ),
                                                     ),
-                                            )
-                                            .child(comment_header_el(
-                                                self.comment_col_width,
-                                                is_comment_clipped_left,
-                                                is_comment_clipped_right,
-                                                theme,
-                                            ))
-                                            .into_any_element()
-                                    } else {
-                                        comment_header_el(self.comment_col_width, is_comment_clipped_left, is_comment_clipped_right, theme).into_any_element()
+                                            );
+                                        }
+                                        if is_struct_mode {
+                                            trailing = trailing.child(
+                                                h_flex()
+                                                    .w(px(self.desc_col_width + SECTION_GAP))
+                                                    .child(
+                                                        div()
+                                                            .w(px(self.desc_col_width))
+                                                            .text_xs()
+                                                            .text_color(theme.muted_foreground)
+                                                            .overflow_hidden()
+                                                            .relative()
+                                                            .child("Description")
+                                                            .when(is_desc_clipped_left, |el| {
+                                                                el.child(
+                                                                    div()
+                                                                        .absolute()
+                                                                        .left_0()
+                                                                        .top_0()
+                                                                        .bottom_0()
+                                                                        .w(px(14.0))
+                                                                        .bg(theme.sidebar.opacity(0.85))
+                                                                        .child("…"),
+                                                                )
+                                                            })
+                                                            .when(is_desc_clipped_right, |el| {
+                                                                el.child(
+                                                                    div()
+                                                                        .absolute()
+                                                                        .right_0()
+                                                                        .top_0()
+                                                                        .bottom_0()
+                                                                        .w(px(14.0))
+                                                                        .bg(theme.sidebar.opacity(0.85))
+                                                                        .child("…"),
+                                                                )
+                                                            })
+                                                            .on_mouse_down(
+                                                                MouseButton::Left,
+                                                                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                                                    if event.click_count >= 2 {
+                                                                        this.auto_fit_column(ResizingColumn::Description, cx);
+                                                                    }
+                                                                }),
+                                                            ),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .w(px(SECTION_GAP))
+                                                            .h_full()
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_center()
+                                                            .cursor(CursorStyle::ResizeLeftRight)
+                                                            .hover(|s| s.bg(theme.accent.opacity(0.2)))
+                                                            .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
+                                                            .on_mouse_down(
+                                                                MouseButton::Left,
+                                                                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                                                    if event.click_count >= 2 {
+                                                                        this.resizing_column = None;
+                                                                        this.auto_fit_column(ResizingColumn::Description, cx);
+                                                                    } else {
+                                                                        this.resizing_column =
+                                                                            Some((ResizingColumn::Description, event.position.x.into(), this.desc_col_width));
+                                                                        cx.notify();
+                                                                    }
+                                                                }),
+                                                            ),
+                                                    ),
+                                            );
+                                        }
+                                        trailing = trailing.child(comment_header_el(
+                                            self.comment_col_width,
+                                            is_comment_clipped_left,
+                                            is_comment_clipped_right,
+                                            theme,
+                                        ));
+                                        trailing.into_any_element()
                                     })
                                     .into_any_element(),
                             ),
@@ -3319,14 +3315,102 @@ impl Render for HexView {
                             cx.notify();
                         });
                     } else if let Some(target_pos) = this.offset_from_point(event.position, window, cx) {
-                        if this.editor.read(cx).is_folded(target_pos) {
+                        let (is_struct_collapse_toggle, struct_collapse_target, is_desc_field_selection) = {
+                            let editor = this.editor.read(cx);
+                            let line_starts = editor.line_starts();
+                            let layout = this.current_layout(cx);
+                            let mut is_toggle = false;
+                            let mut collapse_key = None;
+                            let mut selected_field_range = None;
+
+                            if editor.structure.show_inline_structure_view
+                                && let Some(parse_res) = editor.parse_result()
+                                && let Some(list_bounds) = this.list_bounds.get()
+                            {
+                                let rel_y = f32::from(event.position.y - list_bounds.top()).max(0.0);
+                                let top_overscroll_px = this.scroll.top_overscroll_rows as f32 * ROW_HEIGHT;
+                                if rel_y >= top_overscroll_px {
+                                    let row_offset_in_view = ((rel_y - top_overscroll_px) / ROW_HEIGHT).floor() as usize;
+                                    let row_idx = this.scroll.scroll_offset + row_offset_in_view;
+                                    if row_idx < line_starts.len() {
+                                        let line_offset = line_starts.get(row_idx).unwrap_or(0);
+                                        let next_offset = if row_idx + 1 < line_starts.len() {
+                                            line_starts.get(row_idx + 1).unwrap_or(line_offset)
+                                        } else {
+                                            editor.total_size()
+                                        };
+                                        let chunk_len = next_offset.saturating_sub(line_offset);
+                                        let base_x = f32::from(list_bounds.left()) + 8.0;
+                                        let relative_x = f32::from(event.position.x) - base_x;
+                                        let world_x = relative_x + this.scroll.outer_scroll_x;
+                                        let in_desc = layout.description.is_some_and(|col| world_x >= col.start);
+
+                                        let is_collapsed_container_row =
+                                            parse_res.find_container_structs_starting_at(line_offset, chunk_len).first().is_some_and(|c| {
+                                                c.offset == line_offset
+                                                    && (c.size == chunk_len || chunk_len == c.size.min(editor.total_size().saturating_sub(line_offset)))
+                                                    && editor.structure.is_struct_collapsed(&c.collapse_key, &c.id)
+                                            });
+
+                                        if chunk_len == 0 || is_collapsed_container_row {
+                                            let containers = parse_res.find_container_structs_starting_at(line_offset, chunk_len.max(1));
+                                            if let Some(c) = containers.first() {
+                                                is_toggle = true;
+                                                collapse_key = Some(c.collapse_key.clone());
+                                            }
+                                        } else if in_desc {
+                                            let containers = parse_res.find_container_structs_starting_at(line_offset, chunk_len);
+                                            if let Some(c) = containers.first()
+                                                && editor.structure.is_struct_collapsed(&c.collapse_key, &c.id)
+                                            {
+                                                is_toggle = true;
+                                                collapse_key = Some(c.collapse_key.clone());
+                                            } else if event.click_count >= 2 {
+                                                let leaves = parse_res.find_leaf_fields_starting_at(line_offset, chunk_len);
+                                                let leaf = leaves.first().or_else(|| parse_res.find_deepest_leaf_at(target_pos));
+                                                if let Some(l) = leaf {
+                                                    selected_field_range = Some(l.offset..l.offset + l.size);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            (is_toggle, collapse_key, selected_field_range)
+                        };
+
+                        if is_struct_collapse_toggle && let Some(key) = struct_collapse_target {
                             this.editor.update(cx, |editor, cx| {
-                                editor.unfold_bookmark_at(target_pos);
+                                editor.toggle_struct_collapsed(&key);
                                 cx.notify();
                             });
                             this.notify_document_changed(cx);
                             return;
                         }
+
+                        if this.editor.read(cx).is_folded(target_pos) {
+                            let unfolded = this.editor.update(cx, |editor, cx| {
+                                let res = editor.unfold_bookmark_at(target_pos);
+                                if res {
+                                    cx.notify();
+                                }
+                                res
+                            });
+                            if unfolded {
+                                this.notify_document_changed(cx);
+                                return;
+                            }
+                        }
+
+                        if let Some(range) = is_desc_field_selection {
+                            this.editor.update(cx, |editor, cx| {
+                                editor.set_selection_range(range.clone());
+                                editor.set_cursor_offset_exact(range.start);
+                                cx.notify();
+                            });
+                            return;
+                        }
+
                         let selection_anchor = {
                             let editor = this.editor.read(cx);
                             editor.selection().anchor()
@@ -3616,6 +3700,9 @@ impl Render for HexView {
                             let colors = *cx.global::<ByteCategoryColors>();
                             ByteCategoryPalette::from_colors(colors, cx.theme())
                         });
+                        let desc_palette = DescriptionPalette::from_theme(cx.theme());
+                        let active_cursor_offset = if insert_mode { insert_cursor_offset } else { cursor_offset };
+                        let active_leaf_field = parse_result.as_deref().and_then(|pr| pr.query_deepest_leaf_at(active_cursor_offset));
 
                         for (k, row_idx) in (top_row..end_row).enumerate() {
                             let row_y = bounds.top() + px((k + top_overscroll_rows) as f32 * ROW_HEIGHT);
@@ -3664,6 +3751,8 @@ impl Render for HexView {
                                     comment_col_width,
                                     font_family: font_family.clone(),
                                     font_size,
+                                    desc_palette,
+                                    active_leaf_field: active_leaf_field.as_deref(),
                                 },
                                 window,
                                 cx,

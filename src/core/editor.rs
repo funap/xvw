@@ -900,14 +900,20 @@ impl Editor {
         }
     }
 
-    /// Returns the active folded intervals [start, end) computed from hidden bookmarks or unbookmarked gaps.
+    /// Returns the active folded intervals [start, end) computed from hidden bookmarks, unbookmarked gaps, or collapsed structures.
     /// Overlapping and adjacent intervals are merged into disjoint union ranges.
     pub fn computed_folded_regions(&self) -> std::collections::BTreeMap<usize, usize> {
-        if let Ok(doc) = self.document.read() {
+        let mut regions = if let Ok(doc) = self.document.read() {
             doc.computed_folded_regions()
         } else {
             std::collections::BTreeMap::new()
+        };
+        if self.structure.show_inline_structure_view
+            && let Some(parse_res) = self.parse_result()
+        {
+            parse_res.collect_collapsed_ranges(&self.structure.collapsed_struct_ids, &mut regions);
         }
+        regions
     }
 
     /// Returns summary details for a folded region starting at `offset`.
@@ -925,12 +931,7 @@ impl Editor {
 
     pub fn is_folded(&self, offset: usize) -> bool {
         let regions = self.computed_folded_regions();
-        for (&s, &e) in regions.iter() {
-            if offset >= s && offset < e {
-                return true;
-            }
-        }
-        false
+        regions.range(..=offset).next_back().is_some_and(|(_, &end)| offset < end)
     }
 
     pub fn fold_end_at(&self, start: usize) -> Option<usize> {
@@ -940,12 +941,7 @@ impl Editor {
 
     pub fn fold_containing(&self, offset: usize) -> Option<(usize, usize)> {
         let regions = self.computed_folded_regions();
-        for (&s, &e) in regions.iter() {
-            if offset >= s && offset < e {
-                return Some((s, e));
-            }
-        }
-        None
+        regions.range(..=offset).next_back().and_then(|(&s, &e)| (offset < e).then_some((s, e)))
     }
 
     /// Returns the base address of the document.

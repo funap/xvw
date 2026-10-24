@@ -7,11 +7,18 @@ use crate::core::encoding::Encoding;
 use crate::core::radix::{ByteGroupSize, DisplayRadix, byte_category, digit_count, group_category};
 use crate::core::structure::{IndexedField, ParseResult};
 use crate::ui::color::BookmarkColorExt;
+use crate::ui::icon::IconName;
+use gpui::TransformationMatrix;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::IconNamed;
+use gpui_kit::component::theme::Theme;
 use gpui_kit::*;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ops::Range;
+
+pub const CHEVRON_ICON_SIZE: f32 = 14.0;
+pub const CHEVRON_ICON_GAP: f32 = 4.0;
 
 const TEXT_INPUT_CURSOR_WIDTH: Pixels = px(1.5);
 const TEXT_INPUT_CURSOR_HEIGHT_RATIO: f32 = 0.85;
@@ -382,6 +389,375 @@ pub struct RowPaintParams<'a> {
     pub comment_col_width: f32,
     pub font_family: SharedString,
     pub font_size: Pixels,
+    pub desc_palette: DescriptionPalette,
+    pub active_leaf_field: Option<&'a IndexedField>,
+}
+
+/// Sanitizes a string to guarantee single-line presentation without newlines or carriage returns.
+#[inline]
+pub fn clean_single_line(s: &str) -> Cow<'_, str> {
+    if s.contains('\n') || s.contains('\r') {
+        Cow::Owned(s.replace("\r\n", " ").replace(['\n', '\r'], " "))
+    } else {
+        Cow::Borrowed(s)
+    }
+}
+
+#[inline]
+fn channel_to_linear(c: f32) -> f32 {
+    if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+
+/// Calculates relative luminance according to WCAG 2.1 specs.
+#[inline]
+pub fn rel_luminance(c: Hsla) -> f32 {
+    let rgba = Rgba::from(c);
+    0.2126 * channel_to_linear(rgba.r) + 0.7152 * channel_to_linear(rgba.g) + 0.0722 * channel_to_linear(rgba.b)
+}
+
+/// Calculates contrast ratio between two colors according to WCAG 2.1 specs.
+#[inline]
+pub fn contrast_ratio(c1: Hsla, c2: Hsla) -> f32 {
+    let l1 = rel_luminance(c1);
+    let l2 = rel_luminance(c2);
+    let (lighter, darker) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+/// Adjusts color lightness if necessary to guarantee a minimum WCAG contrast ratio against `background`.
+pub fn ensure_contrast(color: Hsla, background: Hsla, min_ratio: f32) -> Hsla {
+    let mut solid_color = color;
+    solid_color.a = 1.0;
+    let ratio = contrast_ratio(solid_color, background);
+    if ratio >= min_ratio {
+        return solid_color;
+    }
+    let bg_lum = rel_luminance(background);
+    let is_dark_bg = bg_lum < 0.2;
+
+    for _ in 0..25 {
+        if is_dark_bg {
+            solid_color.l = (solid_color.l + 0.03).min(1.0);
+        } else {
+            solid_color.l = (solid_color.l - 0.03).max(0.0);
+        }
+        if contrast_ratio(solid_color, background) >= min_ratio {
+            break;
+        }
+    }
+    solid_color
+}
+
+/// Color palette for the structure description column, designed for high legibility
+/// across both light and dark themes using theme tokens and WCAG contrast guarantees.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DescriptionPalette {
+    pub field_id: Hsla,
+    pub type_name: Hsla,
+    pub punctuation: Hsla,
+    pub number_value: Hsla,
+    pub string_value: Hsla,
+    pub bytes_value: Hsla,
+    pub enum_label: Hsla,
+    pub comment: Hsla,
+    pub error: Hsla,
+    pub header_icon: Hsla,
+    pub continuation: Hsla,
+    pub size_badge: Hsla,
+    pub tree_guide: Hsla,
+    pub active_bg: Hsla,
+}
+
+impl DescriptionPalette {
+    pub fn from_theme(theme: &Theme) -> Self {
+        let bg = theme.background;
+        let is_dark = theme.mode.is_dark();
+        let punct_base = if is_dark {
+            theme.foreground.opacity(0.65)
+        } else {
+            theme.foreground.opacity(0.7)
+        };
+        Self {
+            field_id: ensure_contrast(theme.foreground, bg, 4.5),
+            type_name: ensure_contrast(theme.blue, bg, 4.5),
+            punctuation: ensure_contrast(punct_base, bg, 3.0),
+            number_value: ensure_contrast(theme.magenta, bg, 4.5),
+            string_value: ensure_contrast(theme.green, bg, 4.5),
+            bytes_value: ensure_contrast(theme.cyan, bg, 4.0),
+            enum_label: ensure_contrast(theme.yellow, bg, 4.5),
+            comment: ensure_contrast(theme.muted_foreground, bg, 4.0),
+            error: ensure_contrast(theme.red, bg, 4.5),
+            header_icon: ensure_contrast(theme.accent_foreground, bg, 4.5),
+            continuation: ensure_contrast(theme.muted_foreground, bg, 3.5),
+            size_badge: ensure_contrast(theme.muted_foreground, bg, 3.5),
+            tree_guide: ensure_contrast(theme.border, bg, 1.8),
+            active_bg: if is_dark { theme.blue.opacity(0.18) } else { theme.blue.opacity(0.14) },
+        }
+    }
+}
+
+/// Builds formatted text and syntax-highlighted `TextRun`s for a container structure header.
+pub fn build_structure_header_runs(container: &IndexedField, is_collapsed: bool, font: Font, palette: &DescriptionPalette) -> (String, Vec<TextRun>) {
+    let mut text = String::with_capacity(64);
+    let mut runs = Vec::new();
+
+    // 1. Field Name (id)
+    let id_start = text.len();
+    text.push_str(&clean_single_line(&container.id));
+    runs.push(TextRun {
+        len: text.len() - id_start,
+        font: font.clone(),
+        color: palette.field_id,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+
+    // 2. Type name (": type")
+    if !container.type_name.is_empty() && container.type_name != container.id {
+        let punct_start = text.len();
+        text.push_str(": ");
+        runs.push(TextRun {
+            len: text.len() - punct_start,
+            font: font.clone(),
+            color: palette.punctuation,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+
+        let type_start = text.len();
+        text.push_str(&clean_single_line(&container.type_name));
+        runs.push(TextRun {
+            len: text.len() - type_start,
+            font: font.clone(),
+            color: palette.type_name,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+    }
+
+    // 3. Size & status badge (" (30B)" or " (30B, collapsed)")
+    let size_start = text.len();
+    if is_collapsed {
+        text.push_str(&format!(" ({}B, collapsed)", container.size));
+    } else {
+        text.push_str(&format!(" ({}B)", container.size));
+    }
+    runs.push(TextRun {
+        len: text.len() - size_start,
+        font: font.clone(),
+        color: palette.size_badge,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+
+    (text, runs)
+}
+
+/// Builds formatted text and syntax-highlighted `TextRun`s for a leaf field.
+pub fn build_leaf_field_runs(field: &IndexedField, font: Font, palette: &DescriptionPalette, include_comment: bool, is_active: bool) -> (String, Vec<TextRun>) {
+    let mut text = String::with_capacity(64);
+    let mut runs = Vec::new();
+    let bg_color = if is_active { Some(palette.active_bg) } else { None };
+
+    // 1. Color pip ("▪ ")
+    let pip_color = field.color.map(Hsla::from).unwrap_or(palette.field_id);
+    text.push_str("▪ ");
+    runs.push(TextRun {
+        len: "▪ ".len(),
+        font: font.clone(),
+        color: pip_color,
+        background_color: bg_color,
+        underline: None,
+        strikethrough: None,
+    });
+
+    // 2. Field ID
+    let id_start = text.len();
+    text.push_str(&clean_single_line(&field.id));
+    runs.push(TextRun {
+        len: text.len() - id_start,
+        font: font.clone(),
+        color: palette.field_id,
+        background_color: bg_color,
+        underline: None,
+        strikethrough: None,
+    });
+
+    // 3. Optional Type name
+    if !field.type_name.is_empty() && field.type_name != field.id {
+        let punct_start = text.len();
+        text.push_str(": ");
+        runs.push(TextRun {
+            len: text.len() - punct_start,
+            font: font.clone(),
+            color: palette.punctuation,
+            background_color: bg_color,
+            underline: None,
+            strikethrough: None,
+        });
+
+        let type_start = text.len();
+        text.push_str(&clean_single_line(&field.type_name));
+        runs.push(TextRun {
+            len: text.len() - type_start,
+            font: font.clone(),
+            color: palette.type_name,
+            background_color: bg_color,
+            underline: None,
+            strikethrough: None,
+        });
+    }
+
+    // 4. Operator " = "
+    let op_start = text.len();
+    text.push_str(" = ");
+    runs.push(TextRun {
+        len: text.len() - op_start,
+        font: font.clone(),
+        color: palette.punctuation,
+        background_color: bg_color,
+        underline: None,
+        strikethrough: None,
+    });
+
+    // 5. Value
+    let val_start = text.len();
+    let val_str = if !field.formatted_value.is_empty() {
+        &field.formatted_value
+    } else {
+        field.format_expression()
+    };
+    let val_clean = clean_single_line(val_str);
+    text.push_str(&val_clean);
+    let val_color = if field.validation_failed {
+        palette.error
+    } else if val_clean.starts_with('"') {
+        palette.string_value
+    } else if val_clean.starts_with('[') {
+        palette.bytes_value
+    } else {
+        palette.number_value
+    };
+    runs.push(TextRun {
+        len: text.len() - val_start,
+        font: font.clone(),
+        color: val_color,
+        background_color: bg_color,
+        underline: None,
+        strikethrough: None,
+    });
+
+    // 6. Enum label
+    if let Some(enum_label) = &field.enum_label {
+        let punct_start = text.len();
+        text.push_str(" (");
+        runs.push(TextRun {
+            len: text.len() - punct_start,
+            font: font.clone(),
+            color: palette.punctuation,
+            background_color: bg_color,
+            underline: None,
+            strikethrough: None,
+        });
+
+        let enum_start = text.len();
+        text.push_str(&clean_single_line(enum_label));
+        runs.push(TextRun {
+            len: text.len() - enum_start,
+            font: font.clone(),
+            color: palette.enum_label,
+            background_color: bg_color,
+            underline: None,
+            strikethrough: None,
+        });
+
+        let punct_close = text.len();
+        text.push(')');
+        runs.push(TextRun {
+            len: text.len() - punct_close,
+            font: font.clone(),
+            color: palette.punctuation,
+            background_color: bg_color,
+            underline: None,
+            strikethrough: None,
+        });
+    }
+
+    // 7. Doc comment (if enabled and present)
+    if include_comment
+        && let Some(desc) = &field.description
+        && !desc.is_empty()
+        && let Some(first_line) = desc.lines().map(str::trim).find(|line| !line.is_empty())
+    {
+        let punct_start = text.len();
+        text.push_str(" // ");
+        runs.push(TextRun {
+            len: text.len() - punct_start,
+            font: font.clone(),
+            color: palette.punctuation,
+            background_color: bg_color,
+            underline: None,
+            strikethrough: None,
+        });
+
+        let doc_start = text.len();
+        text.push_str(&clean_single_line(first_line));
+        runs.push(TextRun {
+            len: text.len() - doc_start,
+            font: font.clone(),
+            color: palette.comment,
+            background_color: bg_color,
+            underline: None,
+            strikethrough: None,
+        });
+    }
+
+    (text, runs)
+}
+
+/// Builds continuation runs for fields spanning across multiple 16-byte rows.
+pub fn build_continuation_field_runs(field_id: &str, relative_offset: usize, font: Font, palette: &DescriptionPalette) -> (String, Vec<TextRun>) {
+    let mut text = String::with_capacity(32);
+    let mut runs = Vec::new();
+
+    let prefix_start = text.len();
+    text.push_str("↳ ");
+    runs.push(TextRun {
+        len: text.len() - prefix_start,
+        font: font.clone(),
+        color: palette.continuation,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+
+    let id_start = text.len();
+    text.push_str(&clean_single_line(field_id));
+    runs.push(TextRun {
+        len: text.len() - id_start,
+        font: font.clone(),
+        color: palette.field_id,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+
+    let off_start = text.len();
+    text.push_str(&format!(" (+0x{:X})", relative_offset));
+    runs.push(TextRun {
+        len: text.len() - off_start,
+        font: font.clone(),
+        color: palette.continuation,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+
+    (text, runs)
 }
 
 pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) {
@@ -425,6 +801,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
     let active_row_highlights = row_highlights(params.highlights, params.max_highlight_len, offset, next_offset);
     let is_dark = cx.theme().mode.is_dark();
+    let desc_palette = params.desc_palette;
     let (selection_bg, caret_color, muted_color, fg_color, accent_fg_color, border_color, _sidebar_bg, bg_color_theme) = {
         let theme = cx.theme();
         (
@@ -442,6 +819,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let font = font(params.font_family);
     let insert_cursor_active = params.insert_mode && params.is_focused && window.is_window_active();
     let insert_selection_active = params.min_sel <= params.max_sel;
+
+    let active_leaf_field = params.active_leaf_field;
 
     // Check for Folded Bookmark or Unbookmarked Region Row
     let fold_summary = params
@@ -495,9 +874,14 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 fold_start_addr, fold_end_addr, fold_size, fold_size
             )
         } else if !comment.is_empty() {
+            let clean_comment = if comment.contains('\n') || comment.contains('\r') {
+                comment.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("")
+            } else {
+                comment.as_str()
+            };
             format!(
                 "── {}: 0x{:08X} - 0x{:08X} (0x{:X} / {} bytes) ──",
-                comment, fold_start_addr, fold_end_addr, fold_size, fold_size
+                clean_comment, fold_start_addr, fold_end_addr, fold_size, fold_size
             )
         } else {
             format!(
@@ -607,9 +991,55 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     }
 
     let physical_address = params.doc.offset_to_address(offset);
+    let is_structure_header_row = is_struct_mode && chunk_len == 0;
+    let query_len = chunk_len.max(1);
+    let raw_containers: Cow<'_, [IndexedField]> = if let Some(parse_res) = params.parse_result {
+        if parse_res.is_live() {
+            Cow::Owned(parse_res.find_live_container_structs_starting_at(offset, query_len))
+        } else {
+            Cow::Borrowed(parse_res.find_container_structs_starting_at(offset, query_len))
+        }
+    } else {
+        Cow::Borrowed(&[])
+    };
+    let is_collapsed_struct_row = is_struct_mode
+        && chunk_len > 0
+        && raw_containers.iter().any(|c| {
+            c.offset == offset
+                && (c.size == chunk_len || chunk_len == c.size.min(total_size.saturating_sub(offset)))
+                && (params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id))
+        });
+    let row_leaves: Cow<'_, [IndexedField]> = if is_structure_header_row || is_collapsed_struct_row {
+        Cow::Borrowed(&[])
+    } else if let Some(parse_res) = params.parse_result {
+        if parse_res.is_live() {
+            Cow::Owned(parse_res.find_live_leaf_fields_starting_at(offset, chunk_len))
+        } else {
+            Cow::Borrowed(parse_res.find_leaf_fields_starting_at(offset, chunk_len))
+        }
+    } else {
+        Cow::Borrowed(&[])
+    };
+    let first_leaf = if !is_structure_header_row && !is_collapsed_struct_row && chunk_len > 0 {
+        params.parse_result.and_then(|pr| pr.query_deepest_leaf_at(offset))
+    } else {
+        None
+    };
+    let is_uniform_row_leaf = first_leaf.as_ref().is_none_or(|fl| fl.offset + fl.size >= next_offset)
+        && row_leaves.iter().all(|lf| {
+            first_leaf
+                .as_ref()
+                .is_some_and(|fl| lf.offset == fl.offset && lf.size == fl.size && lf.depth <= fl.depth)
+        });
 
     // 1. Draw Left Columns (Address OR Offset)
-    let addr_color = if is_cursor_row { fg_color } else { muted_color };
+    let addr_color = if is_structure_header_row || is_collapsed_struct_row {
+        muted_color.opacity(0.4)
+    } else if is_cursor_row {
+        fg_color
+    } else {
+        muted_color
+    };
     let (offset_w, gap) = if is_struct_mode {
         let addr_str = format_offset_08(physical_address);
         let run = TextRun {
@@ -645,18 +1075,21 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let base_x = params.bounds.left() + px(8.0);
     let hex_start_x = base_x + px(offset_w + gap) - px(params.outer_scroll_x);
     let hex_end_x = hex_start_x + px(params.hex_col_width);
-    let (comment_start_x, ascii_width) = if is_struct_mode {
-        let desc_start_x = hex_end_x + px(gap);
-        let comment_start_x = desc_start_x + px(params.desc_col_width + gap);
-        (comment_start_x, 0.0)
+    let ascii_width = if params.show_ascii { params.ascii_col_width } else { 0.0 };
+    let ascii_start_x = hex_end_x + px(gap);
+    let ascii_end_x = if params.show_ascii { ascii_start_x + px(ascii_width) } else { hex_end_x };
+    let desc_start_x = if params.show_ascii { ascii_end_x + px(gap) } else { hex_end_x + px(gap) };
+    let desc_end_x = if is_struct_mode {
+        desc_start_x + px(params.desc_col_width)
     } else {
-        let ascii_w = if params.show_ascii { params.ascii_col_width } else { 0.0 };
-        let comment_start_x = if params.show_ascii {
-            hex_end_x + px(gap + ascii_w + gap)
-        } else {
-            hex_end_x + px(gap)
-        };
-        (comment_start_x, ascii_w)
+        ascii_end_x
+    };
+    let comment_start_x = if is_struct_mode {
+        desc_end_x + px(gap)
+    } else if params.show_ascii {
+        ascii_end_x + px(gap)
+    } else {
+        hex_end_x + px(gap)
     };
 
     // Vertical Column Divider Borders (matching header splitters exactly)
@@ -678,45 +1111,57 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             bounds: scrollable_mask_bounds,
         }),
         |window| {
+            if is_structure_header_row || is_collapsed_struct_row {
+                let bar_start_x = hex_start_x;
+                let bar_end_x = params.bounds.right() - px(VERTICAL_SCROLLBAR_WIDTH + 8.0);
+                let bar_width = (bar_end_x - bar_start_x).max(px(0.0));
+                let banner_bounds = Bounds::new(point(bar_start_x, params.bounds.top() + px(1.0)), size(bar_width, px(ROW_HEIGHT - 2.0)));
+                window.paint_quad(fill(banner_bounds, desc_palette.type_name.opacity(0.06)));
+
+                let pip_bounds = Bounds::new(point(bar_start_x + px(2.0), params.bounds.top() + px(3.0)), size(px(3.0), px(ROW_HEIGHT - 6.0)));
+                window.paint_quad(fill(pip_bounds, desc_palette.type_name.opacity(0.85)));
+
+                let line_y = params.bounds.top() + px(ROW_HEIGHT / 2.0);
+                let leader_end_x = desc_start_x - px(8.0);
+                if leader_end_x > bar_start_x + px(16.0) {
+                    let leader_bounds = Bounds::new(point(bar_start_x + px(10.0), line_y), size(leader_end_x - bar_start_x - px(10.0), px(1.0)));
+                    window.paint_quad(fill(leader_bounds, desc_palette.tree_guide));
+                }
+            }
+
             let div2_x = hex_start_x + px(params.hex_col_width + (gap / 2.0));
             window.paint_quad(fill(
                 Bounds::new(point(div2_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
                 border_line_color,
             ));
-            if is_struct_mode {
-                let desc_start_x = hex_end_x + px(gap);
-                let div3_x = desc_start_x + px(params.desc_col_width + (gap / 2.0));
-                let div4_x = comment_start_x + px(params.comment_col_width + (gap / 2.0));
+            if params.show_ascii {
+                let div_ascii_x = ascii_end_x + px(gap / 2.0);
                 window.paint_quad(fill(
-                    Bounds::new(point(div3_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
-                    border_line_color,
-                ));
-                window.paint_quad(fill(
-                    Bounds::new(point(div4_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
-                    border_line_color,
-                ));
-            } else {
-                if params.show_ascii {
-                    let div3_x = hex_end_x + px(gap + ascii_width + (gap / 2.0));
-                    window.paint_quad(fill(
-                        Bounds::new(point(div3_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
-                        border_line_color,
-                    ));
-                }
-                let div4_x = comment_start_x + px(params.comment_col_width + (gap / 2.0));
-                window.paint_quad(fill(
-                    Bounds::new(point(div4_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+                    Bounds::new(point(div_ascii_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
                     border_line_color,
                 ));
             }
+            if is_struct_mode {
+                let div_desc_x = desc_end_x + px(gap / 2.0);
+                window.paint_quad(fill(
+                    Bounds::new(point(div_desc_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+                    border_line_color,
+                ));
+            }
+            let div_comment_x = comment_start_x + px(params.comment_col_width + (gap / 2.0));
+            window.paint_quad(fill(
+                Bounds::new(point(div_comment_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+                border_line_color,
+            ));
         },
     );
 
     // Build and shape the exact text stream before painting any geometry.
     // Group geometry uses the fixed cell grid; glyphs are centered in that
     // grid during the text pass.
-    let mut hex_source = build_hex_text_source(chunk, offset, params.radix, params.group_size, params.is_big_endian);
-    let mut hex_text = hex_source.text.to_string();
+    let hex_chunk = if is_structure_header_row || is_collapsed_struct_row { &[] } else { chunk };
+    let mut hex_source = build_hex_text_source(hex_chunk, offset, params.radix, params.group_size, params.is_big_endian);
+    let mut hex_shared_text = hex_source.text.clone();
     let mut pending_byte_char_start: Option<usize> = None;
 
     if let Some((pending_pos, pending_digit)) = params.pending_hex_digit
@@ -733,12 +1178,12 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     byte_index
                 };
                 let char_start = group.text_start + visual_byte * 2;
-                if char_start + 1 < hex_text.len() {
+                if char_start + 1 < hex_shared_text.len() {
                     let digit_char = char::from_digit(pending_digit as u32, 16).unwrap_or('?');
-                    let mut bytes = hex_text.into_bytes();
+                    let mut bytes = hex_shared_text.to_string().into_bytes();
                     bytes[char_start] = digit_char as u8;
                     bytes[char_start + 1] = b'_';
-                    hex_text = String::from_utf8(bytes).expect("valid utf8");
+                    hex_shared_text = SharedString::from(String::from_utf8(bytes).expect("valid utf8"));
                     pending_byte_char_start = Some(char_start);
                 }
             }
@@ -746,7 +1191,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             let digit_char = char::from_digit(pending_digit as u32, 16).unwrap_or('?');
             let group_bytes = params.group_size.byte_count();
             if hex_source.groups.is_empty() {
-                hex_text = format!("{}_", digit_char);
+                hex_shared_text = SharedString::from(format!("{}_", digit_char));
                 hex_source.groups.push(HexGroupInfo {
                     chunk_start: 0,
                     chunk_end: 0,
@@ -760,11 +1205,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 let last_group_len = last_group.chunk_end - last_group.chunk_start;
                 let is_complete = (last_group.start_slot + last_group_len) == group_bytes;
                 if is_complete {
+                    let mut hex_text = hex_shared_text.to_string();
                     hex_text.push(' ');
                     let text_start = hex_text.len();
                     hex_text.push(digit_char);
                     hex_text.push('_');
                     let text_end = hex_text.len();
+                    hex_shared_text = SharedString::from(hex_text);
                     hex_source.groups.push(HexGroupInfo {
                         chunk_start: chunk_len,
                         chunk_end: chunk_len,
@@ -776,11 +1223,11 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 } else {
                     let visual_slot = last_group.start_slot + last_group_len;
                     let char_start = last_group.text_start + visual_slot * 2;
-                    if char_start + 1 < hex_text.len() {
-                        let mut bytes = hex_text.into_bytes();
+                    if char_start + 1 < hex_shared_text.len() {
+                        let mut bytes = hex_shared_text.to_string().into_bytes();
                         bytes[char_start] = digit_char as u8;
                         bytes[char_start + 1] = b'_';
-                        hex_text = String::from_utf8(bytes).expect("valid utf8");
+                        hex_shared_text = SharedString::from(String::from_utf8(bytes).expect("valid utf8"));
                         pending_byte_char_start = Some(char_start);
                     }
                 }
@@ -845,12 +1292,15 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         });
     }
 
-    let shaped_hex = window
-        .text_system()
-        .shape_line(SharedString::from(hex_text.clone()), params.font_size, &hex_runs, None);
+    let hex_text_len = hex_shared_text.len();
+    let shaped_hex = if !hex_shared_text.is_empty() {
+        Some(window.text_system().shape_line(hex_shared_text, params.font_size, &hex_runs, None))
+    } else {
+        None
+    };
     let pending_edit_colors = pending_byte_char_start.map(|char_start| (char_start, caret_color, muted_color.opacity(0.6)));
     let text_origin_x = hex_start_x - px(params.hex_scroll_x);
-    let total_data_width = f32::from(hex_grid_width(hex_text.len(), params.hex_cell_width));
+    let total_data_width = f32::from(hex_grid_width(hex_text_len, params.hex_cell_width));
 
     // 2. Background Quads Pass for Data Items (with clipping mask)
     let hex_mask_bounds = Bounds::new(point(hex_start_x, params.bounds.top()), size(px(params.hex_col_width), px(ROW_HEIGHT)));
@@ -876,6 +1326,36 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     } else {
                         group_end_x
                     };
+
+                    // 0. Structure field background tint and active underline
+                    if is_struct_mode && let Some(parse_res) = params.parse_result {
+                        let field_at_item: Option<Cow<'_, IndexedField>> = if is_uniform_row_leaf {
+                            first_leaf.as_deref().map(Cow::Borrowed)
+                        } else {
+                            parse_res.query_deepest_leaf_at(item_start_offset)
+                        };
+                        let is_in_active_field = active_leaf_field.is_some_and(|af| item_start_offset >= af.offset && item_start_offset < af.offset + af.size);
+
+                        if let Some(ref field) = field_at_item {
+                            let field_hsla = field.color.map(Hsla::from).unwrap_or(desc_palette.type_name);
+                            let bg_opacity = if is_in_active_field { 0.18 } else { 0.06 };
+                            let field_tint = field_hsla.opacity(bg_opacity);
+
+                            let field_fill_bounds = Bounds::new(
+                                point(group_start_x, params.bounds.top() + px(1.0)),
+                                size(group_end_x - group_start_x, px(ROW_HEIGHT - 2.0)),
+                            );
+                            window.paint_quad(fill(field_fill_bounds, field_tint));
+
+                            if is_in_active_field {
+                                let underline_bounds = Bounds::new(
+                                    point(group_start_x, params.bounds.top() + px(ROW_HEIGHT - 2.5)),
+                                    size(group_end_x - group_start_x, px(1.5)),
+                                );
+                                window.paint_quad(fill(underline_bounds, field_hsla.opacity(0.85)));
+                            }
+                        }
+                    }
 
                     // 1. Highlight (bookmark) background quad
                     if let Some(color) = hl_color
@@ -1012,9 +1492,9 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 }
 
                 // 3. Text Pass for Data Items (same shaped line as the geometry pass)
-                if !hex_source.text.is_empty() {
+                if let Some(ref shaped_hex) = shaped_hex {
                     paint_centered_hex_glyphs(
-                        &shaped_hex,
+                        shaped_hex,
                         &hex_source.groups,
                         &group_text_colors,
                         pending_edit_colors,
@@ -1121,8 +1601,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         },
     );
 
-    // 3. ASCII Column (when not in structure definition mode and ASCII view is enabled)
-    if !is_struct_mode && params.show_ascii {
+    // 3. ASCII Column (when ASCII view is enabled and row has bytes)
+    if params.show_ascii && chunk_len > 0 && !is_collapsed_struct_row {
         window.with_content_mask(
             Some(ContentMask {
                 bounds: scrollable_mask_bounds,
@@ -1158,6 +1638,28 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             && hl_color.a > 0.0
                         {
                             window.paint_quad(fill(ascii_item_bounds, hl_color));
+                        }
+
+                        // Structure field background tint and active underline in ASCII
+                        if is_struct_mode && let Some(parse_res) = params.parse_result {
+                            let is_ascii_in_active = active_leaf_field.is_some_and(|af| byte_pos >= af.offset && byte_pos < af.offset + af.size);
+                            let ascii_field: Option<Cow<'_, IndexedField>> = if is_uniform_row_leaf {
+                                first_leaf.as_deref().map(Cow::Borrowed)
+                            } else {
+                                parse_res.query_deepest_leaf_at(byte_pos)
+                            };
+                            if let Some(ref field) = ascii_field {
+                                let field_hsla = field.color.map(Hsla::from).unwrap_or(desc_palette.type_name);
+                                let bg_opacity = if is_ascii_in_active { 0.16 } else { 0.05 };
+                                window.paint_quad(fill(ascii_item_bounds, field_hsla.opacity(bg_opacity)));
+                                if is_ascii_in_active {
+                                    let underline_bounds = Bounds::new(
+                                        point(ascii_item_bounds.left(), params.bounds.top() + px(ROW_HEIGHT - 2.5)),
+                                        size(ascii_item_bounds.size.width, px(1.5)),
+                                    );
+                                    window.paint_quad(fill(underline_bounds, field_hsla.opacity(0.85)));
+                                }
+                            }
                         }
 
                         // Translucent selection quad (overlaid on top of highlight)
@@ -1350,16 +1852,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
     // 4. Description Column (when structure definition is present)
     if let Some(parse_res) = params.parse_result {
-        let desc_start_x = hex_end_x + px(SECTION_GAP);
-        let desc_end_x = desc_start_x + px(params.desc_col_width);
-
         let is_structure_header_row = chunk_len == 0;
-        let query_len = chunk_len.max(1);
-        let mut container_structs: Cow<'_, [IndexedField]> = if parse_res.is_live() {
-            Cow::Owned(parse_res.find_live_container_structs_starting_at(offset, query_len))
-        } else {
-            Cow::Borrowed(parse_res.find_container_structs_starting_at(offset, query_len))
-        };
+        let mut container_structs: Cow<'_, [IndexedField]> = raw_containers;
 
         // A structure header gets its own zero-byte row. On the following
         // data row, keep only collapsed containers visible so the parent is
@@ -1372,7 +1866,21 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             container_structs = Cow::Owned(
                 container_structs
                     .iter()
-                    .filter(|container| params.collapsed_structs.contains(&container.id))
+                    .filter(|container| params.collapsed_structs.contains(&container.collapse_key) || params.collapsed_structs.contains(&container.id))
+                    .cloned()
+                    .collect(),
+            );
+        }
+
+        if is_collapsed_struct_row {
+            container_structs = Cow::Owned(
+                container_structs
+                    .iter()
+                    .filter(|container| {
+                        !container.is_instance
+                            && container.offset == offset
+                            && (params.collapsed_structs.contains(&container.collapse_key) || params.collapsed_structs.contains(&container.id))
+                    })
                     .cloned()
                     .collect(),
             );
@@ -1400,23 +1908,29 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             }
         }
 
-        let leaf_fields: Cow<'_, [IndexedField]> = if is_structure_header_row {
-            Cow::Owned(Vec::new())
-        } else if parse_res.is_live() {
-            Cow::Owned(parse_res.find_live_leaf_fields_starting_at(offset, chunk_len))
-        } else {
-            Cow::Borrowed(parse_res.find_leaf_fields_starting_at(offset, chunk_len))
-        };
+        let leaf_fields: Cow<'_, [IndexedField]> = row_leaves;
         let active_ranges = if parse_res.is_live() {
             Vec::new()
         } else {
             parse_res.find_active_struct_ranges(offset, query_len)
         };
 
-        let is_collapsed = container_structs.first().map(|c| params.collapsed_structs.contains(&c.id)).unwrap_or(false);
+        let is_collapsed = is_collapsed_struct_row
+            || container_structs
+                .first()
+                .map(|c| params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id))
+                .unwrap_or(false);
+
+        let continuation_leaf = if !is_structure_header_row && !is_collapsed_struct_row && container_structs.is_empty() && leaf_fields.is_empty() {
+            first_leaf
+        } else {
+            None
+        };
 
         let struct_depth = active_ranges.len().saturating_sub(1);
-        let indent_level = if !container_structs.is_empty() {
+        let indent_level = if let Some(ref leaf) = continuation_leaf {
+            leaf.depth
+        } else if !container_structs.is_empty() {
             active_ranges
                 .iter()
                 .find(|r| container_structs.first().map(|c| c.id == r.id).unwrap_or(false))
@@ -1429,37 +1943,71 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             leaf_fields.first().map(|field| field.depth).unwrap_or(0)
         };
         let indent_px = indent_level as f32 * 14.0;
-
-        let mut desc_parts = Vec::new();
-        if let Some(container) = container_structs.first() {
-            let icon = if is_collapsed { "▶" } else { "▼" };
-            let label = container.format_container_label();
+        let has_chevron = !container_structs.is_empty();
+        let chevron_icon_path = if has_chevron {
             if is_collapsed {
-                desc_parts.push(format!("{} {} ({} bytes)", icon, label, container.size));
+                Some(IconName::ChevronRight.path())
             } else {
-                desc_parts.push(format!("{} {}", icon, label));
+                Some(IconName::ChevronDown.path())
             }
+        } else {
+            None
+        };
+        let chevron_width = if has_chevron { CHEVRON_ICON_SIZE + CHEVRON_ICON_GAP } else { 0.0 };
+
+        let mut desc_runs = Vec::new();
+        let mut desc_full_text = String::new();
+        if let Some(container) = container_structs.first() {
+            let (hdr_text, hdr_runs) = build_structure_header_runs(container, is_collapsed, font.clone(), &desc_palette);
+            desc_full_text.push_str(&hdr_text);
+            desc_runs.extend(hdr_runs);
         }
-        if !is_collapsed {
+        if let Some(ref leaf) = continuation_leaf {
+            let rel_offset = offset.saturating_sub(leaf.offset);
+            let (c_text, c_runs) = build_continuation_field_runs(&leaf.id, rel_offset, font.clone(), &desc_palette);
+            desc_full_text.push_str(&c_text);
+            desc_runs.extend(c_runs);
+        } else if !is_collapsed {
+            let include_doc = leaf_fields.len() == 1 && container_structs.is_empty();
             for f in leaf_fields.iter() {
-                desc_parts.push(f.format_expression().to_string());
+                if !desc_full_text.is_empty() {
+                    desc_full_text.push_str("  ");
+                    desc_runs.push(TextRun {
+                        len: 2,
+                        font: font.clone(),
+                        color: desc_palette.punctuation,
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    });
+                }
+                let is_active_field = active_leaf_field.is_some_and(|af| af.offset == f.offset && af.size == f.size);
+                let (leaf_text, leaf_runs) = build_leaf_field_runs(f, font.clone(), &desc_palette, include_doc, is_active_field);
+                desc_full_text.push_str(&leaf_text);
+                desc_runs.extend(leaf_runs);
             }
         }
 
-        if !desc_parts.is_empty() {
-            let expr_shared = SharedString::from(desc_parts.join("  "));
-            let text_color = if !container_structs.is_empty() { accent_fg_color } else { fg_color };
-            let run = TextRun {
-                len: expr_shared.len(),
-                font: font.clone(),
-                color: text_color,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            let shaped_expr = window.text_system().shape_line(expr_shared, params.font_size, &[run], None);
+        if !desc_full_text.is_empty() {
+            // Invariant: GPUI shape_line panics if text contains newlines.
+            // Replace any residual '\n' or '\r' with ' ' to preserve UTF-8 byte lengths and TextRun boundaries.
+            if desc_full_text.contains('\n') || desc_full_text.contains('\r') {
+                let mut sanitized = String::with_capacity(desc_full_text.len());
+                for ch in desc_full_text.chars() {
+                    if ch == '\n' || ch == '\r' {
+                        sanitized.push(' ');
+                    } else {
+                        sanitized.push(ch);
+                    }
+                }
+                desc_full_text = sanitized;
+            }
+
+            let text_offset_px = indent_px + chevron_width;
+            let expr_shared = SharedString::from(desc_full_text);
+            let shaped_expr = window.text_system().shape_line(expr_shared, params.font_size, &desc_runs, None);
             let desc_mask_bounds = Bounds::new(point(desc_start_x, params.bounds.top()), size(px(params.desc_col_width), px(ROW_HEIGHT)));
-            let desc_text_width = f32::from(shaped_expr.width) + indent_px + 8.0;
+            let desc_text_width = f32::from(shaped_expr.width) + text_offset_px + 8.0;
 
             window.with_content_mask(
                 Some(ContentMask {
@@ -1467,8 +2015,29 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 }),
                 |window| {
                     window.with_content_mask(Some(ContentMask { bounds: desc_mask_bounds }), |window| {
+                        // Vertical tree guide lines for indentation depth
+                        if indent_level > 0 {
+                            for lvl in 1..=indent_level {
+                                let guide_x = desc_start_x - px(params.desc_scroll_x) + px((lvl - 1) as f32 * 14.0 + 5.0);
+                                if guide_x >= desc_start_x && guide_x < desc_end_x {
+                                    window.paint_quad(fill(
+                                        Bounds::new(point(guide_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+                                        desc_palette.tree_guide,
+                                    ));
+                                }
+                            }
+                        }
+
+                        // Paint Lucide chevron icon if container header
+                        if let Some(icon_path) = chevron_icon_path {
+                            let icon_x = desc_start_x - px(params.desc_scroll_x) + px(indent_px);
+                            let icon_y = params.bounds.top() + px((ROW_HEIGHT - CHEVRON_ICON_SIZE) / 2.0);
+                            let icon_bounds = Bounds::new(point(icon_x, icon_y), size(px(CHEVRON_ICON_SIZE), px(CHEVRON_ICON_SIZE)));
+                            let _ = window.paint_svg(icon_bounds, icon_path, None, TransformationMatrix::unit(), desc_palette.header_icon, cx);
+                        }
+
                         let _ = shaped_expr.paint(
-                            point(desc_start_x - px(params.desc_scroll_x) + px(indent_px), params.bounds.top() + px(2.0)),
+                            point(desc_start_x - px(params.desc_scroll_x) + px(text_offset_px), params.bounds.top() + px(2.0)),
                             line_height,
                             TextAlign::Left,
                             None,
@@ -1514,12 +2083,12 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         .bookmark_items
         .iter()
         .filter(|h| {
-            if h.comment.trim().is_empty() {
+            let h_end_offset = h.offset.saturating_add(h.size);
+            let h_last_byte = h_end_offset.saturating_sub(1).max(h.offset);
+            if h.offset > next_offset || h_last_byte < offset || h.comment.trim().is_empty() {
                 return false;
             }
             let h_start_row = crate::core::editor::Editor::find_line_index(h.offset, params.line_starts);
-            let h_end_offset = h.offset.saturating_add(h.size);
-            let h_last_byte = h_end_offset.saturating_sub(1).max(h.offset);
             let h_end_row = crate::core::editor::Editor::find_line_index(h_last_byte, params.line_starts);
             let display_row = h_start_row.max(params.top_visible_row);
             params.row_idx == display_row && params.row_idx <= h_end_row
@@ -1540,15 +2109,24 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         let mut total_content_width = 4.0;
 
         for (badge_color, comment_shared) in &row_bookmark_comments {
+            let clean_comment = if comment_shared.contains('\n') || comment_shared.contains('\r') {
+                let first_line = comment_shared.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+                SharedString::from(first_line.to_string())
+            } else {
+                comment_shared.clone()
+            };
+            if clean_comment.is_empty() {
+                continue;
+            }
             let run = TextRun {
-                len: comment_shared.len(),
+                len: clean_comment.len(),
                 font: font.clone(),
                 color: muted_color,
                 background_color: None,
                 underline: None,
                 strikethrough: None,
             };
-            let shaped_comment = window.text_system().shape_line(comment_shared.clone(), params.font_size, &[run], None);
+            let shaped_comment = window.text_system().shape_line(clean_comment, params.font_size, &[run], None);
             let text_w = f32::from(shaped_comment.width);
             shaped_items.push((*badge_color, shaped_comment, text_w));
             total_content_width += dot_size + dot_margin_right + text_w + item_spacing;
@@ -1718,14 +2296,17 @@ mod tests {
     #[allow(clippy::field_reassign_with_default)]
     fn test_theme() -> Theme {
         let mut theme = Theme::default();
+        theme.background = hsla(0.0, 0.0, 0.0, 1.0);
         theme.foreground = hsla(0.0, 0.0, 1.0, 1.0);
         theme.muted_foreground = hsla(0.0, 0.0, 0.5, 1.0);
+        theme.accent_foreground = hsla(0.0, 0.0, 0.9, 1.0);
         theme.red = hsla(0.0, 0.8, 0.5, 1.0);
         theme.green = hsla(120.0 / 360.0, 0.8, 0.5, 1.0);
         theme.blue = hsla(210.0 / 360.0, 0.8, 0.5, 1.0);
         theme.yellow = hsla(45.0 / 360.0, 0.8, 0.5, 1.0);
         theme.cyan = hsla(190.0 / 360.0, 0.8, 0.5, 1.0);
         theme.magenta = hsla(280.0 / 360.0, 0.8, 0.5, 1.0);
+        theme.border = hsla(0.0, 0.0, 0.3, 1.0);
         theme
     }
 
@@ -1839,5 +2420,157 @@ mod tests {
         assert_eq!(custom_palette.non_ascii, theme.yellow);
         assert_eq!(custom_palette.max, theme.magenta);
         assert_eq!(custom_palette.default, theme.foreground);
+    }
+
+    #[test]
+    fn test_build_structure_header_runs() {
+        use super::*;
+        use gpui::Font;
+
+        let theme = test_theme();
+        let font = Font::default();
+        let container = IndexedField {
+            id: "sections[0]".into(),
+            offset: 0x1E,
+            size: 30,
+            depth: 1,
+            is_instance: false,
+            type_name: "section".into(),
+            collapse_key: "0x1E:1:sections[0]".into(),
+            formatted_value: String::new(),
+            enum_label: None,
+            description: None,
+            color: None,
+            validation_failed: false,
+            expression: String::new(),
+        };
+
+        let palette = DescriptionPalette::from_theme(&theme);
+
+        // Expanded
+        let (text_exp, runs_exp) = build_structure_header_runs(&container, false, font.clone(), &palette);
+        assert_eq!(text_exp, "sections[0]: section (30B)");
+        assert_eq!(runs_exp.iter().map(|r| r.len).sum::<usize>(), text_exp.len());
+
+        // Collapsed
+        let (text_col, runs_col) = build_structure_header_runs(&container, true, font, &palette);
+        assert_eq!(text_col, "sections[0]: section (30B, collapsed)");
+        assert_eq!(runs_col.iter().map(|r| r.len).sum::<usize>(), text_col.len());
+    }
+
+    #[test]
+    fn test_build_leaf_field_runs() {
+        use super::*;
+        use gpui::Font;
+
+        let theme = test_theme();
+        let font = Font::default();
+        let palette = DescriptionPalette::from_theme(&theme);
+        let field = IndexedField {
+            id: "magic".into(),
+            offset: 0,
+            size: 2,
+            depth: 1,
+            is_instance: false,
+            type_name: "u2le".into(),
+            collapse_key: "0:1:magic".into(),
+            formatted_value: "0x3412 (13330)".into(),
+            enum_label: Some("VALID".into()),
+            description: Some("magic header".into()),
+            color: None,
+            validation_failed: false,
+            expression: "magic = 3412h (13330)".into(),
+        };
+
+        let (text, runs) = build_leaf_field_runs(&field, font.clone(), &palette, true, false);
+
+        assert_eq!(text, "▪ magic: u2le = 0x3412 (13330) (VALID) // magic header");
+        assert_eq!(runs.iter().map(|r| r.len).sum::<usize>(), text.len());
+        assert!(runs[0].background_color.is_none());
+
+        // Test active highlight
+        let (_act_text, act_runs) = build_leaf_field_runs(&field, font.clone(), &palette, true, true);
+        assert!(act_runs[0].background_color.is_some());
+
+        let (cont_text, cont_runs) = build_continuation_field_runs("body", 0x10, font.clone(), &palette);
+        assert_eq!(cont_text, "↳ body (+0x10)");
+        assert_eq!(cont_runs.iter().map(|r| r.len).sum::<usize>(), cont_text.len());
+
+        // Test multi-line doc comment and values with newlines are sanitized and single-line
+        let multiline_field = IndexedField {
+            id: "data".into(),
+            offset: 0,
+            size: 4,
+            depth: 0,
+            is_instance: false,
+            type_name: "str".into(),
+            collapse_key: "0:0:data".into(),
+            formatted_value: "\"line1\r\nline2\"".into(),
+            enum_label: Some("LABEL\r\nCONTINUED".into()),
+            description: Some("\n  Doc summary line\n  Second explanation line\n".into()),
+            color: None,
+            validation_failed: false,
+            expression: "data = \"line1\r\nline2\"".into(),
+        };
+
+        let (ml_text, ml_runs) = build_leaf_field_runs(&multiline_field, font, &palette, true, false);
+
+        assert!(!ml_text.contains('\n'));
+        assert!(!ml_text.contains('\r'));
+        assert_eq!(ml_runs.iter().map(|r| r.len).sum::<usize>(), ml_text.len());
+        assert!(ml_text.contains("Doc summary line"));
+        assert!(!ml_text.contains("Second explanation line"));
+        assert_eq!(clean_single_line("hello\r\nworld\n"), "hello world ");
+    }
+
+    #[test]
+    fn test_description_palette_contrast_across_all_embedded_themes() {
+        use super::*;
+        use crate::assets::Assets;
+        use crate::theme::EmbeddedThemes;
+
+        let embedded = EmbeddedThemes::load_from_assets(&Assets);
+        assert!(!embedded.theme_names().is_empty());
+
+        for name in embedded.theme_names() {
+            let config = embedded.get(&name).unwrap();
+            let mut theme = Theme::default();
+            theme.apply_config(&config);
+
+            let palette = DescriptionPalette::from_theme(&theme);
+            let bg = theme.background;
+
+            // Verify high contrast for all textual elements across every embedded theme
+            assert!(
+                contrast_ratio(palette.field_id, bg) >= 4.5,
+                "Theme '{}' failed contrast for field_id: ratio was {:.2}:1",
+                name,
+                contrast_ratio(palette.field_id, bg)
+            );
+            assert!(
+                contrast_ratio(palette.type_name, bg) >= 4.0,
+                "Theme '{}' failed contrast for type_name: ratio was {:.2}:1",
+                name,
+                contrast_ratio(palette.type_name, bg)
+            );
+            assert!(
+                contrast_ratio(palette.number_value, bg) >= 4.0,
+                "Theme '{}' failed contrast for number_value: ratio was {:.2}:1",
+                name,
+                contrast_ratio(palette.number_value, bg)
+            );
+            assert!(
+                contrast_ratio(palette.string_value, bg) >= 4.0,
+                "Theme '{}' failed contrast for string_value: ratio was {:.2}:1",
+                name,
+                contrast_ratio(palette.string_value, bg)
+            );
+            assert!(
+                contrast_ratio(palette.comment, bg) >= 3.5,
+                "Theme '{}' failed contrast for comment: ratio was {:.2}:1",
+                name,
+                contrast_ratio(palette.comment, bg)
+            );
+        }
     }
 }
