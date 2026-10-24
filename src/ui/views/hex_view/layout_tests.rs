@@ -64,6 +64,15 @@ fn check_layout_and_scrolling() {
     assert_eq!(l_struct.progress(HorizontalScrollTarget::Column(ScrollColumn::Description), 40.0), 0.5);
     assert_eq!(l_struct.column_at(description.start + 10.0, 0.0), Some(ScrollColumn::Description));
 
+    let l_struct_ascii = layout(1000.0, true, true, true);
+    assert!(l_struct_ascii.ascii.is_some());
+    assert!(l_struct_ascii.description.is_some());
+    let ascii_col = l_struct_ascii.ascii.unwrap();
+    let desc_col = l_struct_ascii.description.unwrap();
+    assert!(ascii_col.start < desc_col.start);
+    assert_eq!(l_struct_ascii.column_at(ascii_col.start + 5.0, 0.0), Some(ScrollColumn::Ascii));
+    assert_eq!(l_struct_ascii.column_at(desc_col.start + 5.0, 0.0), Some(ScrollColumn::Description));
+
     let l_zero = make_hex_view_layout(LayoutInput {
         bounds_width: 1200.0,
         is_struct_mode: false,

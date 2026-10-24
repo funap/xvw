@@ -645,18 +645,21 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let base_x = params.bounds.left() + px(8.0);
     let hex_start_x = base_x + px(offset_w + gap) - px(params.outer_scroll_x);
     let hex_end_x = hex_start_x + px(params.hex_col_width);
-    let (comment_start_x, ascii_width) = if is_struct_mode {
-        let desc_start_x = hex_end_x + px(gap);
-        let comment_start_x = desc_start_x + px(params.desc_col_width + gap);
-        (comment_start_x, 0.0)
+    let ascii_width = if params.show_ascii { params.ascii_col_width } else { 0.0 };
+    let ascii_start_x = hex_end_x + px(gap);
+    let ascii_end_x = if params.show_ascii { ascii_start_x + px(ascii_width) } else { hex_end_x };
+    let desc_start_x = if params.show_ascii { ascii_end_x + px(gap) } else { hex_end_x + px(gap) };
+    let desc_end_x = if is_struct_mode {
+        desc_start_x + px(params.desc_col_width)
     } else {
-        let ascii_w = if params.show_ascii { params.ascii_col_width } else { 0.0 };
-        let comment_start_x = if params.show_ascii {
-            hex_end_x + px(gap + ascii_w + gap)
-        } else {
-            hex_end_x + px(gap)
-        };
-        (comment_start_x, ascii_w)
+        ascii_end_x
+    };
+    let comment_start_x = if is_struct_mode {
+        desc_end_x + px(gap)
+    } else if params.show_ascii {
+        ascii_end_x + px(gap)
+    } else {
+        hex_end_x + px(gap)
     };
 
     // Vertical Column Divider Borders (matching header splitters exactly)
@@ -683,32 +686,25 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 Bounds::new(point(div2_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
                 border_line_color,
             ));
-            if is_struct_mode {
-                let desc_start_x = hex_end_x + px(gap);
-                let div3_x = desc_start_x + px(params.desc_col_width + (gap / 2.0));
-                let div4_x = comment_start_x + px(params.comment_col_width + (gap / 2.0));
+            if params.show_ascii {
+                let div_ascii_x = ascii_end_x + px(gap / 2.0);
                 window.paint_quad(fill(
-                    Bounds::new(point(div3_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
-                    border_line_color,
-                ));
-                window.paint_quad(fill(
-                    Bounds::new(point(div4_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
-                    border_line_color,
-                ));
-            } else {
-                if params.show_ascii {
-                    let div3_x = hex_end_x + px(gap + ascii_width + (gap / 2.0));
-                    window.paint_quad(fill(
-                        Bounds::new(point(div3_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
-                        border_line_color,
-                    ));
-                }
-                let div4_x = comment_start_x + px(params.comment_col_width + (gap / 2.0));
-                window.paint_quad(fill(
-                    Bounds::new(point(div4_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+                    Bounds::new(point(div_ascii_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
                     border_line_color,
                 ));
             }
+            if is_struct_mode {
+                let div_desc_x = desc_end_x + px(gap / 2.0);
+                window.paint_quad(fill(
+                    Bounds::new(point(div_desc_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+                    border_line_color,
+                ));
+            }
+            let div_comment_x = comment_start_x + px(params.comment_col_width + (gap / 2.0));
+            window.paint_quad(fill(
+                Bounds::new(point(div_comment_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+                border_line_color,
+            ));
         },
     );
 
@@ -1121,8 +1117,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         },
     );
 
-    // 3. ASCII Column (when not in structure definition mode and ASCII view is enabled)
-    if !is_struct_mode && params.show_ascii {
+    // 3. ASCII Column (when ASCII view is enabled and row has bytes)
+    if params.show_ascii && chunk_len > 0 {
         window.with_content_mask(
             Some(ContentMask {
                 bounds: scrollable_mask_bounds,
@@ -1350,9 +1346,6 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
     // 4. Description Column (when structure definition is present)
     if let Some(parse_res) = params.parse_result {
-        let desc_start_x = hex_end_x + px(SECTION_GAP);
-        let desc_end_x = desc_start_x + px(params.desc_col_width);
-
         let is_structure_header_row = chunk_len == 0;
         let query_len = chunk_len.max(1);
         let mut container_structs: Cow<'_, [IndexedField]> = if parse_res.is_live() {
