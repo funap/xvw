@@ -15,7 +15,7 @@ dirs = "7.0.0"
 gpui-kit = { version = "0.7.3", features = ["tree-sitter-markdown"] }
 rust-embed = "8.13.0"
 anyhow = "1.0.104"
-tokio = { version = "1.53.3", features = ["full"] }
+tokio = { version = "1.54.1", features = ["full"] }
 autocorrect = "2.14.2"
 serde = { version = "1.0.229", features = ["derive"] }
 schemars = "1.2.3"
