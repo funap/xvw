@@ -1,5 +1,6 @@
 use crate::core::bookmark::model::{BookmarkColor, BookmarkStore};
 use std::collections::{BTreeMap, HashSet};
+use std::sync::Arc;
 
 /// Summary details for a folded region created by hidden bookmarks or gaps.
 #[derive(Debug, Clone, PartialEq)]
@@ -55,13 +56,31 @@ impl BookmarkStore {
                 changed = true;
             }
 
+            if changed {
+                self.bump_version();
+            }
             changed
         } else {
             false
         }
     }
 
-    pub fn computed_folded_regions(&self, total_size: usize) -> BTreeMap<usize, usize> {
+    pub fn computed_folded_regions(&self, total_size: usize) -> Arc<BTreeMap<usize, usize>> {
+        if let Ok(guard) = self.cached_folded_regions.lock()
+            && let Some((cached_size, ref cached_arc)) = *guard
+            && cached_size == total_size
+        {
+            return Arc::clone(cached_arc);
+        }
+
+        let folds = Arc::new(self.calculate_folded_regions(total_size));
+        if let Ok(mut guard) = self.cached_folded_regions.lock() {
+            *guard = Some((total_size, Arc::clone(&folds)));
+        }
+        folds
+    }
+
+    pub fn calculate_folded_regions(&self, total_size: usize) -> BTreeMap<usize, usize> {
         let is_hide_unbookmarked = self.hide_unbookmarked;
         let hidden_colors = &self.hidden_colors;
         let hidden_ids = &self.hidden_ids;

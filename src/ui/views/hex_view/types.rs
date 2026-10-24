@@ -318,3 +318,32 @@ impl ByteCategoryPalette {
         }
     }
 }
+
+/// Pre-resolved theme colors hoisted out of the row painting loop.
+#[derive(Clone, Copy, Debug)]
+pub struct RowThemeColors {
+    pub selection_bg: Hsla,
+    pub caret_color: Hsla,
+    pub muted_color: Hsla,
+    pub fg_color: Hsla,
+    pub accent_fg_color: Hsla,
+    pub border_color: Hsla,
+    pub border_line_color: Hsla,
+    pub bg_color_theme: Hsla,
+}
+
+impl RowThemeColors {
+    pub fn from_theme(theme: &Theme, is_focused: bool) -> Self {
+        let is_dark = theme.mode.is_dark();
+        Self {
+            selection_bg: crate::ui::views::hex_view::paint::selection_background_color(theme.selection, is_focused, is_dark),
+            caret_color: theme.caret,
+            muted_color: theme.muted_foreground,
+            fg_color: theme.foreground,
+            accent_fg_color: theme.accent_foreground,
+            border_color: theme.border,
+            border_line_color: theme.border.opacity(0.4),
+            bg_color_theme: theme.background,
+        }
+    }
+}

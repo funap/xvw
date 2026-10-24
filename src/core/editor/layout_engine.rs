@@ -174,7 +174,7 @@ impl LayoutEngine {
         let map = if !Self::has_custom_layout(doc, show_inline_structure_view, is_parsing_structure) {
             LineMap::Standard { total_size, bytes_per_row }
         } else {
-            let mut folded_regions = doc.computed_folded_regions();
+            let mut folded_regions = (*doc.computed_folded_regions()).clone();
             if show_inline_structure_view
                 && !is_parsing_structure
                 && let Some(parse_res) = &meta.parse_result

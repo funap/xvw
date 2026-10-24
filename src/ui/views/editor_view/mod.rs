@@ -65,6 +65,8 @@ pub struct EditorView {
     goto_bar: Entity<GotoOffsetBar>,
     structure_reparse_task: Option<Task<()>>,
     tab_group: Option<WeakEntity<TabGroup>>,
+    last_bookmark_version: u64,
+    last_cursor_offset: Option<usize>,
     _appearance_subscription: Subscription,
     _bytes_per_row_subscription: Subscription,
     _editor_subscription: Subscription,
@@ -167,7 +169,11 @@ impl EditorView {
         // Subscribe to HexView scroll events to update highlights when scrolling
         cx.subscribe(&hex_view, |this, _, event: &crate::ui::views::hex_view::HexViewEvent, cx| {
             if let crate::ui::views::hex_view::HexViewEvent::Scrolled(_) = event {
-                this.update_highlights(cx);
+                let has_search =
+                    (this.is_search_visible && !this.search_bar.read(cx).query(cx).is_empty()) || !this.editor.read(cx).search_state.query.is_empty();
+                if has_search {
+                    this.update_highlights(cx);
+                }
             }
         })
         .detach();
@@ -202,9 +208,24 @@ impl EditorView {
         });
 
         let _editor_subscription = cx.observe(&editor, |this, editor, cx| {
-            this.update_highlights(cx);
+            let (bm_ver, cur, has_editor_search, pending_reparse) = {
+                let ed = editor.read(cx);
+                (
+                    ed.bookmarks().version(),
+                    ed.cursor.offset,
+                    !ed.search_state.query.is_empty(),
+                    ed.pending_structure_reparse(),
+                )
+            };
+            let has_search = (this.is_search_visible && !this.search_bar.read(cx).query(cx).is_empty()) || has_editor_search;
 
-            if let Some((_, generation)) = editor.read(cx).pending_structure_reparse() {
+            if bm_ver != this.last_bookmark_version || (has_search && Some(cur) != this.last_cursor_offset) {
+                this.last_bookmark_version = bm_ver;
+                this.last_cursor_offset = Some(cur);
+                this.update_highlights(cx);
+            }
+
+            if let Some((_, generation)) = pending_reparse {
                 this.schedule_structure_reparse(generation, cx);
             }
 
@@ -236,6 +257,9 @@ impl EditorView {
             }
         });
 
+        let last_bookmark_version = editor.read(cx).bookmarks().version();
+        let last_cursor_offset = Some(editor.read(cx).cursor.offset);
+
         Self {
             editor,
             focus_handle,
@@ -246,6 +270,8 @@ impl EditorView {
             goto_bar,
             structure_reparse_task: None,
             tab_group: None,
+            last_bookmark_version,
+            last_cursor_offset,
             _appearance_subscription,
             _bytes_per_row_subscription,
             _editor_subscription,
@@ -406,10 +432,12 @@ impl EditorView {
     }
 
     fn update_highlights(&mut self, cx: &mut Context<Self>) {
+        let editor = self.editor.read(cx);
+        self.last_bookmark_version = editor.bookmarks().version();
+        self.last_cursor_offset = Some(editor.cursor.offset);
         let mut highlights = Vec::new();
 
         // 1. Add user custom bookmarks from editor
-        let editor = self.editor.read(cx);
         highlights.extend(
             editor
                 .bookmarks()

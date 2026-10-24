@@ -176,6 +176,44 @@ impl StructureIndex {
             .filter(|f| f.offset == offset && !f.is_instance && f.size > 0)
             .collect()
     }
+
+    /// Counts active structure ranges intersecting `[start_offset, start_offset + len)` without allocation.
+    pub fn count_active_struct_ranges(&self, start_offset: usize, len: usize) -> usize {
+        let row_end = start_offset.saturating_add(len);
+        let ranges = &self.active_ranges;
+        if ranges.is_empty() {
+            return 0;
+        }
+
+        let tree = &self.active_range_max_tree;
+        let mut work = [(0usize, 0usize, 0usize); 64];
+        let mut work_len = 1;
+        work[0] = (1, 0, self.active_range_tree_base);
+        let mut count = 0;
+        while work_len > 0 {
+            work_len -= 1;
+            let (node, segment_start, segment_end) = work[work_len];
+            if segment_start >= ranges.len() || ranges[segment_start].start >= row_end || tree[node] <= start_offset {
+                continue;
+            }
+
+            if segment_end - segment_start == 1 {
+                let range = &ranges[segment_start];
+                if range.start < row_end && range.end > start_offset {
+                    count += 1;
+                }
+                continue;
+            }
+
+            let middle = segment_start + (segment_end - segment_start) / 2;
+            if work_len + 2 <= work.len() {
+                work[work_len] = (node * 2 + 1, middle, segment_end);
+                work[work_len + 1] = (node * 2, segment_start, middle);
+                work_len += 2;
+            }
+        }
+        count
+    }
 }
 
 /// Incrementally collects the byte-range data needed by structure rendering.

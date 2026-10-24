@@ -39,6 +39,7 @@ impl BookmarkStore {
         updated.push(BookmarkItem::new(new_range.start, new_range.len(), hl_color, ""));
         updated.sort_by_key(|h| (h.offset, h.size));
         self.items = updated;
+        self.bump_version();
     }
 
     pub fn clear_custom(&mut self, range: Range<usize>) {
@@ -68,6 +69,7 @@ impl BookmarkStore {
         }
         self.items = updated;
         self.items.sort_by_key(|h| (h.offset, h.size));
+        self.bump_version();
     }
 
     pub fn custom_bookmarks_for_rendering(&self) -> Vec<(Range<usize>, RgbaColor)> {

@@ -624,6 +624,11 @@ impl ParseResult {
         }
         result
     }
+
+    /// Counts active structure ranges intersecting `[start_offset, start_offset + len)` without allocation.
+    pub fn count_active_struct_ranges(&self, start_offset: usize, len: usize) -> usize {
+        self.index.count_active_struct_ranges(start_offset, len)
+    }
 }
 
 #[cfg(test)]

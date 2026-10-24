@@ -121,26 +121,27 @@ impl BookmarkPanel {
 
         if let Some(ed) = &editor {
             self._editor_subscription = Some(cx.observe(ed, |this, editor, cx| {
-                this.sync_selected_from_cursor(&editor, cx);
-                cx.notify();
+                if this.sync_selected_from_cursor(&editor, cx) {
+                    cx.notify();
+                }
             }));
             self.sync_selected_from_cursor(ed, cx);
         }
         cx.notify();
     }
 
-    fn sync_selected_from_cursor(&mut self, editor: &Entity<Editor>, cx: &mut Context<Self>) {
+    fn sync_selected_from_cursor(&mut self, editor: &Entity<Editor>, cx: &mut Context<Self>) -> bool {
         if self.editing_id.is_some() {
-            return;
+            return false;
         }
-        let (cursor_offset, bookmarks) = {
-            let ed = editor.read(cx);
-            (ed.cursor.offset, ed.bookmarks().snapshot())
-        };
+        let ed = editor.read(cx);
+        let cursor_offset = ed.cursor.offset;
+        let bookmarks = ed.bookmarks().snapshot_arc();
 
         if bookmarks.is_empty() {
+            let changed = self.selected_id.is_some();
             self.selected_id = None;
-            return;
+            return changed;
         }
 
         if let Some(ref sel_id) = self.selected_id
@@ -148,15 +149,23 @@ impl BookmarkPanel {
         {
             let range = item.offset..item.offset + item.size;
             if (item.size > 0 && range.contains(&cursor_offset)) || (item.size == 0 && item.offset == cursor_offset) {
-                return;
+                return false;
             }
         }
 
-        if let Some(item) = bookmarks.iter().find(|h| {
-            let range = h.offset..h.offset + h.size;
-            (h.size > 0 && range.contains(&cursor_offset)) || (h.size == 0 && h.offset == cursor_offset)
-        }) {
-            self.selected_id = Some(item.id.clone());
+        let new_id = bookmarks
+            .iter()
+            .find(|h| {
+                let range = h.offset..h.offset + h.size;
+                (h.size > 0 && range.contains(&cursor_offset)) || (h.size == 0 && h.offset == cursor_offset)
+            })
+            .map(|item| item.id.clone());
+
+        if self.selected_id != new_id {
+            self.selected_id = new_id;
+            true
+        } else {
+            false
         }
     }
 

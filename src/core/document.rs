@@ -292,7 +292,7 @@ impl Document {
     ///
     /// Hidden bookmarks and unbookmarked gaps (when `hide_unbookmarked` is enabled)
     /// are calculated as separate, non-overlapping folded intervals.
-    pub fn computed_folded_regions(&self) -> BTreeMap<usize, usize> {
+    pub fn computed_folded_regions(&self) -> Arc<BTreeMap<usize, usize>> {
         self.metadata.bookmarks.computed_folded_regions(self.buffer.len())
     }
 

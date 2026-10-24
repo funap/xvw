@@ -1,4 +1,5 @@
 use super::layout::*;
+use super::row_cache::*;
 use super::types::*;
 use crate::core::bookmark::BookmarkItem;
 use crate::core::document::Document;
@@ -391,6 +392,8 @@ pub struct RowPaintParams<'a> {
     pub font_size: Pixels,
     pub desc_palette: DescriptionPalette,
     pub active_leaf_field: Option<&'a IndexedField>,
+    pub theme_colors: &'a RowThemeColors,
+    pub row_cache: &'a mut RowRenderCache,
 }
 
 /// Sanitizes a string to guarantee single-line presentation without newlines or carriage returns.
@@ -785,6 +788,358 @@ pub fn calculate_description_indent_level(
     }
 }
 
+#[inline]
+fn resolve_row_leaf_fields<'a>(
+    parse_res: Option<&'a ParseResult>,
+    offset: usize,
+    chunk_len: usize,
+    first_leaf: Option<&'a IndexedField>,
+    row_leaves: &'a [IndexedField],
+) -> Vec<Option<Cow<'a, IndexedField>>> {
+    let mut result = Vec::with_capacity(chunk_len);
+    for j in 0..chunk_len {
+        let byte_pos = offset + j;
+        let mut best: Option<&'a IndexedField> = None;
+
+        if let Some(fl) = first_leaf
+            && fl.offset <= byte_pos
+            && byte_pos < fl.offset + fl.size
+        {
+            best = Some(fl);
+        }
+
+        for leaf in row_leaves {
+            if leaf.offset <= byte_pos && byte_pos < leaf.offset + leaf.size && best.is_none_or(|b| leaf.depth > b.depth) {
+                best = Some(leaf);
+            }
+        }
+
+        if let Some(b) = best {
+            result.push(Some(Cow::Borrowed(b)));
+        } else if let Some(pr) = parse_res {
+            result.push(pr.query_deepest_leaf_at(byte_pos));
+        } else {
+            result.push(None);
+        }
+    }
+    result
+}
+
+pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usize, window: &mut Window) -> CachedRow {
+    let chunk_len = next_offset - offset;
+    let chunk = params.doc.buffer.get_range(offset, chunk_len);
+    let total_size = params.doc.buffer.len();
+    let is_struct_mode = params.parse_result.is_some();
+    let font = font(params.font_family.clone());
+
+    let physical_address = params.doc.offset_to_address(offset);
+    let is_structure_header_row = is_struct_mode && chunk_len == 0;
+    let query_len = chunk_len.max(1);
+
+    let raw_containers: Cow<'_, [IndexedField]> = if let Some(parse_res) = params.parse_result {
+        if parse_res.is_live() {
+            Cow::Owned(parse_res.find_live_container_structs_starting_at(offset, query_len))
+        } else {
+            Cow::Borrowed(parse_res.find_container_structs_starting_at(offset, query_len))
+        }
+    } else {
+        Cow::Borrowed(&[])
+    };
+
+    let is_collapsed_struct_row = is_struct_mode
+        && chunk_len > 0
+        && raw_containers.iter().any(|c| {
+            c.offset == offset
+                && (c.size == chunk_len || chunk_len == c.size.min(total_size.saturating_sub(offset)))
+                && (params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id))
+        });
+
+    let row_leaves: Cow<'_, [IndexedField]> = if is_structure_header_row || is_collapsed_struct_row {
+        Cow::Borrowed(&[])
+    } else if let Some(parse_res) = params.parse_result {
+        if parse_res.is_live() {
+            Cow::Owned(parse_res.find_live_leaf_fields_starting_at(offset, chunk_len))
+        } else {
+            Cow::Borrowed(parse_res.find_leaf_fields_starting_at(offset, chunk_len))
+        }
+    } else {
+        Cow::Borrowed(&[])
+    };
+
+    let first_leaf = if !is_structure_header_row && !is_collapsed_struct_row && chunk_len > 0 {
+        params.parse_result.and_then(|pr| pr.query_deepest_leaf_at(offset))
+    } else {
+        None
+    };
+
+    let is_uniform_row_leaf = first_leaf.as_ref().is_none_or(|fl| fl.offset + fl.size >= next_offset)
+        && row_leaves.iter().all(|lf| {
+            first_leaf
+                .as_ref()
+                .is_some_and(|fl| lf.offset == fl.offset && lf.size == fl.size && lf.depth <= fl.depth)
+        });
+
+    let row_leaf_fields: Vec<Option<IndexedField>> = if is_uniform_row_leaf || chunk_len == 0 {
+        Vec::new()
+    } else {
+        resolve_row_leaf_fields(params.parse_result, offset, chunk_len, first_leaf.as_deref(), &row_leaves)
+            .into_iter()
+            .map(|opt| opt.map(|c| c.into_owned()))
+            .collect()
+    };
+
+    let structure_fields = if is_struct_mode {
+        Some(CachedRowStructureFields {
+            is_structure_header_row,
+            is_collapsed_struct_row,
+            first_leaf: first_leaf.as_deref().cloned(),
+            is_uniform_row_leaf,
+            row_leaf_fields,
+        })
+    } else {
+        None
+    };
+
+    // Address column
+    let shaped_addr = if is_struct_mode || params.show_offset {
+        let addr_str = format_offset_08(physical_address);
+        let addr_color = if is_structure_header_row || is_collapsed_struct_row {
+            params.theme_colors.muted_color.opacity(0.4)
+        } else {
+            params.theme_colors.muted_color
+        };
+        let run = TextRun {
+            len: addr_str.len(),
+            font: font.clone(),
+            color: addr_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        Some(window.text_system().shape_line(addr_str, params.font_size, &[run], None))
+    } else {
+        None
+    };
+
+    // Hex column
+    let hex_chunk = if is_structure_header_row || is_collapsed_struct_row { &[] } else { chunk };
+    let hex_source = build_hex_text_source(hex_chunk, offset, params.radix, params.group_size, params.is_big_endian);
+    let shaped_hex = if !hex_source.text.is_empty() {
+        let run = TextRun {
+            len: hex_source.text.len(),
+            font: font.clone(),
+            color: params.theme_colors.fg_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        Some(window.text_system().shape_line(hex_source.text.clone(), params.font_size, &[run], None))
+    } else {
+        None
+    };
+
+    // ASCII column
+    let mut ascii_cells = Vec::with_capacity(chunk.len());
+    let shaped_ascii = if params.show_ascii && chunk_len > 0 && !is_collapsed_struct_row {
+        let char_map = build_ascii_char_map(params.encoding, params.doc.buffer.data(), offset, chunk.len());
+        let mut ascii_text = String::with_capacity(chunk.len());
+        for (j, opt) in char_map.into_iter().enumerate() {
+            let item = if let Some(item) = opt { item } else { continue };
+            let c = item.character();
+            let text_byte_start = ascii_text.len();
+            ascii_text.push(c);
+            let text_byte_end = ascii_text.len();
+            let byte = chunk.get(j).copied().unwrap_or(0);
+            ascii_cells.push(CachedAsciiCell {
+                cell_idx: j,
+                text_byte_start,
+                text_byte_end,
+                byte,
+                is_printable: item.is_printable(),
+            });
+        }
+        if !ascii_text.is_empty() {
+            let run = TextRun {
+                len: ascii_text.len(),
+                font: font.clone(),
+                color: params.theme_colors.fg_color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            Some(window.text_system().shape_line(SharedString::from(ascii_text), params.font_size, &[run], None))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Description column
+    let desc = if let Some(parse_res) = params.parse_result {
+        let has_header_at_offset = raw_containers.iter().any(|header| {
+            header.offset == offset
+                && header.size > 0
+                && !header.is_instance
+                && !params.collapsed_structs.contains(&header.collapse_key)
+                && !params.collapsed_structs.contains(&header.id)
+        });
+        let has_header_before =
+            !is_structure_header_row && params.row_idx > 0 && params.line_starts.get(params.row_idx - 1) == Some(offset) && has_header_at_offset;
+        let mut container_structs: Vec<IndexedField> = if has_header_before {
+            raw_containers
+                .iter()
+                .filter(|container| params.collapsed_structs.contains(&container.collapse_key) || params.collapsed_structs.contains(&container.id))
+                .cloned()
+                .collect()
+        } else {
+            raw_containers.into_owned()
+        };
+
+        if is_collapsed_struct_row {
+            container_structs.retain(|container| {
+                !container.is_instance
+                    && container.offset == offset
+                    && (params.collapsed_structs.contains(&container.collapse_key) || params.collapsed_structs.contains(&container.id))
+            });
+        }
+
+        if is_structure_header_row {
+            container_structs.retain(|container| !container.is_instance && container.size > 0);
+        }
+
+        if is_structure_header_row && container_structs.len() > 1 {
+            let mut same_offset_rows = 0;
+            let mut previous_row = params.row_idx;
+            while previous_row > 0 && params.line_starts.get(previous_row - 1) == Some(offset) {
+                same_offset_rows += 1;
+                previous_row -= 1;
+            }
+            if let Some(container) = container_structs.get(same_offset_rows).cloned() {
+                container_structs = vec![container];
+            }
+        }
+
+        if !is_structure_header_row && !is_collapsed_struct_row {
+            container_structs.clear();
+        }
+
+        let leaf_fields: Vec<IndexedField> = row_leaves.into_owned();
+
+        let is_collapsed = is_collapsed_struct_row
+            || container_structs
+                .first()
+                .map(|c| params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id))
+                .unwrap_or(false);
+
+        let continuation_leaf = if !is_structure_header_row && !is_collapsed_struct_row && container_structs.is_empty() && leaf_fields.is_empty() {
+            first_leaf.as_deref().cloned()
+        } else {
+            None
+        };
+
+        let active_range_count = if continuation_leaf.is_none() && container_structs.is_empty() && leaf_fields.is_empty() && !parse_res.is_live() {
+            parse_res.count_active_struct_ranges(offset, query_len)
+        } else {
+            0
+        };
+
+        let indent_level = calculate_description_indent_level(continuation_leaf.as_ref(), container_structs.first(), leaf_fields.first(), active_range_count);
+        let indent_px = indent_level as f32 * 14.0;
+        let has_chevron = !container_structs.is_empty();
+        let chevron_icon_path = if has_chevron {
+            if is_collapsed {
+                Some(IconName::ChevronRight.path())
+            } else {
+                Some(IconName::ChevronDown.path())
+            }
+        } else {
+            None
+        };
+        let chevron_width = if has_chevron { CHEVRON_ICON_SIZE + CHEVRON_ICON_GAP } else { 0.0 };
+
+        let mut desc_runs = Vec::new();
+        let mut desc_full_text = String::new();
+        if let Some(container) = container_structs.first() {
+            let (hdr_text, hdr_runs) = build_structure_header_runs(container, is_collapsed, font.clone(), &params.desc_palette);
+            desc_full_text.push_str(&hdr_text);
+            desc_runs.extend(hdr_runs);
+        }
+        if let Some(ref leaf) = continuation_leaf {
+            let rel_offset = offset.saturating_sub(leaf.offset);
+            let (c_text, c_runs) = build_continuation_field_runs(&leaf.id, rel_offset, font.clone(), &params.desc_palette);
+            desc_full_text.push_str(&c_text);
+            desc_runs.extend(c_runs);
+        } else if !is_collapsed {
+            let include_doc = leaf_fields.len() == 1 && container_structs.is_empty();
+            for f in leaf_fields.iter() {
+                if !desc_full_text.is_empty() {
+                    desc_full_text.push_str("  ");
+                    desc_runs.push(TextRun {
+                        len: 2,
+                        font: font.clone(),
+                        color: params.desc_palette.punctuation,
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    });
+                }
+                let (leaf_text, leaf_runs) = build_leaf_field_runs(f, font.clone(), &params.desc_palette, include_doc, false);
+                desc_full_text.push_str(&leaf_text);
+                desc_runs.extend(leaf_runs);
+            }
+        }
+
+        if !desc_full_text.is_empty() {
+            if desc_full_text.contains('\n') || desc_full_text.contains('\r') {
+                let mut sanitized = String::with_capacity(desc_full_text.len());
+                for ch in desc_full_text.chars() {
+                    if ch == '\n' || ch == '\r' {
+                        sanitized.push(' ');
+                    } else {
+                        sanitized.push(ch);
+                    }
+                }
+                desc_full_text = sanitized;
+            }
+
+            let text_offset_px = indent_px + chevron_width;
+            let expr_shared = SharedString::from(desc_full_text);
+            let shaped_base_desc = window.text_system().shape_line(expr_shared, params.font_size, &desc_runs, None);
+            let desc_text_width = f32::from(shaped_base_desc.width) + text_offset_px + 8.0;
+            let leaf_field_ranges = leaf_fields.iter().map(|f| (f.offset, f.size)).collect();
+
+            Some(CachedRowDesc {
+                indent_level,
+                indent_px,
+                chevron_icon_path,
+                text_offset_px,
+                desc_text_width,
+                shaped_base_desc: Some(shaped_base_desc),
+                leaf_field_ranges,
+                container_structs,
+                continuation_leaf,
+                leaf_fields,
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    CachedRow {
+        physical_address,
+        shaped_addr,
+        hex_source,
+        shaped_hex,
+        ascii_cells,
+        shaped_ascii,
+        structure_fields,
+        desc,
+    }
+}
+
 pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) {
     let (offset, next_offset) = if params.row_idx < params.line_starts.len() {
         let offset = match params.line_starts.get(params.row_idx) {
@@ -825,23 +1180,18 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let is_struct_mode = params.parse_result.is_some();
 
     let active_row_highlights = row_highlights(params.highlights, params.max_highlight_len, offset, next_offset);
-    let is_dark = cx.theme().mode.is_dark();
     let desc_palette = params.desc_palette;
-    let (selection_bg, caret_color, muted_color, fg_color, accent_fg_color, border_color, _sidebar_bg, bg_color_theme) = {
-        let theme = cx.theme();
-        (
-            selection_background_color(theme.selection, params.is_focused, is_dark),
-            theme.caret,
-            theme.muted_foreground,
-            theme.foreground,
-            theme.accent_foreground,
-            theme.border,
-            theme.sidebar,
-            theme.background,
-        )
-    };
+    let selection_bg = params.theme_colors.selection_bg;
+    let caret_color = params.theme_colors.caret_color;
+    let muted_color = params.theme_colors.muted_color;
+    let fg_color = params.theme_colors.fg_color;
+    let accent_fg_color = params.theme_colors.accent_fg_color;
+    let border_color = params.theme_colors.border_color;
+    let border_line_color = params.theme_colors.border_line_color;
+    let bg_color_theme = params.theme_colors.bg_color_theme;
+
     let line_height = px(ROW_HEIGHT);
-    let font = font(params.font_family);
+    let font = font(params.font_family.clone());
     let insert_cursor_active = params.insert_mode && params.is_focused && window.is_window_active();
     let insert_selection_active = params.min_sel <= params.max_sel;
 
@@ -1015,47 +1365,24 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         return;
     }
 
-    let physical_address = params.doc.offset_to_address(offset);
-    let is_structure_header_row = is_struct_mode && chunk_len == 0;
-    let query_len = chunk_len.max(1);
-    let raw_containers: Cow<'_, [IndexedField]> = if let Some(parse_res) = params.parse_result {
-        if parse_res.is_live() {
-            Cow::Owned(parse_res.find_live_container_structs_starting_at(offset, query_len))
-        } else {
-            Cow::Borrowed(parse_res.find_container_structs_starting_at(offset, query_len))
-        }
+    if params.row_cache.get(params.row_idx).is_none() {
+        let cached_row = build_cached_row(&params, offset, next_offset, window);
+        params.row_cache.insert(params.row_idx, cached_row);
+    }
+    let cached = params.row_cache.get(params.row_idx).unwrap();
+
+    let physical_address = cached.physical_address;
+    let (is_structure_header_row, is_collapsed_struct_row, first_leaf, is_uniform_row_leaf, row_leaf_fields) = if let Some(ref sf) = cached.structure_fields {
+        (
+            sf.is_structure_header_row,
+            sf.is_collapsed_struct_row,
+            sf.first_leaf.as_ref(),
+            sf.is_uniform_row_leaf,
+            &sf.row_leaf_fields[..],
+        )
     } else {
-        Cow::Borrowed(&[])
+        (false, false, None, false, &[][..])
     };
-    let is_collapsed_struct_row = is_struct_mode
-        && chunk_len > 0
-        && raw_containers.iter().any(|c| {
-            c.offset == offset
-                && (c.size == chunk_len || chunk_len == c.size.min(total_size.saturating_sub(offset)))
-                && (params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id))
-        });
-    let row_leaves: Cow<'_, [IndexedField]> = if is_structure_header_row || is_collapsed_struct_row {
-        Cow::Borrowed(&[])
-    } else if let Some(parse_res) = params.parse_result {
-        if parse_res.is_live() {
-            Cow::Owned(parse_res.find_live_leaf_fields_starting_at(offset, chunk_len))
-        } else {
-            Cow::Borrowed(parse_res.find_leaf_fields_starting_at(offset, chunk_len))
-        }
-    } else {
-        Cow::Borrowed(&[])
-    };
-    let first_leaf = if !is_structure_header_row && !is_collapsed_struct_row && chunk_len > 0 {
-        params.parse_result.and_then(|pr| pr.query_deepest_leaf_at(offset))
-    } else {
-        None
-    };
-    let is_uniform_row_leaf = first_leaf.as_ref().is_none_or(|fl| fl.offset + fl.size >= next_offset)
-        && row_leaves.iter().all(|lf| {
-            first_leaf
-                .as_ref()
-                .is_some_and(|fl| lf.offset == fl.offset && lf.size == fl.size && lf.depth <= fl.depth)
-        });
 
     // 1. Draw Left Columns (Address OR Offset)
     let addr_color = if is_structure_header_row || is_collapsed_struct_row {
@@ -1066,33 +1393,41 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         muted_color
     };
     let (offset_w, gap) = if is_struct_mode {
-        let addr_str = format_offset_08(physical_address);
-        let run = TextRun {
-            len: addr_str.len(),
-            font: font.clone(),
-            color: addr_color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let shaped = window.text_system().shape_line(addr_str, params.font_size, &[run], None);
         let addr_pos = point(params.bounds.left() + px(8.0), params.bounds.top() + px(2.0));
-        let _ = shaped.paint(addr_pos, line_height, TextAlign::Left, None, window, cx);
-        (params.address_col_width, SECTION_GAP)
-    } else {
-        if params.show_offset {
-            let offset_str = format_offset_08(physical_address);
+        if is_cursor_row {
+            let addr_str = format_offset_08(physical_address);
             let run = TextRun {
-                len: offset_str.len(),
+                len: addr_str.len(),
                 font: font.clone(),
                 color: addr_color,
                 background_color: None,
                 underline: None,
                 strikethrough: None,
             };
-            let shaped = window.text_system().shape_line(offset_str, params.font_size, &[run], None);
+            let shaped = window.text_system().shape_line(addr_str, params.font_size, &[run], None);
+            let _ = shaped.paint(addr_pos, line_height, TextAlign::Left, None, window, cx);
+        } else if let Some(ref shaped) = cached.shaped_addr {
+            let _ = shaped.paint(addr_pos, line_height, TextAlign::Left, None, window, cx);
+        }
+        (params.address_col_width, SECTION_GAP)
+    } else {
+        if params.show_offset {
             let offset_pos = point(params.bounds.left() + px(8.0), params.bounds.top() + px(2.0));
-            let _ = shaped.paint(offset_pos, line_height, TextAlign::Left, None, window, cx);
+            if is_cursor_row {
+                let offset_str = format_offset_08(physical_address);
+                let run = TextRun {
+                    len: offset_str.len(),
+                    font: font.clone(),
+                    color: addr_color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                let shaped = window.text_system().shape_line(offset_str, params.font_size, &[run], None);
+                let _ = shaped.paint(offset_pos, line_height, TextAlign::Left, None, window, cx);
+            } else if let Some(ref shaped) = cached.shaped_addr {
+                let _ = shaped.paint(offset_pos, line_height, TextAlign::Left, None, window, cx);
+            }
         }
         (if params.show_offset { OFFSET_WIDTH } else { 0.0 }, SECTION_GAP)
     };
@@ -1118,7 +1453,6 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     };
 
     // Vertical Column Divider Borders (matching header splitters exactly)
-    let border_line_color = border_color.opacity(0.4);
     if is_struct_mode || params.show_offset {
         let div1_x = base_x + px(offset_w + (gap / 2.0));
         window.paint_quad(fill(
@@ -1181,20 +1515,17 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         },
     );
 
-    // Build and shape the exact text stream before painting any geometry.
-    // Group geometry uses the fixed cell grid; glyphs are centered in that
-    // grid during the text pass.
-    let hex_chunk = if is_structure_header_row || is_collapsed_struct_row { &[] } else { chunk };
-    let mut hex_source = build_hex_text_source(hex_chunk, offset, params.radix, params.group_size, params.is_big_endian);
-    let mut hex_shared_text = hex_source.text.clone();
-    let mut pending_byte_char_start: Option<usize> = None;
-
-    if let Some((pending_pos, pending_digit)) = params.pending_hex_digit
+    let (hex_source_ref, shaped_hex_ref, pending_edit_colors) = if let Some((pending_pos, pending_digit)) = params.pending_hex_digit
         && params.active_column == EditColumn::Hex
+        && ((pending_pos >= offset && pending_pos < next_offset) || (is_eof_on_this_row && pending_pos == total_size))
     {
+        let hex_chunk = if is_structure_header_row || is_collapsed_struct_row { &[] } else { chunk };
+        let mut dyn_source = build_hex_text_source(hex_chunk, offset, params.radix, params.group_size, params.is_big_endian);
+        let mut hex_shared_text = dyn_source.text.clone();
+        let mut pending_byte_char_start: Option<usize> = None;
         if pending_pos >= offset && pending_pos < next_offset {
             let chunk_pos = pending_pos - offset;
-            if let Some(group) = hex_source.groups.iter().find(|g| g.chunk_start <= chunk_pos && chunk_pos < g.chunk_end) {
+            if let Some(group) = dyn_source.groups.iter().find(|g| g.chunk_start <= chunk_pos && chunk_pos < g.chunk_end) {
                 let byte_index = chunk_pos - group.chunk_start;
                 let group_len = group.chunk_end - group.chunk_start;
                 let visual_byte = if !params.is_big_endian && group_len > 1 {
@@ -1215,9 +1546,9 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         } else if is_eof_on_this_row && pending_pos == total_size {
             let digit_char = char::from_digit(pending_digit as u32, 16).unwrap_or('?');
             let group_bytes = params.group_size.byte_count();
-            if hex_source.groups.is_empty() {
+            if dyn_source.groups.is_empty() {
                 hex_shared_text = SharedString::from(format!("{}_", digit_char));
-                hex_source.groups.push(HexGroupInfo {
+                dyn_source.groups.push(HexGroupInfo {
                     chunk_start: 0,
                     chunk_end: 0,
                     start_slot: 0,
@@ -1226,7 +1557,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 });
                 pending_byte_char_start = Some(0);
             } else {
-                let last_group = *hex_source.groups.last().unwrap();
+                let last_group = *dyn_source.groups.last().unwrap();
                 let last_group_len = last_group.chunk_end - last_group.chunk_start;
                 let is_complete = (last_group.start_slot + last_group_len) == group_bytes;
                 if is_complete {
@@ -1237,7 +1568,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     hex_text.push('_');
                     let text_end = hex_text.len();
                     hex_shared_text = SharedString::from(hex_text);
-                    hex_source.groups.push(HexGroupInfo {
+                    dyn_source.groups.push(HexGroupInfo {
                         chunk_start: chunk_len,
                         chunk_end: chunk_len,
                         start_slot: 0,
@@ -1258,13 +1589,35 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 }
             }
         }
-    }
+        let dyn_shaped = if !hex_shared_text.is_empty() {
+            let runs = [TextRun {
+                len: hex_shared_text.len(),
+                font: font.clone(),
+                color: fg_color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            }];
+            Some(window.text_system().shape_line(hex_shared_text, params.font_size, &runs, None))
+        } else {
+            None
+        };
+        (
+            Cow::Owned(dyn_source),
+            dyn_shaped,
+            pending_byte_char_start.map(|char_start| (char_start, caret_color, muted_color.opacity(0.6))),
+        )
+    } else {
+        (Cow::Borrowed(&cached.hex_source), cached.shaped_hex.clone(), None)
+    };
 
-    let mut hex_runs: Vec<TextRun> = Vec::with_capacity(hex_source.groups.len() * 2);
-    let mut group_visuals: Vec<(Option<Hsla>, bool, bool)> = Vec::with_capacity(hex_source.groups.len());
-    let mut group_text_colors: Vec<Hsla> = Vec::with_capacity(hex_source.groups.len());
+    let pending_byte_char_start = pending_edit_colors.map(|(p, _, _)| p);
 
-    for (group_idx, group) in hex_source.groups.iter().enumerate() {
+    let mut hex_runs: Vec<TextRun> = Vec::with_capacity(hex_source_ref.groups.len() * 2);
+    let mut group_visuals: Vec<(Option<Hsla>, bool, bool)> = Vec::with_capacity(hex_source_ref.groups.len());
+    let mut group_text_colors: Vec<Hsla> = Vec::with_capacity(hex_source_ref.groups.len());
+
+    for (group_idx, group) in hex_source_ref.groups.iter().enumerate() {
         let item_start_offset = offset + group.chunk_start;
         let item_end_offset = offset + group.chunk_end;
         let item_slice = if group.chunk_end <= chunk.len() && group.chunk_start <= group.chunk_end {
@@ -1317,15 +1670,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         });
     }
 
-    let hex_text_len = hex_shared_text.len();
-    let shaped_hex = if !hex_shared_text.is_empty() {
-        Some(window.text_system().shape_line(hex_shared_text, params.font_size, &hex_runs, None))
-    } else {
-        None
-    };
-    let pending_edit_colors = pending_byte_char_start.map(|char_start| (char_start, caret_color, muted_color.opacity(0.6)));
     let text_origin_x = hex_start_x - px(params.hex_scroll_x);
-    let total_data_width = f32::from(hex_grid_width(hex_text_len, params.hex_cell_width));
+    let total_data_width = f32::from(hex_grid_width(hex_source_ref.text.len(), params.hex_cell_width));
 
     // 2. Background Quads Pass for Data Items (with clipping mask)
     let hex_mask_bounds = Bounds::new(point(hex_start_x, params.bounds.top()), size(px(params.hex_col_width), px(ROW_HEIGHT)));
@@ -1336,32 +1682,32 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         }),
         |window| {
             window.with_content_mask(Some(ContentMask { bounds: hex_mask_bounds }), |window| {
-                for (item_idx, group) in hex_source.groups.iter().enumerate() {
+                for (item_idx, group) in hex_source_ref.groups.iter().enumerate() {
                     let item_start_offset = offset + group.chunk_start;
                     let (hl_color, is_selected, is_cursor) = group_visuals[item_idx];
                     let (group_start_x, group_end_x) = hex_group_x(*group, text_origin_x, params.hex_cell_width);
                     let previous_group_end_x = if item_idx > 0 {
-                        hex_group_x(hex_source.groups[item_idx - 1], text_origin_x, params.hex_cell_width).1
+                        hex_group_x(hex_source_ref.groups[item_idx - 1], text_origin_x, params.hex_cell_width).1
                     } else {
                         group_start_x
                     };
-                    let has_next = item_idx + 1 < hex_source.groups.len();
+                    let has_next = item_idx + 1 < hex_source_ref.groups.len();
                     let next_group_start_x = if has_next {
-                        hex_group_x(hex_source.groups[item_idx + 1], text_origin_x, params.hex_cell_width).0
+                        hex_group_x(hex_source_ref.groups[item_idx + 1], text_origin_x, params.hex_cell_width).0
                     } else {
                         group_end_x
                     };
 
                     // 0. Structure field background tint and active underline
-                    if is_struct_mode && let Some(parse_res) = params.parse_result {
-                        let field_at_item: Option<Cow<'_, IndexedField>> = if is_uniform_row_leaf {
-                            first_leaf.as_deref().map(Cow::Borrowed)
+                    if is_struct_mode && params.parse_result.is_some() {
+                        let field_at_item = if is_uniform_row_leaf {
+                            first_leaf
                         } else {
-                            parse_res.query_deepest_leaf_at(item_start_offset)
+                            row_leaf_fields.get(group.chunk_start).and_then(|f| f.as_ref())
                         };
                         let is_in_active_field = active_leaf_field.is_some_and(|af| item_start_offset >= af.offset && item_start_offset < af.offset + af.size);
 
-                        if let Some(ref field) = field_at_item {
+                        if let Some(field) = field_at_item {
                             let field_hsla = field.color.map(Hsla::from).unwrap_or(desc_palette.type_name);
                             let bg_opacity = if is_in_active_field { 0.18 } else { 0.06 };
                             let field_tint = field_hsla.opacity(bg_opacity);
@@ -1426,8 +1772,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         window.paint_quad(fill(sel_fill_bounds, selection_bg));
                     }
 
-                    // 3. Cursor border / underscore
-                    if is_cursor && !params.insert_mode {
+                    // 3. Cursor Pass
+                    if is_cursor && !params.insert_mode && pending_byte_char_start.is_none() {
                         let cursor_border_color = if params.is_focused {
                             caret_color
                         } else {
@@ -1491,10 +1837,10 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     } else {
                         darken_cursor_color(muted_color).opacity(0.8)
                     };
-                    let (eof_start_x, eof_width) = if hex_source.groups.is_empty() {
+                    let (eof_start_x, eof_width) = if hex_source_ref.groups.is_empty() {
                         (text_origin_x, hex_grid_x(2, params.hex_cell_width))
                     } else {
-                        let last_group = *hex_source.groups.last().unwrap();
+                        let last_group = *hex_source_ref.groups.last().unwrap();
                         let group_bytes = params.group_size.byte_count();
                         let last_group_len = last_group.chunk_end - last_group.chunk_start;
                         let is_complete = (last_group.start_slot + last_group_len) == group_bytes;
@@ -1516,11 +1862,11 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     }
                 }
 
-                // 3. Text Pass for Data Items (same shaped line as the geometry pass)
-                if let Some(ref shaped_hex) = shaped_hex {
+                // 3. Text Pass for Data Items
+                if let Some(ref shaped_hex) = shaped_hex_ref {
                     paint_centered_hex_glyphs(
                         shaped_hex,
-                        &hex_source.groups,
+                        &hex_source_ref.groups,
                         &group_text_colors,
                         pending_edit_colors,
                         params.hex_cell_width,
@@ -1541,7 +1887,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         origin_x: text_origin_x,
                         cell_width: params.hex_cell_width,
                     };
-                    for (item_idx, group) in hex_source.groups.iter().enumerate() {
+                    for (item_idx, group) in hex_source_ref.groups.iter().enumerate() {
                         let cursor_border_color = caret_color;
                         let (group_start_x, group_end_x) = hex_group_x(*group, text_origin_x, params.hex_cell_width);
                         let item_box_bounds = Bounds::new(
@@ -1553,7 +1899,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         let cursor_geometry = if params.insert_cursor_offset >= item_start_offset && params.insert_cursor_offset < item_end_offset {
                             hex_insert_cursor_geometry(*group, params.insert_cursor_offset.saturating_sub(offset), insert_cursor_params)
                         } else if params.insert_cursor_offset == params.doc.buffer.len()
-                            && item_idx + 1 == hex_source.groups.len()
+                            && item_idx + 1 == hex_source_ref.groups.len()
                             && item_end_offset == next_offset
                             && next_offset == params.doc.buffer.len()
                         {
@@ -1575,7 +1921,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         }
                     }
 
-                    if hex_source.groups.is_empty() && params.insert_cursor_offset == offset {
+                    if hex_source_ref.groups.is_empty() && params.insert_cursor_offset == offset {
                         let cursor_border_color = caret_color;
                         let item_box_bounds = Bounds::new(
                             point(text_origin_x, params.bounds.top() + px(1.0)),
@@ -1637,7 +1983,6 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 let ascii_content_start_x = ascii_start_x - px(params.ascii_scroll_x);
                 let ascii_mask_bounds = Bounds::new(point(ascii_start_x, params.bounds.top()), size(px(ascii_width), px(ROW_HEIGHT)));
                 window.with_content_mask(Some(ContentMask { bounds: ascii_mask_bounds }), |window| {
-                    let char_map = build_ascii_char_map(params.encoding, params.doc.buffer.data(), offset, chunk.len());
                     let group_bytes = params.group_size.byte_count();
 
                     // 1. Background Quads Pass for ASCII Cells
@@ -1666,14 +2011,14 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         }
 
                         // Structure field background tint and active underline in ASCII
-                        if is_struct_mode && let Some(parse_res) = params.parse_result {
+                        if is_struct_mode && params.parse_result.is_some() {
                             let is_ascii_in_active = active_leaf_field.is_some_and(|af| byte_pos >= af.offset && byte_pos < af.offset + af.size);
-                            let ascii_field: Option<Cow<'_, IndexedField>> = if is_uniform_row_leaf {
-                                first_leaf.as_deref().map(Cow::Borrowed)
+                            let ascii_field = if is_uniform_row_leaf {
+                                first_leaf
                             } else {
-                                parse_res.query_deepest_leaf_at(byte_pos)
+                                row_leaf_fields.get(j).and_then(|f| f.as_ref())
                             };
-                            if let Some(ref field) = ascii_field {
+                            if let Some(field) = ascii_field {
                                 let field_hsla = field.color.map(Hsla::from).unwrap_or(desc_palette.type_name);
                                 let bg_opacity = if is_ascii_in_active { 0.16 } else { 0.05 };
                                 window.paint_quad(fill(ascii_item_bounds, field_hsla.opacity(bg_opacity)));
@@ -1721,7 +2066,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             paint_cursor_border(window, ascii_box_bounds, cursor_border_color);
                         }
                     } else {
-                        for group in hex_source.groups.iter() {
+                        for group in hex_source_ref.groups.iter() {
                             let item_start_offset = offset + group.chunk_start;
                             let item_end_offset = offset + group.chunk_end;
                             let is_cursor = params.cursor_offset >= item_start_offset && params.cursor_offset < item_end_offset;
@@ -1751,15 +2096,10 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         }
                     }
 
-                    // Paint each glyph centered in its fixed byte cell using batched line shaping.
-                    let mut ascii_text = String::with_capacity(chunk.len());
-                    let mut ascii_runs: Vec<TextRun> = Vec::with_capacity(chunk.len());
-                    let mut ascii_entries: Vec<AsciiCellEntry> = Vec::with_capacity(chunk.len());
-
-                    for (j, opt) in char_map.into_iter().enumerate() {
-                        let item = if let Some(item) = opt { item } else { continue };
-                        let c = item.character();
-                        let byte_pos = offset + j;
+                    // Paint each glyph centered in its fixed byte cell using cached shaped line
+                    let mut ascii_entries: Vec<AsciiCellEntry> = Vec::with_capacity(cached.ascii_cells.len());
+                    for cell in &cached.ascii_cells {
+                        let byte_pos = offset + cell.cell_idx;
                         let current_hl_color = highlight_color_for_range(byte_pos, byte_pos.saturating_add(1), active_row_highlights);
                         let has_hl = current_hl_color.is_some();
                         let in_selected_group = if params.min_sel <= params.max_sel {
@@ -1769,44 +2109,27 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         } else {
                             false
                         };
-                        let byte = chunk.get(j).copied().unwrap_or(0);
                         let text_color = ascii_item_text_color(
                             in_selected_group,
                             has_hl,
-                            byte,
-                            item.is_printable(),
+                            cell.byte,
+                            cell.is_printable,
                             &params.category_palette,
                             fg_color,
                             muted_color,
                         );
 
-                        let text_byte_start = ascii_text.len();
-                        ascii_text.push(c);
-                        let text_byte_end = ascii_text.len();
-
-                        ascii_runs.push(TextRun {
-                            len: text_byte_end - text_byte_start,
-                            font: font.clone(),
-                            color: text_color,
-                            background_color: None,
-                            underline: None,
-                            strikethrough: None,
-                        });
-
                         ascii_entries.push(AsciiCellEntry {
-                            cell_idx: j,
-                            text_byte_start,
-                            text_byte_end,
+                            cell_idx: cell.cell_idx,
+                            text_byte_start: cell.text_byte_start,
+                            text_byte_end: cell.text_byte_end,
                             color: text_color,
                         });
                     }
 
-                    if !ascii_text.is_empty() {
-                        let shaped = window
-                            .text_system()
-                            .shape_line(SharedString::from(ascii_text), params.font_size, &ascii_runs, None);
+                    if let Some(ref shaped) = cached.shaped_ascii {
                         paint_centered_ascii_glyphs(
-                            &shaped,
+                            shaped,
                             &ascii_entries,
                             point(ascii_content_start_x, params.bounds.top() + px(2.0)),
                             line_height,
@@ -1876,226 +2199,123 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     }
 
     // 4. Description Column (when structure definition is present)
-    if let Some(parse_res) = params.parse_result {
-        let is_structure_header_row = chunk_len == 0;
-        let mut container_structs: Cow<'_, [IndexedField]> = raw_containers;
-
-        // A structure header gets its own zero-byte row. On the following
-        // data row, keep only collapsed containers visible so the parent is
-        // not printed twice.
-        let has_header_before = !is_structure_header_row
-            && params.row_idx > 0
-            && params.line_starts.get(params.row_idx - 1) == Some(offset)
-            && parse_res.has_structure_header_at(offset, params.collapsed_structs);
-        if has_header_before {
-            container_structs = Cow::Owned(
-                container_structs
-                    .iter()
-                    .filter(|container| params.collapsed_structs.contains(&container.collapse_key) || params.collapsed_structs.contains(&container.id))
-                    .cloned()
-                    .collect(),
-            );
-        }
-
-        if is_collapsed_struct_row {
-            container_structs = Cow::Owned(
-                container_structs
-                    .iter()
-                    .filter(|container| {
-                        !container.is_instance
-                            && container.offset == offset
-                            && (params.collapsed_structs.contains(&container.collapse_key) || params.collapsed_structs.contains(&container.id))
-                    })
-                    .cloned()
-                    .collect(),
-            );
-        }
-
-        if is_structure_header_row {
-            container_structs = Cow::Owned(
-                container_structs
-                    .iter()
-                    .filter(|container| !container.is_instance && container.size > 0)
-                    .cloned()
-                    .collect(),
-            );
-        }
-
-        if is_structure_header_row && container_structs.len() > 1 {
-            let mut same_offset_rows = 0;
-            let mut previous_row = params.row_idx;
-            while previous_row > 0 && params.line_starts.get(previous_row - 1) == Some(offset) {
-                same_offset_rows += 1;
-                previous_row -= 1;
-            }
-            if let Some(container) = container_structs.get(same_offset_rows).cloned() {
-                container_structs = Cow::Owned(vec![container]);
-            }
-        }
-
-        if !is_structure_header_row && !is_collapsed_struct_row {
-            container_structs = Cow::Owned(Vec::new());
-        }
-
-        let leaf_fields: Cow<'_, [IndexedField]> = row_leaves;
-        let active_ranges = if parse_res.is_live() {
-            Vec::new()
-        } else {
-            parse_res.find_active_struct_ranges(offset, query_len)
-        };
-
-        let is_collapsed = is_collapsed_struct_row
-            || container_structs
-                .first()
-                .map(|c| params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id))
-                .unwrap_or(false);
-
-        let continuation_leaf = if !is_structure_header_row && !is_collapsed_struct_row && container_structs.is_empty() && leaf_fields.is_empty() {
-            first_leaf
-        } else {
-            None
-        };
-
-        let indent_level = calculate_description_indent_level(
-            continuation_leaf.as_deref(),
-            container_structs.first(),
-            leaf_fields.first(),
-            active_ranges.len(),
-        );
-        let indent_px = indent_level as f32 * 14.0;
-        let has_chevron = !container_structs.is_empty();
-        let chevron_icon_path = if has_chevron {
-            if is_collapsed {
-                Some(IconName::ChevronRight.path())
-            } else {
-                Some(IconName::ChevronDown.path())
-            }
-        } else {
-            None
-        };
-        let chevron_width = if has_chevron { CHEVRON_ICON_SIZE + CHEVRON_ICON_GAP } else { 0.0 };
-
-        let mut desc_runs = Vec::new();
-        let mut desc_full_text = String::new();
-        if let Some(container) = container_structs.first() {
-            let (hdr_text, hdr_runs) = build_structure_header_runs(container, is_collapsed, font.clone(), &desc_palette);
-            desc_full_text.push_str(&hdr_text);
-            desc_runs.extend(hdr_runs);
-        }
-        if let Some(ref leaf) = continuation_leaf {
-            let rel_offset = offset.saturating_sub(leaf.offset);
-            let (c_text, c_runs) = build_continuation_field_runs(&leaf.id, rel_offset, font.clone(), &desc_palette);
-            desc_full_text.push_str(&c_text);
-            desc_runs.extend(c_runs);
-        } else if !is_collapsed {
-            let include_doc = leaf_fields.len() == 1 && container_structs.is_empty();
-            for f in leaf_fields.iter() {
-                if !desc_full_text.is_empty() {
-                    desc_full_text.push_str("  ");
-                    desc_runs.push(TextRun {
-                        len: 2,
-                        font: font.clone(),
-                        color: desc_palette.punctuation,
-                        background_color: None,
-                        underline: None,
-                        strikethrough: None,
-                    });
-                }
-                let is_active_field = active_leaf_field.is_some_and(|af| af.offset == f.offset && af.size == f.size);
-                let (leaf_text, leaf_runs) = build_leaf_field_runs(f, font.clone(), &desc_palette, include_doc, is_active_field);
-                desc_full_text.push_str(&leaf_text);
-                desc_runs.extend(leaf_runs);
-            }
-        }
-
-        if !desc_full_text.is_empty() {
-            // Invariant: GPUI shape_line panics if text contains newlines.
-            // Replace any residual '\n' or '\r' with ' ' to preserve UTF-8 byte lengths and TextRun boundaries.
-            if desc_full_text.contains('\n') || desc_full_text.contains('\r') {
-                let mut sanitized = String::with_capacity(desc_full_text.len());
-                for ch in desc_full_text.chars() {
-                    if ch == '\n' || ch == '\r' {
-                        sanitized.push(' ');
-                    } else {
-                        sanitized.push(ch);
+    if let Some(ref desc) = cached.desc {
+        let is_active_field = active_leaf_field.is_some_and(|af| desc.leaf_field_ranges.iter().any(|&(o, s)| o == af.offset && s == af.size));
+        let desc_mask_bounds = Bounds::new(point(desc_start_x, params.bounds.top()), size(px(params.desc_col_width), px(ROW_HEIGHT)));
+        window.with_content_mask(
+            Some(ContentMask {
+                bounds: scrollable_mask_bounds,
+            }),
+            |window| {
+                window.with_content_mask(Some(ContentMask { bounds: desc_mask_bounds }), |window| {
+                    // Vertical tree guide lines for indentation depth
+                    if desc.indent_level > 0 {
+                        for lvl in 1..=desc.indent_level {
+                            let guide_x = desc_start_x - px(params.desc_scroll_x) + px((lvl - 1) as f32 * 14.0 + 5.0);
+                            if guide_x >= desc_start_x && guide_x < desc_end_x {
+                                window.paint_quad(fill(
+                                    Bounds::new(point(guide_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+                                    desc_palette.tree_guide,
+                                ));
+                            }
+                        }
                     }
-                }
-                desc_full_text = sanitized;
-            }
 
-            let text_offset_px = indent_px + chevron_width;
-            let expr_shared = SharedString::from(desc_full_text);
-            let shaped_expr = window.text_system().shape_line(expr_shared, params.font_size, &desc_runs, None);
-            let desc_mask_bounds = Bounds::new(point(desc_start_x, params.bounds.top()), size(px(params.desc_col_width), px(ROW_HEIGHT)));
-            let desc_text_width = f32::from(shaped_expr.width) + text_offset_px + 8.0;
+                    // Paint Lucide chevron icon if container header
+                    if let Some(ref icon_path) = desc.chevron_icon_path {
+                        let icon_x = desc_start_x - px(params.desc_scroll_x) + px(desc.indent_px);
+                        let icon_y = params.bounds.top() + px((ROW_HEIGHT - CHEVRON_ICON_SIZE) / 2.0);
+                        let icon_bounds = Bounds::new(point(icon_x, icon_y), size(px(CHEVRON_ICON_SIZE), px(CHEVRON_ICON_SIZE)));
+                        let _ = window.paint_svg(icon_bounds, icon_path.clone(), None, TransformationMatrix::unit(), desc_palette.header_icon, cx);
+                    }
 
-            window.with_content_mask(
-                Some(ContentMask {
-                    bounds: scrollable_mask_bounds,
-                }),
-                |window| {
-                    window.with_content_mask(Some(ContentMask { bounds: desc_mask_bounds }), |window| {
-                        // Vertical tree guide lines for indentation depth
-                        if indent_level > 0 {
-                            for lvl in 1..=indent_level {
-                                let guide_x = desc_start_x - px(params.desc_scroll_x) + px((lvl - 1) as f32 * 14.0 + 5.0);
-                                if guide_x >= desc_start_x && guide_x < desc_end_x {
-                                    window.paint_quad(fill(
-                                        Bounds::new(point(guide_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
-                                        desc_palette.tree_guide,
-                                    ));
+                    let text_pos = point(desc_start_x - px(params.desc_scroll_x) + px(desc.text_offset_px), params.bounds.top() + px(2.0));
+                    if is_active_field {
+                        let mut active_runs = Vec::new();
+                        let mut active_full_text = String::new();
+                        if let Some(container) = desc.container_structs.first() {
+                            let is_collapsed = desc.chevron_icon_path.as_ref() == Some(&IconName::ChevronRight.path());
+                            let (hdr_text, hdr_runs) = build_structure_header_runs(container, is_collapsed, font.clone(), &desc_palette);
+                            active_full_text.push_str(&hdr_text);
+                            active_runs.extend(hdr_runs);
+                        }
+                        if let Some(ref leaf) = desc.continuation_leaf {
+                            let rel_offset = offset.saturating_sub(leaf.offset);
+                            let (c_text, c_runs) = build_continuation_field_runs(&leaf.id, rel_offset, font.clone(), &desc_palette);
+                            active_full_text.push_str(&c_text);
+                            active_runs.extend(c_runs);
+                        } else {
+                            let include_doc = desc.leaf_fields.len() == 1 && desc.container_structs.is_empty();
+                            for f in desc.leaf_fields.iter() {
+                                if !active_full_text.is_empty() {
+                                    active_full_text.push_str("  ");
+                                    active_runs.push(TextRun {
+                                        len: 2,
+                                        font: font.clone(),
+                                        color: desc_palette.punctuation,
+                                        background_color: None,
+                                        underline: None,
+                                        strikethrough: None,
+                                    });
                                 }
+                                let is_this_active = active_leaf_field.is_some_and(|af| af.offset == f.offset && af.size == f.size);
+                                let (leaf_text, leaf_runs) = build_leaf_field_runs(f, font.clone(), &desc_palette, include_doc, is_this_active);
+                                active_full_text.push_str(&leaf_text);
+                                active_runs.extend(leaf_runs);
                             }
                         }
 
-                        // Paint Lucide chevron icon if container header
-                        if let Some(icon_path) = chevron_icon_path {
-                            let icon_x = desc_start_x - px(params.desc_scroll_x) + px(indent_px);
-                            let icon_y = params.bounds.top() + px((ROW_HEIGHT - CHEVRON_ICON_SIZE) / 2.0);
-                            let icon_bounds = Bounds::new(point(icon_x, icon_y), size(px(CHEVRON_ICON_SIZE), px(CHEVRON_ICON_SIZE)));
-                            let _ = window.paint_svg(icon_bounds, icon_path, None, TransformationMatrix::unit(), desc_palette.header_icon, cx);
-                        }
-
-                        let _ = shaped_expr.paint(
-                            point(desc_start_x - px(params.desc_scroll_x) + px(text_offset_px), params.bounds.top() + px(2.0)),
-                            line_height,
-                            TextAlign::Left,
-                            None,
-                            window,
-                            cx,
-                        );
-
-                        // Left fade
-                        if params.desc_scroll_x > 1.0 {
-                            let bg = bg_color_theme;
-                            for step in 0..5 {
-                                let x = desc_start_x + px(step as f32 * 3.2);
-                                let alpha = 1.0 - (step as f32 / 5.0);
-                                window.paint_quad(fill(
-                                    Bounds::new(point(x, params.bounds.top()), size(px(3.4), px(ROW_HEIGHT))),
-                                    bg.opacity(alpha * 0.95),
-                                ));
+                        if !active_full_text.is_empty() {
+                            if active_full_text.contains('\n') || active_full_text.contains('\r') {
+                                let mut sanitized = String::with_capacity(active_full_text.len());
+                                for ch in active_full_text.chars() {
+                                    if ch == '\n' || ch == '\r' {
+                                        sanitized.push(' ');
+                                    } else {
+                                        sanitized.push(ch);
+                                    }
+                                }
+                                active_full_text = sanitized;
                             }
+                            let shaped = window
+                                .text_system()
+                                .shape_line(SharedString::from(active_full_text), params.font_size, &active_runs, None);
+                            let _ = shaped.paint(text_pos, line_height, TextAlign::Left, None, window, cx);
                         }
+                    } else if let Some(ref shaped) = desc.shaped_base_desc {
+                        let _ = shaped.paint(text_pos, line_height, TextAlign::Left, None, window, cx);
+                    }
 
-                        // Right fade
-                        if params.desc_scroll_x + params.desc_col_width < desc_text_width - 1.0 {
-                            let fade_w = 20.0;
-                            let fade_start = desc_end_x - px(fade_w);
-                            let bg = bg_color_theme;
-                            for step in 0..5 {
-                                let x = fade_start + px(step as f32 * 4.0);
-                                let alpha = (step + 1) as f32 / 6.0;
-                                window.paint_quad(fill(
-                                    Bounds::new(point(x, params.bounds.top()), size(px(4.2), px(ROW_HEIGHT))),
-                                    bg.opacity(alpha * 0.95),
-                                ));
-                            }
+                    // Left fade
+                    if params.desc_scroll_x > 1.0 {
+                        let bg = bg_color_theme;
+                        for step in 0..5 {
+                            let x = desc_start_x + px(step as f32 * 3.2);
+                            let alpha = 1.0 - (step as f32 / 5.0);
+                            window.paint_quad(fill(
+                                Bounds::new(point(x, params.bounds.top()), size(px(3.4), px(ROW_HEIGHT))),
+                                bg.opacity(alpha * 0.95),
+                            ));
                         }
-                    });
-                },
-            );
-        }
+                    }
+
+                    // Right fade
+                    if params.desc_scroll_x + params.desc_col_width < desc.desc_text_width - 1.0 {
+                        let fade_w = 20.0;
+                        let fade_start = desc_end_x - px(fade_w);
+                        let bg = bg_color_theme;
+                        for step in 0..5 {
+                            let x = fade_start + px(step as f32 * 4.0);
+                            let alpha = (step + 1) as f32 / 6.0;
+                            window.paint_quad(fill(
+                                Bounds::new(point(x, params.bounds.top()), size(px(4.2), px(ROW_HEIGHT))),
+                                bg.opacity(alpha * 0.95),
+                            ));
+                        }
+                    }
+                });
+            },
+        );
     }
 
     // 5. Bookmark Comments Column
@@ -2163,7 +2383,6 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     let dot_y = params.bounds.top() + px((ROW_HEIGHT - dot_size) / 2.0);
 
                     for (badge_color, shaped_comment, text_w) in shaped_items {
-                        // Highlight colored circle dot
                         let dot_bounds = Bounds::new(point(cur_x, dot_y), size(px(dot_size), px(dot_size)));
                         let mut dot_quad = fill(dot_bounds, badge_color);
                         dot_quad.corner_radii = Corners {
@@ -2174,7 +2393,6 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         };
                         window.paint_quad(dot_quad);
 
-                        // Comment text
                         let text_x = cur_x + px(dot_size + dot_margin_right);
                         let _ = shaped_comment.paint(point(text_x, params.bounds.top() + px(2.0)), line_height, TextAlign::Left, None, window, cx);
 
@@ -2213,6 +2431,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         );
     }
 }
+
 /// Paints a vertical scrollbar using HexView's standard row height on a GPUI canvas.
 pub fn paint_scrollbar(
     list_bounds: gpui_kit::Bounds<gpui_kit::Pixels>,

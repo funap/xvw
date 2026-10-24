@@ -1,8 +1,9 @@
 use crate::core::color::RgbaColor;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::ops::Range;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static BOOKMARK_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -366,18 +367,67 @@ impl BookmarkFile {
 }
 
 /// Encapsulates bookmark entries, visibility filters, interval calculations, and serialization.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) type CachedFoldedRegions = Arc<std::sync::Mutex<Option<(usize, Arc<BTreeMap<usize, usize>>)>>>;
+
+#[derive(Debug, Clone)]
 pub struct BookmarkStore {
     pub items: Vec<BookmarkItem>,
     pub hidden_colors: HashSet<BookmarkColor>,
     pub hidden_ids: HashSet<String>,
     pub hide_unbookmarked: bool,
+    pub version: u64,
+    snapshot_cache: Arc<Vec<BookmarkItem>>,
+    pub(crate) cached_folded_regions: CachedFoldedRegions,
+}
+
+impl PartialEq for BookmarkStore {
+    fn eq(&self, other: &Self) -> bool {
+        self.items == other.items
+            && self.hidden_colors == other.hidden_colors
+            && self.hidden_ids == other.hidden_ids
+            && self.hide_unbookmarked == other.hide_unbookmarked
+    }
+}
+
+impl Eq for BookmarkStore {}
+
+impl Default for BookmarkStore {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            hidden_colors: HashSet::new(),
+            hidden_ids: HashSet::new(),
+            hide_unbookmarked: false,
+            version: 0,
+            snapshot_cache: Arc::new(Vec::new()),
+            cached_folded_regions: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
 }
 
 impl BookmarkStore {
     #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[inline]
+    pub fn bump_version(&mut self) {
+        self.version = self.version.wrapping_add(1);
+        self.snapshot_cache = Arc::new(self.items.clone());
+        if let Ok(mut guard) = self.cached_folded_regions.lock() {
+            *guard = None;
+        }
+    }
+
+    #[inline]
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    #[inline]
+    pub fn snapshot_arc(&self) -> Arc<Vec<BookmarkItem>> {
+        self.snapshot_cache.clone()
     }
 
     #[allow(dead_code)]
@@ -431,7 +481,9 @@ impl BookmarkStore {
             if !item.comment.is_empty() {
                 existing.comment = item.comment;
             }
-            return existing.id.clone();
+            let existing_id = existing.id.clone();
+            self.bump_version();
+            return existing_id;
         }
 
         if item.id.is_empty() || self.items.iter().any(|h| h.id == item.id) {
@@ -441,12 +493,14 @@ impl BookmarkStore {
         let id = item.id.clone();
         self.items.push(item);
         self.items.sort_by_key(|h| (h.offset, h.size));
+        self.bump_version();
         id
     }
 
     pub fn update_comment(&mut self, id: &str, comment: impl Into<String>) -> bool {
         if let Some(item) = self.items.iter_mut().find(|h| h.id == id) {
             item.comment = comment.into();
+            self.bump_version();
             true
         } else {
             false
@@ -456,6 +510,7 @@ impl BookmarkStore {
     pub fn update_color(&mut self, id: &str, color: BookmarkColor) -> bool {
         if let Some(item) = self.items.iter_mut().find(|h| h.id == id) {
             item.color = color;
+            self.bump_version();
             true
         } else {
             false
@@ -476,6 +531,7 @@ impl BookmarkStore {
             item.offset = clamped_offset;
             item.size = clamped_size;
             self.items.sort_by_key(|h| (h.offset, h.size));
+            self.bump_version();
             true
         } else {
             false
@@ -485,15 +541,26 @@ impl BookmarkStore {
     pub fn remove_by_id(&mut self, id: &str) -> bool {
         let initial_len = self.items.len();
         self.items.retain(|h| h.id != id);
-        self.items.len() < initial_len
+        let changed = self.items.len() < initial_len;
+        if changed {
+            self.bump_version();
+        }
+        changed
     }
 
     pub fn remove_by_index(&mut self, index: usize) -> Option<BookmarkItem> {
-        if index < self.items.len() { Some(self.items.remove(index)) } else { None }
+        if index < self.items.len() {
+            let item = self.items.remove(index);
+            self.bump_version();
+            Some(item)
+        } else {
+            None
+        }
     }
 
     pub fn clear_all(&mut self) {
         self.items.clear();
+        self.bump_version();
     }
 
     pub fn to_yaml(&self, doc_path: Option<&Path>) -> anyhow::Result<String> {
@@ -551,6 +618,7 @@ impl BookmarkStore {
                 self.hidden_ids.remove(&b.id);
             }
         }
+        self.bump_version();
     }
 
     pub fn hide_color(&mut self, color: BookmarkColor) {
@@ -560,6 +628,7 @@ impl BookmarkStore {
                 self.hidden_ids.remove(&b.id);
             }
         }
+        self.bump_version();
     }
 
     pub fn show_only_color(&mut self, target_color: BookmarkColor) {
@@ -571,11 +640,13 @@ impl BookmarkStore {
             }
         }
         self.hidden_ids.clear();
+        self.bump_version();
     }
 
     pub fn show_all(&mut self) {
         self.hidden_colors.clear();
         self.hidden_ids.clear();
+        self.bump_version();
     }
 
     pub fn hide_all(&mut self) {
@@ -584,6 +655,7 @@ impl BookmarkStore {
             self.hidden_colors.insert(c);
         }
         self.hidden_ids.clear();
+        self.bump_version();
     }
 
     pub fn toggle_item_visibility(&mut self, id: &str) {
@@ -608,6 +680,7 @@ impl BookmarkStore {
         } else {
             self.hidden_ids.insert(id.to_string());
         }
+        self.bump_version();
     }
 
     pub fn is_hide_unbookmarked(&self) -> bool {
@@ -616,10 +689,12 @@ impl BookmarkStore {
 
     pub fn toggle_hide_unbookmarked(&mut self) {
         self.hide_unbookmarked = !self.hide_unbookmarked;
+        self.bump_version();
     }
 
     pub fn set_hide_unbookmarked(&mut self, hide: bool) {
         self.hide_unbookmarked = hide;
+        self.bump_version();
     }
 
     pub fn adjust_after_edit(&mut self, start: usize, old_len: usize, new_len: usize, shift: impl Fn(usize) -> usize) {
@@ -651,6 +726,7 @@ impl BookmarkStore {
         }
         self.items.retain(|item| item.size > 0);
         self.items.sort_by_key(|item| (item.offset, item.size));
+        self.bump_version();
     }
 }
 

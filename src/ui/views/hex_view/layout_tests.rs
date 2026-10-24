@@ -277,7 +277,7 @@ fn check_structure_and_highlights() {
     );
 
     let mut editor_collapsed = Editor::new(Arc::new(RwLock::new(Document::new(PathBuf::from("test.bin"), Buffer::new(vec![0; 32])))));
-    editor_collapsed.structure.collapsed_struct_ids.insert("header".into());
+    editor_collapsed.structure.toggle_collapsed("header");
     let width_collapsed = HexView::description_content_width_in_range(&editor_collapsed, &parse_result, &(0..16), char_w);
     assert!(
         width_collapsed < width_expanded,
@@ -715,4 +715,117 @@ fn test_hex_view_layout_suite() {
     check_hex_editing_state();
     check_cursor_row_and_header_highlight();
     check_description_indentation_with_duplicate_element_names();
+    check_row_render_cache();
+}
+
+fn check_row_render_cache() {
+    use super::row_cache::*;
+    use super::types::HexTextSource;
+
+    fn dummy_row(addr: usize) -> CachedRow {
+        CachedRow {
+            physical_address: addr,
+            shaped_addr: None,
+            hex_source: HexTextSource {
+                text: gpui_kit::SharedString::from("00 01"),
+                groups: Vec::new(),
+            },
+            shaped_hex: None,
+            ascii_cells: Vec::new(),
+            shaped_ascii: None,
+            structure_fields: None,
+            desc: None,
+        }
+    }
+
+    let mut cache = RowRenderCache::default();
+    cache.insert(0, dummy_row(0x1000));
+    cache.insert(1, dummy_row(0x1010));
+
+    assert_eq!(cache.get(0).unwrap().physical_address, 0x1000);
+    assert_eq!(cache.get(1).unwrap().physical_address, 0x1010);
+    assert!(cache.get(2).is_none());
+
+    let font_fam = gpui_kit::SharedString::from("monospace");
+    cache.validate(
+        1,
+        1,
+        0,
+        0,
+        px(13.0),
+        &font_fam,
+        DisplayRadix::Hexadecimal,
+        ByteGroupSize::One,
+        true,
+        Encoding::Ascii,
+        hsla(0.0, 0.0, 0.0, 1.0),
+        hsla(0.0, 0.0, 1.0, 1.0),
+    );
+    cache.insert(0, dummy_row(0x1000));
+
+    // Same parameters -> cached row retained
+    cache.validate(
+        1,
+        1,
+        0,
+        0,
+        px(13.0),
+        &font_fam,
+        DisplayRadix::Hexadecimal,
+        ByteGroupSize::One,
+        true,
+        Encoding::Ascii,
+        hsla(0.0, 0.0, 0.0, 1.0),
+        hsla(0.0, 0.0, 1.0, 1.0),
+    );
+    assert!(cache.get(0).is_some());
+
+    // Generation changed -> cached row invalidated
+    cache.validate(
+        2,
+        1,
+        0,
+        0,
+        px(13.0),
+        &font_fam,
+        DisplayRadix::Hexadecimal,
+        ByteGroupSize::One,
+        true,
+        Encoding::Ascii,
+        hsla(0.0, 0.0, 0.0, 1.0),
+        hsla(0.0, 0.0, 1.0, 1.0),
+    );
+    assert!(cache.get(0).is_none());
+
+    // Collapsed pointer changed -> cached row invalidated
+    cache.validate(
+        2,
+        1,
+        100,
+        0,
+        px(13.0),
+        &font_fam,
+        DisplayRadix::Hexadecimal,
+        ByteGroupSize::One,
+        true,
+        Encoding::Ascii,
+        hsla(0.0, 0.0, 0.0, 1.0),
+        hsla(0.0, 0.0, 1.0, 1.0),
+    );
+    cache.insert(0, dummy_row(0x2000));
+    cache.validate(
+        2,
+        1,
+        101,
+        0,
+        px(13.0),
+        &font_fam,
+        DisplayRadix::Hexadecimal,
+        ByteGroupSize::One,
+        true,
+        Encoding::Ascii,
+        hsla(0.0, 0.0, 0.0, 1.0),
+        hsla(0.0, 0.0, 1.0, 1.0),
+    );
+    assert!(cache.get(0).is_none());
 }

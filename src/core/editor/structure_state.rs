@@ -24,7 +24,7 @@ pub struct EditorStructureState {
     pub is_async: bool,
     /// Set after an edit until the UI starts the debounced background parse.
     pub reparse_requested: bool,
-    pub collapsed_struct_ids: HashSet<String>,
+    pub collapsed_struct_ids: Arc<HashSet<String>>,
     pub show_inline_structure_view: bool,
 }
 
@@ -38,7 +38,7 @@ impl Default for EditorStructureState {
             cancel_token: None,
             is_async: false,
             reparse_requested: false,
-            collapsed_struct_ids: HashSet::new(),
+            collapsed_struct_ids: Arc::new(HashSet::new()),
             show_inline_structure_view: true,
         }
     }
@@ -95,10 +95,11 @@ impl EditorStructureState {
     }
 
     pub fn toggle_collapsed(&mut self, struct_id: &str) {
-        if self.collapsed_struct_ids.contains(struct_id) {
-            self.collapsed_struct_ids.remove(struct_id);
+        let set = Arc::make_mut(&mut self.collapsed_struct_ids);
+        if set.contains(struct_id) {
+            set.remove(struct_id);
         } else {
-            self.collapsed_struct_ids.insert(struct_id.to_string());
+            set.insert(struct_id.to_string());
         }
     }
 

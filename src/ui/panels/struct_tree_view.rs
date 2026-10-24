@@ -317,7 +317,7 @@ impl StructTreeView {
             return;
         }
 
-        // If current selected item already covers cursor_offset, keep it
+        // If current selected item already covers cursor_offset (or was just selected internally), keep it
         if let Some(curr_idx) = self.selected_index
             && let Some(field) = self.flattened_fields.get(curr_idx)
         {
@@ -327,7 +327,7 @@ impl StructTreeView {
             } else {
                 cursor_offset == field.offset
             };
-            if matches {
+            if matches || self.last_selection_cursor == Some(cursor_offset) {
                 self.last_selection_cursor = Some(cursor_offset);
                 self.last_selection_scan_len = self.flattened_fields.len();
                 return;
@@ -716,6 +716,9 @@ impl StructTreeView {
         };
 
         let mut nav_offset = offset;
+        self.last_selection_cursor = Some(offset);
+        self.last_selection_scan_len = self.flattened_fields.len();
+
         if let Some(editor) = &self.editor {
             editor.update(cx, |editor, cx| {
                 let total = editor.total_size();
@@ -733,6 +736,9 @@ impl StructTreeView {
                 cx.notify();
             });
         }
+
+        self.last_selection_cursor = Some(nav_offset);
+        self.last_selection_scan_len = self.flattened_fields.len();
 
         cx.emit(StructTreeViewEvent::NavigateTo {
             offset: nav_offset,

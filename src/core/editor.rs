@@ -45,8 +45,16 @@ pub struct BookmarkSessionRef<'a> {
 }
 
 impl<'a> BookmarkSessionRef<'a> {
+    pub fn version(&self) -> u64 {
+        self.document.read().expect("document read lock").metadata.bookmarks.version()
+    }
+
     pub fn snapshot(&self) -> Vec<BookmarkItem> {
         self.document.read().expect("document read lock").metadata.bookmarks.snapshot()
+    }
+
+    pub fn snapshot_arc(&self) -> Arc<Vec<BookmarkItem>> {
+        self.document.read().expect("document read lock").metadata.bookmarks.snapshot_arc()
     }
 
     pub fn by_id(&self, id: &str) -> Option<BookmarkItem> {
@@ -902,18 +910,22 @@ impl Editor {
 
     /// Returns the active folded intervals [start, end) computed from hidden bookmarks, unbookmarked gaps, or collapsed structures.
     /// Overlapping and adjacent intervals are merged into disjoint union ranges.
-    pub fn computed_folded_regions(&self) -> std::collections::BTreeMap<usize, usize> {
-        let mut regions = if let Ok(doc) = self.document.read() {
+    pub fn computed_folded_regions(&self) -> Arc<std::collections::BTreeMap<usize, usize>> {
+        let regions = if let Ok(doc) = self.document.read() {
             doc.computed_folded_regions()
         } else {
-            std::collections::BTreeMap::new()
+            Arc::new(std::collections::BTreeMap::new())
         };
         if self.structure.show_inline_structure_view
+            && !self.structure.collapsed_struct_ids.is_empty()
             && let Some(parse_res) = self.parse_result()
         {
-            parse_res.collect_collapsed_ranges(&self.structure.collapsed_struct_ids, &mut regions);
+            let mut mut_regions = (*regions).clone();
+            parse_res.collect_collapsed_ranges(&self.structure.collapsed_struct_ids, &mut mut_regions);
+            Arc::new(mut_regions)
+        } else {
+            regions
         }
-        regions
     }
 
     /// Returns summary details for a folded region starting at `offset`.
