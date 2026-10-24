@@ -900,14 +900,20 @@ impl Editor {
         }
     }
 
-    /// Returns the active folded intervals [start, end) computed from hidden bookmarks or unbookmarked gaps.
+    /// Returns the active folded intervals [start, end) computed from hidden bookmarks, unbookmarked gaps, or collapsed structures.
     /// Overlapping and adjacent intervals are merged into disjoint union ranges.
     pub fn computed_folded_regions(&self) -> std::collections::BTreeMap<usize, usize> {
-        if let Ok(doc) = self.document.read() {
+        let mut regions = if let Ok(doc) = self.document.read() {
             doc.computed_folded_regions()
         } else {
             std::collections::BTreeMap::new()
+        };
+        if self.structure.show_inline_structure_view
+            && let Some(parse_res) = self.parse_result()
+        {
+            parse_res.collect_collapsed_ranges(&self.structure.collapsed_struct_ids, &mut regions);
         }
+        regions
     }
 
     /// Returns summary details for a folded region starting at `offset`.

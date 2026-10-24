@@ -174,7 +174,13 @@ impl LayoutEngine {
         let map = if !Self::has_custom_layout(doc, show_inline_structure_view, is_parsing_structure) {
             LineMap::Standard { total_size, bytes_per_row }
         } else {
-            let folded_regions_guard = doc.computed_folded_regions();
+            let mut folded_regions = doc.computed_folded_regions();
+            if show_inline_structure_view
+                && !is_parsing_structure
+                && let Some(parse_res) = &meta.parse_result
+            {
+                parse_res.collect_collapsed_ranges(collapsed_struct_ids, &mut folded_regions);
+            }
             let mut segments = Vec::new();
 
             if total_size == 0 {
@@ -202,7 +208,7 @@ impl LayoutEngine {
                 layout_events.extend(custom_joins.iter().copied());
                 layout_events.extend(segment_breaks.iter().copied());
                 layout_events.extend(empty_line_counts.keys().copied());
-                for (&s, &e) in folded_regions_guard.iter() {
+                for (&s, &e) in folded_regions.iter() {
                     layout_events.push(s);
                     layout_events.push(e);
                 }
@@ -221,7 +227,7 @@ impl LayoutEngine {
                 break_events.extend(custom_breaks.iter().copied());
                 break_events.extend(segment_breaks.iter().copied());
                 break_events.extend(empty_line_counts.keys().copied());
-                for (&s, &e) in folded_regions_guard.iter() {
+                for (&s, &e) in folded_regions.iter() {
                     break_events.push(s);
                     break_events.push(e);
                 }
@@ -239,18 +245,23 @@ impl LayoutEngine {
 
                 while current < total_size {
                     // Check if current is a fold start
-                    if let Some(&fold_end) = folded_regions_guard.get(&current) {
+                    if let Some(&fold_end) = folded_regions.get(&current) {
+                        let empty_count = empty_line_counts.remove(&current).unwrap_or(0);
+                        let mut starts = Vec::with_capacity(empty_count + 1);
+                        for _ in 0..empty_count {
+                            starts.push(current);
+                        }
+                        starts.push(current);
+                        let line_count = starts.len();
                         segments.push(LayoutSegment {
                             start_offset: current,
                             start_line: current_line,
                             byte_len: fold_end - current,
-                            line_count: 1,
-                            kind: SegmentKind::Custom {
-                                starts: Arc::new(vec![current]),
-                            },
+                            line_count,
+                            kind: SegmentKind::Custom { starts: Arc::new(starts) },
                         });
                         current = fold_end;
-                        current_line += 1;
+                        current_line += line_count;
                         continue;
                     }
 
@@ -309,9 +320,14 @@ impl LayoutEngine {
 
                     while current < total_size {
                         // If current is a fold start, finish this segment if not empty, or handle fold
-                        if let Some(&fold_end) = folded_regions_guard.get(&current) {
+                        if let Some(&fold_end) = folded_regions.get(&current) {
                             if !starts.is_empty() {
                                 break;
+                            }
+                            if let Some(count) = empty_line_counts.remove(&current) {
+                                for _ in 0..count {
+                                    starts.push(current);
+                                }
                             }
                             starts.push(current);
                             current = fold_end;
@@ -340,7 +356,7 @@ impl LayoutEngine {
                         }
 
                         // Process empty lines at current
-                        if let Some(&count) = empty_line_counts.get(&current) {
+                        if let Some(count) = empty_line_counts.remove(&current) {
                             for _ in 0..count {
                                 starts.push(current);
                             }
@@ -402,7 +418,7 @@ impl LayoutEngine {
                         let next_start_offset = if i + 1 < segments.len() { segments[i + 1].start_offset } else { total_size };
                         for j in 0..seg.line_count {
                             let line_st = starts[j];
-                            if folded_regions_guard.contains_key(&line_st) {
+                            if folded_regions.contains_key(&line_st) {
                                 continue;
                             }
                             let end = if j + 1 < seg.line_count { starts[j + 1] } else { next_start_offset };

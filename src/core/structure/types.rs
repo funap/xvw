@@ -508,6 +508,30 @@ impl ParseResult {
         }
     }
 
+    /// Collects the byte intervals [start, end) of visible top-level collapsed structures.
+    /// Descendant structures inside an already collapsed parent are folded into the parent.
+    pub fn collect_collapsed_ranges(&self, collapsed_structs: &HashSet<String>, ranges: &mut BTreeMap<usize, usize>) {
+        if collapsed_structs.is_empty() {
+            return;
+        }
+
+        let mut work = self.fields.iter().map(|field| (field, 0, false)).collect::<Vec<_>>();
+        while let Some((field, depth, parent_collapsed)) = work.pop() {
+            let key = struct_collapse_key(field.offset, depth, &field.id);
+            let is_collapsed = collapsed_structs.contains(&key) || collapsed_structs.contains(&field.id);
+            if field.is_struct() && !field.is_instance && field.size > 0 && !parent_collapsed && is_collapsed {
+                ranges.insert(field.offset, field.offset + field.size);
+                continue;
+            }
+
+            if !parent_collapsed && !is_collapsed {
+                for child in field.children.iter().rev() {
+                    work.push((child, depth + 1, false));
+                }
+            }
+        }
+    }
+
     /// Returns whether a visible structure starts at `offset`.
     pub fn has_structure_header_at(&self, offset: usize, collapsed_structs: &HashSet<String>) -> bool {
         self.index.container_structs.iter().any(|header| {
@@ -814,6 +838,11 @@ mod tests {
         result.collect_structure_header_lines(&mut header_lines, &collapsed);
         assert!(!header_lines.contains_key(&0));
         assert!(header_lines.contains_key(&4));
+
+        let mut collapsed_ranges = BTreeMap::new();
+        result.collect_collapsed_ranges(&collapsed, &mut collapsed_ranges);
+        assert_eq!(collapsed_ranges.get(&0), Some(&4));
+        assert!(!collapsed_ranges.contains_key(&4));
 
         assert_eq!(result.find_deepest_leaf_at(0).map(|f| f.id.as_str()), Some("magic"));
         assert_eq!(result.find_deepest_leaf_at(1).map(|f| f.id.as_str()), Some("magic"));

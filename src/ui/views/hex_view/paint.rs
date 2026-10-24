@@ -1006,9 +1006,18 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
     let physical_address = params.doc.offset_to_address(offset);
     let is_structure_header_row = is_struct_mode && chunk_len == 0;
+    let is_collapsed_struct_row = is_struct_mode
+        && chunk_len > 0
+        && params.parse_result.is_some_and(|pr| {
+            pr.find_container_structs_starting_at(offset, chunk_len).iter().any(|c| {
+                c.offset == offset
+                    && (c.size == chunk_len || chunk_len == c.size.min(total_size.saturating_sub(offset)))
+                    && (params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id))
+            })
+        });
 
     // 1. Draw Left Columns (Address OR Offset)
-    let addr_color = if is_structure_header_row {
+    let addr_color = if is_structure_header_row || is_collapsed_struct_row {
         muted_color.opacity(0.4)
     } else if is_cursor_row {
         fg_color
@@ -1086,7 +1095,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             bounds: scrollable_mask_bounds,
         }),
         |window| {
-            if is_structure_header_row {
+            if is_structure_header_row || is_collapsed_struct_row {
                 let bar_start_x = hex_start_x;
                 let bar_end_x = params.bounds.right() - px(VERTICAL_SCROLLBAR_WIDTH + 8.0);
                 let bar_width = (bar_end_x - bar_start_x).max(px(0.0));
@@ -1134,7 +1143,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     // Build and shape the exact text stream before painting any geometry.
     // Group geometry uses the fixed cell grid; glyphs are centered in that
     // grid during the text pass.
-    let mut hex_source = build_hex_text_source(chunk, offset, params.radix, params.group_size, params.is_big_endian);
+    let hex_chunk = if is_structure_header_row || is_collapsed_struct_row { &[] } else { chunk };
+    let mut hex_source = build_hex_text_source(hex_chunk, offset, params.radix, params.group_size, params.is_big_endian);
     let mut hex_text = hex_source.text.to_string();
     let mut pending_byte_char_start: Option<usize> = None;
 
@@ -1569,7 +1579,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     );
 
     // 3. ASCII Column (when ASCII view is enabled and row has bytes)
-    if params.show_ascii && chunk_len > 0 {
+    if params.show_ascii && chunk_len > 0 && !is_collapsed_struct_row {
         window.with_content_mask(
             Some(ContentMask {
                 bounds: scrollable_mask_bounds,
@@ -1836,7 +1846,21 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             container_structs = Cow::Owned(
                 container_structs
                     .iter()
-                    .filter(|container| params.collapsed_structs.contains(&container.id))
+                    .filter(|container| params.collapsed_structs.contains(&container.collapse_key) || params.collapsed_structs.contains(&container.id))
+                    .cloned()
+                    .collect(),
+            );
+        }
+
+        if is_collapsed_struct_row {
+            container_structs = Cow::Owned(
+                container_structs
+                    .iter()
+                    .filter(|container| {
+                        !container.is_instance
+                            && container.offset == offset
+                            && (params.collapsed_structs.contains(&container.collapse_key) || params.collapsed_structs.contains(&container.id))
+                    })
                     .cloned()
                     .collect(),
             );
@@ -1864,7 +1888,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             }
         }
 
-        let leaf_fields: Cow<'_, [IndexedField]> = if is_structure_header_row {
+        let leaf_fields: Cow<'_, [IndexedField]> = if is_structure_header_row || is_collapsed_struct_row {
             Cow::Owned(Vec::new())
         } else if parse_res.is_live() {
             Cow::Owned(parse_res.find_live_leaf_fields_starting_at(offset, chunk_len))
@@ -1877,12 +1901,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             parse_res.find_active_struct_ranges(offset, query_len)
         };
 
-        let is_collapsed = container_structs
-            .first()
-            .map(|c| params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id))
-            .unwrap_or(false);
+        let is_collapsed = is_collapsed_struct_row
+            || container_structs
+                .first()
+                .map(|c| params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id))
+                .unwrap_or(false);
 
-        let continuation_leaf = if !is_structure_header_row && container_structs.is_empty() && leaf_fields.is_empty() {
+        let continuation_leaf = if !is_structure_header_row && !is_collapsed_struct_row && container_structs.is_empty() && leaf_fields.is_empty() {
             parse_res.query_deepest_leaf_at(offset)
         } else {
             None

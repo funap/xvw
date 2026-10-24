@@ -457,7 +457,7 @@ impl HexView {
                     Cow::Borrowed(parse_result.find_container_structs_starting_at(offset, 1))
                 };
                 for container in containers.iter().filter(|container| !container.is_instance && container.size > 0) {
-                    let text = if collapsed_structs.contains(&container.id) {
+                    let text = if collapsed_structs.contains(&container.collapse_key) || collapsed_structs.contains(&container.id) {
                         format!("▶ {} ({} bytes)", container.format_container_label(), container.size)
                     } else {
                         format!("▼ {}", container.format_container_label())
@@ -488,7 +488,10 @@ impl HexView {
             } else {
                 parse_result.find_active_struct_ranges(offset, chunk_len)
             };
-            let is_collapsed = container_structs.first().map(|c| collapsed_structs.contains(&c.id)).unwrap_or(false);
+            let is_collapsed = container_structs
+                .first()
+                .map(|c| collapsed_structs.contains(&c.collapse_key) || collapsed_structs.contains(&c.id))
+                .unwrap_or(false);
 
             let struct_depth = active_ranges.len().saturating_sub(1);
             let indent_level = if !container_structs.is_empty() {
@@ -3312,15 +3315,6 @@ impl Render for HexView {
                             cx.notify();
                         });
                     } else if let Some(target_pos) = this.offset_from_point(event.position, window, cx) {
-                        if this.editor.read(cx).is_folded(target_pos) {
-                            this.editor.update(cx, |editor, cx| {
-                                editor.unfold_bookmark_at(target_pos);
-                                cx.notify();
-                            });
-                            this.notify_document_changed(cx);
-                            return;
-                        }
-
                         let (is_struct_collapse_toggle, struct_collapse_target, is_desc_field_selection) = {
                             let editor = this.editor.read(cx);
                             let line_starts = editor.line_starts();
@@ -3351,8 +3345,15 @@ impl Render for HexView {
                                         let world_x = relative_x + this.scroll.outer_scroll_x;
                                         let in_desc = layout.description.is_some_and(|col| world_x >= col.start);
 
-                                        if chunk_len == 0 {
-                                            let containers = parse_res.find_container_structs_starting_at(line_offset, 1);
+                                        let is_collapsed_container_row =
+                                            parse_res.find_container_structs_starting_at(line_offset, chunk_len).first().is_some_and(|c| {
+                                                c.offset == line_offset
+                                                    && (c.size == chunk_len || chunk_len == c.size.min(editor.total_size().saturating_sub(line_offset)))
+                                                    && editor.structure.is_struct_collapsed(&c.collapse_key, &c.id)
+                                            });
+
+                                        if chunk_len == 0 || is_collapsed_container_row {
+                                            let containers = parse_res.find_container_structs_starting_at(line_offset, chunk_len.max(1));
                                             if let Some(c) = containers.first() {
                                                 is_toggle = true;
                                                 collapse_key = Some(c.collapse_key.clone());
@@ -3385,6 +3386,20 @@ impl Render for HexView {
                             });
                             this.notify_document_changed(cx);
                             return;
+                        }
+
+                        if this.editor.read(cx).is_folded(target_pos) {
+                            let unfolded = this.editor.update(cx, |editor, cx| {
+                                let res = editor.unfold_bookmark_at(target_pos);
+                                if res {
+                                    cx.notify();
+                                }
+                                res
+                            });
+                            if unfolded {
+                                this.notify_document_changed(cx);
+                                return;
+                            }
                         }
 
                         if let Some(range) = is_desc_field_selection {
