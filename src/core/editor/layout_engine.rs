@@ -246,6 +246,10 @@ impl LayoutEngine {
                 while current < total_size {
                     // Check if current is a fold start
                     if let Some(&fold_end) = folded_regions.get(&current) {
+                        if fold_end <= current {
+                            current += 1;
+                            continue;
+                        }
                         let empty_count = empty_line_counts.remove(&current).unwrap_or(0);
                         let mut starts = Vec::with_capacity(empty_count + 1);
                         for _ in 0..empty_count {
@@ -324,6 +328,10 @@ impl LayoutEngine {
                             if !starts.is_empty() {
                                 break;
                             }
+                            if fold_end <= current {
+                                current += 1;
+                                break;
+                            }
                             if let Some(count) = empty_line_counts.remove(&current) {
                                 for _ in 0..count {
                                     starts.push(current);
@@ -387,7 +395,7 @@ impl LayoutEngine {
                     }
 
                     let line_count = starts.len();
-                    let byte_len = current - start_offset;
+                    let byte_len = current.saturating_sub(start_offset);
 
                     segments.push(LayoutSegment {
                         start_offset,

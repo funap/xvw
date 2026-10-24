@@ -2082,6 +2082,9 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             } else {
                 comment_shared.clone()
             };
+            if clean_comment.is_empty() {
+                continue;
+            }
             let run = TextRun {
                 len: clean_comment.len(),
                 font: font.clone(),

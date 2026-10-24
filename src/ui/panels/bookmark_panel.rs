@@ -104,6 +104,15 @@ impl BookmarkPanel {
     }
 
     pub fn set_editor(&mut self, editor: Option<Entity<Editor>>, cx: &mut Context<Self>) {
+        let same_editor = match (&self.editor, &editor) {
+            (Some(current), Some(next)) => current.entity_id() == next.entity_id(),
+            (None, None) => true,
+            _ => false,
+        };
+        if same_editor {
+            return;
+        }
+
         self._editor_subscription = None;
         self.editor = editor.clone();
         self.selected_id = None;
@@ -490,11 +499,14 @@ impl Render for BookmarkPanel {
         let is_input_focused = self.comment_input.read(cx).focus_handle(cx).is_focused(window);
         let is_focused = self.focus_handle.is_focused(window) || is_input_focused;
 
-        let (bookmarks, has_editor) = if let Some(ed) = &self.editor {
+        let (bookmarks, has_editor, address_map, item_visibility) = if let Some(ed) = &self.editor {
             let editor = ed.read(cx);
-            (editor.bookmarks().snapshot(), true)
+            let address_map = editor.document.read().ok().map(|d| d.address_map.clone()).unwrap_or_default();
+            let bms = editor.bookmarks().snapshot();
+            let visibility: Vec<bool> = bms.iter().map(|item| editor.bookmarks().is_item_hidden(item)).collect();
+            (bms, true, address_map, visibility)
         } else {
-            (Vec::new(), false)
+            (Vec::new(), false, crate::core::address_map::AddressMap::default(), Vec::new())
         };
 
         let count = bookmarks.len();
@@ -702,8 +714,8 @@ impl Render for BookmarkPanel {
         } else {
             let mut list = v_flex().flex_1().gap_1().p_1();
 
-            for item in bookmarks {
-                list = list.child(self.render_bookmark_item(&item, &theme, window, cx));
+            for (item, &is_hidden) in bookmarks.iter().zip(item_visibility.iter()) {
+                list = list.child(self.render_bookmark_item(item, &theme, &address_map, is_hidden, window, cx));
             }
 
             v_flex()
@@ -737,7 +749,15 @@ impl Render for BookmarkPanel {
 }
 
 impl BookmarkPanel {
-    fn render_bookmark_item(&self, item: &BookmarkItem, theme: &gpui_kit::component::Theme, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_bookmark_item(
+        &self,
+        item: &BookmarkItem,
+        theme: &gpui_kit::component::Theme,
+        address_map: &crate::core::address_map::AddressMap,
+        is_item_hidden: bool,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let item_id = item.id.clone();
         let is_selected = self.selected_id.as_deref() == Some(&item_id);
         let is_editing = self.editing_id.as_deref() == Some(&item_id);
@@ -753,8 +773,6 @@ impl BookmarkPanel {
         let item_id_select = item_id.clone();
 
         let bg_color = if is_selected { theme.selection } else { theme.sidebar };
-
-        let is_item_hidden = self.editor.as_ref().map(|ed| ed.read(cx).bookmarks().is_item_hidden(item)).unwrap_or(false);
         let item_id_vis = item_id.clone();
 
         let mut row_container = v_flex()
@@ -819,14 +837,7 @@ impl BookmarkPanel {
                                             .text_xs()
                                             .font_semibold()
                                             .text_color(theme.foreground)
-                                            .child({
-                                                let address_map = self
-                                                    .editor
-                                                    .as_ref()
-                                                    .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
-                                                    .unwrap_or_default();
-                                                format!("0x{:08X}", address_map.offset_to_address(item.offset))
-                                            }),
+                                            .child(format!("0x{:08X}", address_map.offset_to_address(item.offset))),
                                     )
                                     .child(
                                         div()
@@ -1031,5 +1042,13 @@ mod tests {
         assert_eq!(page_up(4), 0);
         assert_eq!(page_down(2), 12);
         assert_eq!(page_down(10), 14);
+    }
+
+    #[test]
+    fn test_bookmark_address_mapping_display() {
+        use crate::core::address_map::AddressMap;
+        let map = AddressMap::default();
+        let display = format!("0x{:08X}", map.offset_to_address(42));
+        assert_eq!(display, "0x0000002A");
     }
 }
