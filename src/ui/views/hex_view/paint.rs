@@ -7,12 +7,18 @@ use crate::core::encoding::Encoding;
 use crate::core::radix::{ByteGroupSize, DisplayRadix, byte_category, digit_count, group_category};
 use crate::core::structure::{IndexedField, ParseResult};
 use crate::ui::color::BookmarkColorExt;
+use crate::ui::icon::IconName;
+use gpui::TransformationMatrix;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::IconNamed;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::*;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ops::Range;
+
+pub const CHEVRON_ICON_SIZE: f32 = 14.0;
+pub const CHEVRON_ICON_GAP: f32 = 4.0;
 
 const TEXT_INPUT_CURSOR_WIDTH: Pixels = px(1.5);
 const TEXT_INPUT_CURSOR_HEIGHT_RATIO: f32 = 0.85;
@@ -491,29 +497,11 @@ impl DescriptionPalette {
 }
 
 /// Builds formatted text and syntax-highlighted `TextRun`s for a container structure header.
-pub fn build_structure_header_runs(
-    container: &IndexedField,
-    icon: &str,
-    is_collapsed: bool,
-    font: Font,
-    palette: &DescriptionPalette,
-) -> (String, Vec<TextRun>) {
+pub fn build_structure_header_runs(container: &IndexedField, is_collapsed: bool, font: Font, palette: &DescriptionPalette) -> (String, Vec<TextRun>) {
     let mut text = String::with_capacity(64);
     let mut runs = Vec::new();
 
-    // 1. Icon ("▼ " or "▶ ")
-    text.push_str(icon);
-    text.push(' ');
-    runs.push(TextRun {
-        len: icon.len() + 1,
-        font: font.clone(),
-        color: palette.header_icon,
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    });
-
-    // 2. Field Name (id)
+    // 1. Field Name (id)
     let id_start = text.len();
     text.push_str(&clean_single_line(&container.id));
     runs.push(TextRun {
@@ -525,7 +513,7 @@ pub fn build_structure_header_runs(
         strikethrough: None,
     });
 
-    // 3. Type name (": type")
+    // 2. Type name (": type")
     if !container.type_name.is_empty() && container.type_name != container.id {
         let punct_start = text.len();
         text.push_str(": ");
@@ -550,7 +538,7 @@ pub fn build_structure_header_runs(
         });
     }
 
-    // 4. Size & status badge (" (30B)" or " (30B, collapsed)")
+    // 3. Size & status badge (" (30B)" or " (30B, collapsed)")
     let size_start = text.len();
     if is_collapsed {
         text.push_str(&format!(" ({}B, collapsed)", container.size));
@@ -1955,12 +1943,22 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             leaf_fields.first().map(|field| field.depth).unwrap_or(0)
         };
         let indent_px = indent_level as f32 * 14.0;
+        let has_chevron = !container_structs.is_empty();
+        let chevron_icon_path = if has_chevron {
+            if is_collapsed {
+                Some(IconName::ChevronRight.path())
+            } else {
+                Some(IconName::ChevronDown.path())
+            }
+        } else {
+            None
+        };
+        let chevron_width = if has_chevron { CHEVRON_ICON_SIZE + CHEVRON_ICON_GAP } else { 0.0 };
 
         let mut desc_runs = Vec::new();
         let mut desc_full_text = String::new();
         if let Some(container) = container_structs.first() {
-            let icon = if is_collapsed { "▶" } else { "▼" };
-            let (hdr_text, hdr_runs) = build_structure_header_runs(container, icon, is_collapsed, font.clone(), &desc_palette);
+            let (hdr_text, hdr_runs) = build_structure_header_runs(container, is_collapsed, font.clone(), &desc_palette);
             desc_full_text.push_str(&hdr_text);
             desc_runs.extend(hdr_runs);
         }
@@ -2005,10 +2003,11 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 desc_full_text = sanitized;
             }
 
+            let text_offset_px = indent_px + chevron_width;
             let expr_shared = SharedString::from(desc_full_text);
             let shaped_expr = window.text_system().shape_line(expr_shared, params.font_size, &desc_runs, None);
             let desc_mask_bounds = Bounds::new(point(desc_start_x, params.bounds.top()), size(px(params.desc_col_width), px(ROW_HEIGHT)));
-            let desc_text_width = f32::from(shaped_expr.width) + indent_px + 8.0;
+            let desc_text_width = f32::from(shaped_expr.width) + text_offset_px + 8.0;
 
             window.with_content_mask(
                 Some(ContentMask {
@@ -2029,8 +2028,16 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             }
                         }
 
+                        // Paint Lucide chevron icon if container header
+                        if let Some(icon_path) = chevron_icon_path {
+                            let icon_x = desc_start_x - px(params.desc_scroll_x) + px(indent_px);
+                            let icon_y = params.bounds.top() + px((ROW_HEIGHT - CHEVRON_ICON_SIZE) / 2.0);
+                            let icon_bounds = Bounds::new(point(icon_x, icon_y), size(px(CHEVRON_ICON_SIZE), px(CHEVRON_ICON_SIZE)));
+                            let _ = window.paint_svg(icon_bounds, icon_path, None, TransformationMatrix::unit(), desc_palette.header_icon, cx);
+                        }
+
                         let _ = shaped_expr.paint(
-                            point(desc_start_x - px(params.desc_scroll_x) + px(indent_px), params.bounds.top() + px(2.0)),
+                            point(desc_start_x - px(params.desc_scroll_x) + px(text_offset_px), params.bounds.top() + px(2.0)),
                             line_height,
                             TextAlign::Left,
                             None,
@@ -2441,13 +2448,13 @@ mod tests {
         let palette = DescriptionPalette::from_theme(&theme);
 
         // Expanded
-        let (text_exp, runs_exp) = build_structure_header_runs(&container, "▼", false, font.clone(), &palette);
-        assert_eq!(text_exp, "▼ sections[0]: section (30B)");
+        let (text_exp, runs_exp) = build_structure_header_runs(&container, false, font.clone(), &palette);
+        assert_eq!(text_exp, "sections[0]: section (30B)");
         assert_eq!(runs_exp.iter().map(|r| r.len).sum::<usize>(), text_exp.len());
 
         // Collapsed
-        let (text_col, runs_col) = build_structure_header_runs(&container, "▶", true, font, &palette);
-        assert_eq!(text_col, "▶ sections[0]: section (30B, collapsed)");
+        let (text_col, runs_col) = build_structure_header_runs(&container, true, font, &palette);
+        assert_eq!(text_col, "sections[0]: section (30B, collapsed)");
         assert_eq!(runs_col.iter().map(|r| r.len).sum::<usize>(), text_col.len());
     }
 

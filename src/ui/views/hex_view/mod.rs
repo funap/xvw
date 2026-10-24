@@ -20,7 +20,7 @@ pub use layout::{
     ascii_byte_index_from_world_x, bounded_auto_fit_range, build_hex_text_source, calculate_scroll_top_for_range, can_chain_to_outer, cursor_in_row_offset,
     hex_grid_width, hex_grid_x, hex_group_x, is_cursor_header_column, make_hex_view_layout, measure_hex_cell_width, weighted_text_width,
 };
-pub use paint::{DescriptionPalette, RowPaintParams, paint_hex_row, paint_scrollbar};
+pub use paint::{CHEVRON_ICON_GAP, CHEVRON_ICON_SIZE, DescriptionPalette, RowPaintParams, paint_hex_row, paint_scrollbar};
 pub use types::*;
 
 use crate::actions::{
@@ -458,11 +458,11 @@ impl HexView {
                 };
                 for container in containers.iter().filter(|container| !container.is_instance && container.size > 0) {
                     let text = if collapsed_structs.contains(&container.collapse_key) || collapsed_structs.contains(&container.id) {
-                        format!("▶ {} ({} bytes)", container.format_container_label(), container.size)
+                        format!("{} ({} bytes)", container.format_container_label(), container.size)
                     } else {
-                        format!("▼ {}", container.format_container_label())
+                        container.format_container_label()
                     };
-                    let row_width = container.depth as f32 * 14.0 + weighted_text_width(&text, char_w) + 8.0;
+                    let row_width = container.depth as f32 * 14.0 + (CHEVRON_ICON_SIZE + CHEVRON_ICON_GAP) + weighted_text_width(&text, char_w) + 8.0;
                     max_width = max_width.max(row_width);
                 }
                 continue;
@@ -513,11 +513,11 @@ impl HexView {
 
             if let Some(container) = container_structs.first() {
                 let text = if is_collapsed {
-                    format!("▶ {} ({} bytes)", container.format_container_label(), container.size)
+                    format!("{} ({} bytes)", container.format_container_label(), container.size)
                 } else {
-                    format!("▼ {}", container.format_container_label())
+                    container.format_container_label()
                 };
-                parts_width += weighted_text_width(&text, char_w);
+                parts_width += (CHEVRON_ICON_SIZE + CHEVRON_ICON_GAP) + weighted_text_width(&text, char_w);
                 part_count += 1;
             }
 
