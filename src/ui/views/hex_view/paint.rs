@@ -8,6 +8,7 @@ use crate::core::radix::{ByteGroupSize, DisplayRadix, byte_category, digit_count
 use crate::core::structure::{IndexedField, ParseResult};
 use crate::ui::color::BookmarkColorExt;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::theme::Theme;
 use gpui_kit::*;
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -394,15 +395,106 @@ pub fn clean_single_line(s: &str) -> Cow<'_, str> {
     }
 }
 
+#[inline]
+fn channel_to_linear(c: f32) -> f32 {
+    if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+
+/// Calculates relative luminance according to WCAG 2.1 specs.
+#[inline]
+pub fn rel_luminance(c: Hsla) -> f32 {
+    let rgba = Rgba::from(c);
+    0.2126 * channel_to_linear(rgba.r) + 0.7152 * channel_to_linear(rgba.g) + 0.0722 * channel_to_linear(rgba.b)
+}
+
+/// Calculates contrast ratio between two colors according to WCAG 2.1 specs.
+#[inline]
+pub fn contrast_ratio(c1: Hsla, c2: Hsla) -> f32 {
+    let l1 = rel_luminance(c1);
+    let l2 = rel_luminance(c2);
+    let (lighter, darker) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+/// Adjusts color lightness if necessary to guarantee a minimum WCAG contrast ratio against `background`.
+pub fn ensure_contrast(color: Hsla, background: Hsla, min_ratio: f32) -> Hsla {
+    let mut solid_color = color;
+    solid_color.a = 1.0;
+    let ratio = contrast_ratio(solid_color, background);
+    if ratio >= min_ratio {
+        return solid_color;
+    }
+    let bg_lum = rel_luminance(background);
+    let is_dark_bg = bg_lum < 0.2;
+
+    for _ in 0..25 {
+        if is_dark_bg {
+            solid_color.l = (solid_color.l + 0.03).min(1.0);
+        } else {
+            solid_color.l = (solid_color.l - 0.03).max(0.0);
+        }
+        if contrast_ratio(solid_color, background) >= min_ratio {
+            break;
+        }
+    }
+    solid_color
+}
+
+/// Color palette for the structure description column, designed for high legibility
+/// across both light and dark themes using theme tokens and WCAG contrast guarantees.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DescriptionPalette {
+    pub field_id: Hsla,
+    pub type_name: Hsla,
+    pub punctuation: Hsla,
+    pub number_value: Hsla,
+    pub string_value: Hsla,
+    pub bytes_value: Hsla,
+    pub enum_label: Hsla,
+    pub comment: Hsla,
+    pub error: Hsla,
+    pub header_icon: Hsla,
+    pub continuation: Hsla,
+    pub size_badge: Hsla,
+    pub tree_guide: Hsla,
+    pub active_bg: Hsla,
+}
+
+impl DescriptionPalette {
+    pub fn from_theme(theme: &Theme) -> Self {
+        let bg = theme.background;
+        let is_dark = theme.mode.is_dark();
+        let punct_base = if is_dark {
+            theme.foreground.opacity(0.65)
+        } else {
+            theme.foreground.opacity(0.7)
+        };
+        Self {
+            field_id: ensure_contrast(theme.foreground, bg, 4.5),
+            type_name: ensure_contrast(theme.blue, bg, 4.5),
+            punctuation: ensure_contrast(punct_base, bg, 3.0),
+            number_value: ensure_contrast(theme.magenta, bg, 4.5),
+            string_value: ensure_contrast(theme.green, bg, 4.5),
+            bytes_value: ensure_contrast(theme.cyan, bg, 4.0),
+            enum_label: ensure_contrast(theme.yellow, bg, 4.5),
+            comment: ensure_contrast(theme.muted_foreground, bg, 4.0),
+            error: ensure_contrast(theme.red, bg, 4.5),
+            header_icon: ensure_contrast(theme.accent_foreground, bg, 4.5),
+            continuation: ensure_contrast(theme.muted_foreground, bg, 3.5),
+            size_badge: ensure_contrast(theme.muted_foreground, bg, 3.5),
+            tree_guide: ensure_contrast(theme.border, bg, 1.8),
+            active_bg: if is_dark { theme.blue.opacity(0.18) } else { theme.blue.opacity(0.14) },
+        }
+    }
+}
+
 /// Builds formatted text and syntax-highlighted `TextRun`s for a container structure header.
 pub fn build_structure_header_runs(
     container: &IndexedField,
     icon: &str,
     is_collapsed: bool,
     font: Font,
-    fg_color: Hsla,
-    muted_color: Hsla,
-    accent_color: Hsla,
+    palette: &DescriptionPalette,
 ) -> (String, Vec<TextRun>) {
     let mut text = String::with_capacity(64);
     let mut runs = Vec::new();
@@ -413,7 +505,7 @@ pub fn build_structure_header_runs(
     runs.push(TextRun {
         len: icon.len() + 1,
         font: font.clone(),
-        color: accent_color,
+        color: palette.header_icon,
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -425,7 +517,7 @@ pub fn build_structure_header_runs(
     runs.push(TextRun {
         len: text.len() - id_start,
         font: font.clone(),
-        color: fg_color,
+        color: palette.field_id,
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -433,13 +525,23 @@ pub fn build_structure_header_runs(
 
     // 3. Type name (": type")
     if !container.type_name.is_empty() && container.type_name != container.id {
-        let type_start = text.len();
+        let punct_start = text.len();
         text.push_str(": ");
+        runs.push(TextRun {
+            len: text.len() - punct_start,
+            font: font.clone(),
+            color: palette.punctuation,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+
+        let type_start = text.len();
         text.push_str(&clean_single_line(&container.type_name));
         runs.push(TextRun {
             len: text.len() - type_start,
             font: font.clone(),
-            color: muted_color,
+            color: palette.type_name,
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -456,7 +558,7 @@ pub fn build_structure_header_runs(
     runs.push(TextRun {
         len: text.len() - size_start,
         font: font.clone(),
-        color: muted_color.opacity(0.8),
+        color: palette.size_badge,
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -466,25 +568,13 @@ pub fn build_structure_header_runs(
 }
 
 /// Builds formatted text and syntax-highlighted `TextRun`s for a leaf field.
-#[allow(clippy::too_many_arguments)]
-pub fn build_leaf_field_runs(
-    field: &IndexedField,
-    font: Font,
-    fg_color: Hsla,
-    muted_color: Hsla,
-    accent_color: Hsla,
-    green_color: Hsla,
-    yellow_color: Hsla,
-    red_color: Hsla,
-    include_comment: bool,
-    is_active: bool,
-) -> (String, Vec<TextRun>) {
+pub fn build_leaf_field_runs(field: &IndexedField, font: Font, palette: &DescriptionPalette, include_comment: bool, is_active: bool) -> (String, Vec<TextRun>) {
     let mut text = String::with_capacity(64);
     let mut runs = Vec::new();
-    let bg_color = if is_active { Some(accent_color.opacity(0.16)) } else { None };
+    let bg_color = if is_active { Some(palette.active_bg) } else { None };
 
     // 1. Color pip ("▪ ")
-    let pip_color = field.color.map(Hsla::from).unwrap_or(accent_color);
+    let pip_color = field.color.map(Hsla::from).unwrap_or(palette.field_id);
     text.push_str("▪ ");
     runs.push(TextRun {
         len: "▪ ".len(),
@@ -501,7 +591,7 @@ pub fn build_leaf_field_runs(
     runs.push(TextRun {
         len: text.len() - id_start,
         font: font.clone(),
-        color: fg_color,
+        color: palette.field_id,
         background_color: bg_color,
         underline: None,
         strikethrough: None,
@@ -509,13 +599,23 @@ pub fn build_leaf_field_runs(
 
     // 3. Optional Type name
     if !field.type_name.is_empty() && field.type_name != field.id {
-        let type_start = text.len();
+        let punct_start = text.len();
         text.push_str(": ");
+        runs.push(TextRun {
+            len: text.len() - punct_start,
+            font: font.clone(),
+            color: palette.punctuation,
+            background_color: bg_color,
+            underline: None,
+            strikethrough: None,
+        });
+
+        let type_start = text.len();
         text.push_str(&clean_single_line(&field.type_name));
         runs.push(TextRun {
             len: text.len() - type_start,
             font: font.clone(),
-            color: muted_color,
+            color: palette.type_name,
             background_color: bg_color,
             underline: None,
             strikethrough: None,
@@ -528,7 +628,7 @@ pub fn build_leaf_field_runs(
     runs.push(TextRun {
         len: text.len() - op_start,
         font: font.clone(),
-        color: muted_color.opacity(0.7),
+        color: palette.punctuation,
         background_color: bg_color,
         underline: None,
         strikethrough: None,
@@ -544,13 +644,13 @@ pub fn build_leaf_field_runs(
     let val_clean = clean_single_line(val_str);
     text.push_str(&val_clean);
     let val_color = if field.validation_failed {
-        red_color
+        palette.error
     } else if val_clean.starts_with('"') {
-        green_color
+        palette.string_value
     } else if val_clean.starts_with('[') {
-        muted_color
+        palette.bytes_value
     } else {
-        accent_color
+        palette.number_value
     };
     runs.push(TextRun {
         len: text.len() - val_start,
@@ -563,14 +663,34 @@ pub fn build_leaf_field_runs(
 
     // 6. Enum label
     if let Some(enum_label) = &field.enum_label {
-        let enum_start = text.len();
+        let punct_start = text.len();
         text.push_str(" (");
+        runs.push(TextRun {
+            len: text.len() - punct_start,
+            font: font.clone(),
+            color: palette.punctuation,
+            background_color: bg_color,
+            underline: None,
+            strikethrough: None,
+        });
+
+        let enum_start = text.len();
         text.push_str(&clean_single_line(enum_label));
-        text.push(')');
         runs.push(TextRun {
             len: text.len() - enum_start,
             font: font.clone(),
-            color: yellow_color,
+            color: palette.enum_label,
+            background_color: bg_color,
+            underline: None,
+            strikethrough: None,
+        });
+
+        let punct_close = text.len();
+        text.push(')');
+        runs.push(TextRun {
+            len: text.len() - punct_close,
+            font: font.clone(),
+            color: palette.punctuation,
             background_color: bg_color,
             underline: None,
             strikethrough: None,
@@ -583,13 +703,23 @@ pub fn build_leaf_field_runs(
         && !desc.is_empty()
         && let Some(first_line) = desc.lines().map(str::trim).find(|line| !line.is_empty())
     {
-        let doc_start = text.len();
+        let punct_start = text.len();
         text.push_str(" // ");
+        runs.push(TextRun {
+            len: text.len() - punct_start,
+            font: font.clone(),
+            color: palette.punctuation,
+            background_color: bg_color,
+            underline: None,
+            strikethrough: None,
+        });
+
+        let doc_start = text.len();
         text.push_str(&clean_single_line(first_line));
         runs.push(TextRun {
             len: text.len() - doc_start,
             font: font.clone(),
-            color: muted_color.opacity(0.6),
+            color: palette.comment,
             background_color: bg_color,
             underline: None,
             strikethrough: None,
@@ -600,15 +730,16 @@ pub fn build_leaf_field_runs(
 }
 
 /// Builds continuation runs for fields spanning across multiple 16-byte rows.
-pub fn build_continuation_field_runs(field_id: &str, relative_offset: usize, font: Font, fg_color: Hsla, muted_color: Hsla) -> (String, Vec<TextRun>) {
+pub fn build_continuation_field_runs(field_id: &str, relative_offset: usize, font: Font, palette: &DescriptionPalette) -> (String, Vec<TextRun>) {
     let mut text = String::with_capacity(32);
     let mut runs = Vec::new();
 
+    let prefix_start = text.len();
     text.push_str("↳ ");
     runs.push(TextRun {
-        len: "↳ ".len(),
+        len: text.len() - prefix_start,
         font: font.clone(),
-        color: muted_color.opacity(0.65),
+        color: palette.continuation,
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -619,7 +750,7 @@ pub fn build_continuation_field_runs(field_id: &str, relative_offset: usize, fon
     runs.push(TextRun {
         len: text.len() - id_start,
         font: font.clone(),
-        color: fg_color.opacity(0.8),
+        color: palette.field_id,
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -630,7 +761,7 @@ pub fn build_continuation_field_runs(field_id: &str, relative_offset: usize, fon
     runs.push(TextRun {
         len: text.len() - off_start,
         font: font.clone(),
-        color: muted_color.opacity(0.65),
+        color: palette.continuation,
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -680,20 +811,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
     let active_row_highlights = row_highlights(params.highlights, params.max_highlight_len, offset, next_offset);
     let is_dark = cx.theme().mode.is_dark();
-    let (
-        selection_bg,
-        caret_color,
-        muted_color,
-        fg_color,
-        accent_fg_color,
-        border_color,
-        _sidebar_bg,
-        bg_color_theme,
-        accent_color,
-        green_color,
-        yellow_color,
-        red_color,
-    ) = {
+    let desc_palette = DescriptionPalette::from_theme(cx.theme());
+    let (selection_bg, caret_color, muted_color, fg_color, accent_fg_color, border_color, _sidebar_bg, bg_color_theme) = {
         let theme = cx.theme();
         (
             selection_background_color(theme.selection, params.is_focused, is_dark),
@@ -704,10 +823,6 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             theme.border,
             theme.sidebar,
             theme.background,
-            theme.accent,
-            theme.green,
-            theme.yellow,
-            theme.red,
         )
     };
     let line_height = px(ROW_HEIGHT);
@@ -976,16 +1091,16 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 let bar_end_x = params.bounds.right() - px(VERTICAL_SCROLLBAR_WIDTH + 8.0);
                 let bar_width = (bar_end_x - bar_start_x).max(px(0.0));
                 let banner_bounds = Bounds::new(point(bar_start_x, params.bounds.top() + px(1.0)), size(bar_width, px(ROW_HEIGHT - 2.0)));
-                window.paint_quad(fill(banner_bounds, accent_color.opacity(0.06)));
+                window.paint_quad(fill(banner_bounds, desc_palette.type_name.opacity(0.06)));
 
                 let pip_bounds = Bounds::new(point(bar_start_x + px(2.0), params.bounds.top() + px(3.0)), size(px(3.0), px(ROW_HEIGHT - 6.0)));
-                window.paint_quad(fill(pip_bounds, accent_color.opacity(0.7)));
+                window.paint_quad(fill(pip_bounds, desc_palette.type_name.opacity(0.85)));
 
                 let line_y = params.bounds.top() + px(ROW_HEIGHT / 2.0);
                 let leader_end_x = desc_start_x - px(8.0);
                 if leader_end_x > bar_start_x + px(16.0) {
                     let leader_bounds = Bounds::new(point(bar_start_x + px(10.0), line_y), size(leader_end_x - bar_start_x - px(10.0), px(1.0)));
-                    window.paint_quad(fill(leader_bounds, border_color.opacity(0.35)));
+                    window.paint_quad(fill(leader_bounds, desc_palette.tree_guide));
                 }
             }
 
@@ -1189,7 +1304,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             .is_some_and(|af| item_start_offset >= af.offset && item_start_offset < af.offset + af.size);
 
                         if let Some(ref field) = field_at_item {
-                            let field_hsla = field.color.map(Hsla::from).unwrap_or(accent_color);
+                            let field_hsla = field.color.map(Hsla::from).unwrap_or(desc_palette.type_name);
                             let bg_opacity = if is_in_active_field { 0.18 } else { 0.06 };
                             let field_tint = field_hsla.opacity(bg_opacity);
 
@@ -1499,7 +1614,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                                 .is_some_and(|af| byte_pos >= af.offset && byte_pos < af.offset + af.size);
                             let ascii_field = parse_res.query_deepest_leaf_at(byte_pos);
                             if let Some(ref field) = ascii_field {
-                                let field_hsla = field.color.map(Hsla::from).unwrap_or(accent_color);
+                                let field_hsla = field.color.map(Hsla::from).unwrap_or(desc_palette.type_name);
                                 let bg_opacity = if is_ascii_in_active { 0.16 } else { 0.05 };
                                 window.paint_quad(fill(ascii_item_bounds, field_hsla.opacity(bg_opacity)));
                                 if is_ascii_in_active {
@@ -1794,13 +1909,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         let mut desc_full_text = String::new();
         if let Some(container) = container_structs.first() {
             let icon = if is_collapsed { "▶" } else { "▼" };
-            let (hdr_text, hdr_runs) = build_structure_header_runs(container, icon, is_collapsed, font.clone(), fg_color, muted_color, accent_fg_color);
+            let (hdr_text, hdr_runs) = build_structure_header_runs(container, icon, is_collapsed, font.clone(), &desc_palette);
             desc_full_text.push_str(&hdr_text);
             desc_runs.extend(hdr_runs);
         }
         if let Some(ref leaf) = continuation_leaf {
             let rel_offset = offset.saturating_sub(leaf.offset);
-            let (c_text, c_runs) = build_continuation_field_runs(&leaf.id, rel_offset, font.clone(), fg_color, muted_color);
+            let (c_text, c_runs) = build_continuation_field_runs(&leaf.id, rel_offset, font.clone(), &desc_palette);
             desc_full_text.push_str(&c_text);
             desc_runs.extend(c_runs);
         } else if !is_collapsed {
@@ -1811,25 +1926,14 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     desc_runs.push(TextRun {
                         len: 2,
                         font: font.clone(),
-                        color: muted_color.opacity(0.5),
+                        color: desc_palette.punctuation,
                         background_color: None,
                         underline: None,
                         strikethrough: None,
                     });
                 }
                 let is_active_field = active_leaf_field.as_ref().is_some_and(|af| af.offset == f.offset && af.size == f.size);
-                let (leaf_text, leaf_runs) = build_leaf_field_runs(
-                    f,
-                    font.clone(),
-                    fg_color,
-                    muted_color,
-                    accent_color,
-                    green_color,
-                    yellow_color,
-                    red_color,
-                    include_doc,
-                    is_active_field,
-                );
+                let (leaf_text, leaf_runs) = build_leaf_field_runs(f, font.clone(), &desc_palette, include_doc, is_active_field);
                 desc_full_text.push_str(&leaf_text);
                 desc_runs.extend(leaf_runs);
             }
@@ -1868,7 +1972,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                                 if guide_x >= desc_start_x && guide_x < desc_end_x {
                                     window.paint_quad(fill(
                                         Bounds::new(point(guide_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
-                                        border_color.opacity(0.35),
+                                        desc_palette.tree_guide,
                                     ));
                                 }
                             }
@@ -2131,14 +2235,17 @@ mod tests {
     #[allow(clippy::field_reassign_with_default)]
     fn test_theme() -> Theme {
         let mut theme = Theme::default();
+        theme.background = hsla(0.0, 0.0, 0.0, 1.0);
         theme.foreground = hsla(0.0, 0.0, 1.0, 1.0);
         theme.muted_foreground = hsla(0.0, 0.0, 0.5, 1.0);
+        theme.accent_foreground = hsla(0.0, 0.0, 0.9, 1.0);
         theme.red = hsla(0.0, 0.8, 0.5, 1.0);
         theme.green = hsla(120.0 / 360.0, 0.8, 0.5, 1.0);
         theme.blue = hsla(210.0 / 360.0, 0.8, 0.5, 1.0);
         theme.yellow = hsla(45.0 / 360.0, 0.8, 0.5, 1.0);
         theme.cyan = hsla(190.0 / 360.0, 0.8, 0.5, 1.0);
         theme.magenta = hsla(280.0 / 360.0, 0.8, 0.5, 1.0);
+        theme.border = hsla(0.0, 0.0, 0.3, 1.0);
         theme
     }
 
@@ -2277,13 +2384,15 @@ mod tests {
             expression: String::new(),
         };
 
+        let palette = DescriptionPalette::from_theme(&theme);
+
         // Expanded
-        let (text_exp, runs_exp) = build_structure_header_runs(&container, "▼", false, font.clone(), theme.foreground, theme.muted_foreground, theme.accent);
+        let (text_exp, runs_exp) = build_structure_header_runs(&container, "▼", false, font.clone(), &palette);
         assert_eq!(text_exp, "▼ sections[0]: section (30B)");
         assert_eq!(runs_exp.iter().map(|r| r.len).sum::<usize>(), text_exp.len());
 
         // Collapsed
-        let (text_col, runs_col) = build_structure_header_runs(&container, "▶", true, font, theme.foreground, theme.muted_foreground, theme.accent);
+        let (text_col, runs_col) = build_structure_header_runs(&container, "▶", true, font, &palette);
         assert_eq!(text_col, "▶ sections[0]: section (30B, collapsed)");
         assert_eq!(runs_col.iter().map(|r| r.len).sum::<usize>(), text_col.len());
     }
@@ -2295,6 +2404,7 @@ mod tests {
 
         let theme = test_theme();
         let font = Font::default();
+        let palette = DescriptionPalette::from_theme(&theme);
         let field = IndexedField {
             id: "magic".into(),
             offset: 0,
@@ -2311,39 +2421,17 @@ mod tests {
             expression: "magic = 3412h (13330)".into(),
         };
 
-        let (text, runs) = build_leaf_field_runs(
-            &field,
-            font.clone(),
-            theme.foreground,
-            theme.muted_foreground,
-            theme.accent,
-            theme.green,
-            theme.yellow,
-            theme.red,
-            true,
-            false,
-        );
+        let (text, runs) = build_leaf_field_runs(&field, font.clone(), &palette, true, false);
 
         assert_eq!(text, "▪ magic: u2le = 0x3412 (13330) (VALID) // magic header");
         assert_eq!(runs.iter().map(|r| r.len).sum::<usize>(), text.len());
         assert!(runs[0].background_color.is_none());
 
         // Test active highlight
-        let (_act_text, act_runs) = build_leaf_field_runs(
-            &field,
-            font.clone(),
-            theme.foreground,
-            theme.muted_foreground,
-            theme.accent,
-            theme.green,
-            theme.yellow,
-            theme.red,
-            true,
-            true,
-        );
+        let (_act_text, act_runs) = build_leaf_field_runs(&field, font.clone(), &palette, true, true);
         assert!(act_runs[0].background_color.is_some());
 
-        let (cont_text, cont_runs) = build_continuation_field_runs("body", 0x10, font.clone(), theme.foreground, theme.muted_foreground);
+        let (cont_text, cont_runs) = build_continuation_field_runs("body", 0x10, font.clone(), &palette);
         assert_eq!(cont_text, "↳ body (+0x10)");
         assert_eq!(cont_runs.iter().map(|r| r.len).sum::<usize>(), cont_text.len());
 
@@ -2364,18 +2452,7 @@ mod tests {
             expression: "data = \"line1\r\nline2\"".into(),
         };
 
-        let (ml_text, ml_runs) = build_leaf_field_runs(
-            &multiline_field,
-            font,
-            theme.foreground,
-            theme.muted_foreground,
-            theme.accent,
-            theme.green,
-            theme.yellow,
-            theme.red,
-            true,
-            false,
-        );
+        let (ml_text, ml_runs) = build_leaf_field_runs(&multiline_field, font, &palette, true, false);
 
         assert!(!ml_text.contains('\n'));
         assert!(!ml_text.contains('\r'));
@@ -2383,5 +2460,56 @@ mod tests {
         assert!(ml_text.contains("Doc summary line"));
         assert!(!ml_text.contains("Second explanation line"));
         assert_eq!(clean_single_line("hello\r\nworld\n"), "hello world ");
+    }
+
+    #[test]
+    fn test_description_palette_contrast_across_all_embedded_themes() {
+        use super::*;
+        use crate::assets::Assets;
+        use crate::theme::EmbeddedThemes;
+
+        let embedded = EmbeddedThemes::load_from_assets(&Assets);
+        assert!(!embedded.theme_names().is_empty());
+
+        for name in embedded.theme_names() {
+            let config = embedded.get(&name).unwrap();
+            let mut theme = Theme::default();
+            theme.apply_config(&config);
+
+            let palette = DescriptionPalette::from_theme(&theme);
+            let bg = theme.background;
+
+            // Verify high contrast for all textual elements across every embedded theme
+            assert!(
+                contrast_ratio(palette.field_id, bg) >= 4.5,
+                "Theme '{}' failed contrast for field_id: ratio was {:.2}:1",
+                name,
+                contrast_ratio(palette.field_id, bg)
+            );
+            assert!(
+                contrast_ratio(palette.type_name, bg) >= 4.0,
+                "Theme '{}' failed contrast for type_name: ratio was {:.2}:1",
+                name,
+                contrast_ratio(palette.type_name, bg)
+            );
+            assert!(
+                contrast_ratio(palette.number_value, bg) >= 4.0,
+                "Theme '{}' failed contrast for number_value: ratio was {:.2}:1",
+                name,
+                contrast_ratio(palette.number_value, bg)
+            );
+            assert!(
+                contrast_ratio(palette.string_value, bg) >= 4.0,
+                "Theme '{}' failed contrast for string_value: ratio was {:.2}:1",
+                name,
+                contrast_ratio(palette.string_value, bg)
+            );
+            assert!(
+                contrast_ratio(palette.comment, bg) >= 3.5,
+                "Theme '{}' failed contrast for comment: ratio was {:.2}:1",
+                name,
+                contrast_ratio(palette.comment, bg)
+            );
+        }
     }
 }
