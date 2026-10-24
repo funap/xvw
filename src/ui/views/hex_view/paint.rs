@@ -384,6 +384,77 @@ pub struct RowPaintParams<'a> {
     pub font_size: Pixels,
 }
 
+/// Builds formatted text and syntax-highlighted `TextRun`s for a container structure header.
+pub fn build_structure_header_runs(
+    container: &IndexedField,
+    icon: &str,
+    is_collapsed: bool,
+    font: Font,
+    fg_color: Hsla,
+    muted_color: Hsla,
+    accent_color: Hsla,
+) -> (String, Vec<TextRun>) {
+    let mut text = String::with_capacity(64);
+    let mut runs = Vec::new();
+
+    // 1. Icon ("▼ " or "▶ ")
+    text.push_str(icon);
+    text.push(' ');
+    runs.push(TextRun {
+        len: icon.len() + 1,
+        font: font.clone(),
+        color: accent_color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+
+    // 2. Field Name (id)
+    let id_start = text.len();
+    text.push_str(&container.id);
+    runs.push(TextRun {
+        len: text.len() - id_start,
+        font: font.clone(),
+        color: fg_color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+
+    // 3. Type name (": type")
+    if !container.type_name.is_empty() && container.type_name != container.id {
+        let type_start = text.len();
+        text.push_str(": ");
+        text.push_str(&container.type_name);
+        runs.push(TextRun {
+            len: text.len() - type_start,
+            font: font.clone(),
+            color: muted_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+    }
+
+    // 4. Size & status badge (" (30B)" or " (30B, collapsed)")
+    let size_start = text.len();
+    if is_collapsed {
+        text.push_str(&format!(" ({}B, collapsed)", container.size));
+    } else {
+        text.push_str(&format!(" ({}B)", container.size));
+    }
+    runs.push(TextRun {
+        len: text.len() - size_start,
+        font: font.clone(),
+        color: muted_color.opacity(0.8),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    });
+
+    (text, runs)
+}
+
 pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) {
     let (offset, next_offset) = if params.row_idx < params.line_starts.len() {
         let offset = match params.line_starts.get(params.row_idx) {
@@ -425,7 +496,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
     let active_row_highlights = row_highlights(params.highlights, params.max_highlight_len, offset, next_offset);
     let is_dark = cx.theme().mode.is_dark();
-    let (selection_bg, caret_color, muted_color, fg_color, accent_fg_color, border_color, _sidebar_bg, bg_color_theme) = {
+    let (selection_bg, caret_color, muted_color, fg_color, accent_fg_color, border_color, _sidebar_bg, bg_color_theme, accent_color) = {
         let theme = cx.theme();
         (
             selection_background_color(theme.selection, params.is_focused, is_dark),
@@ -436,6 +507,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             theme.border,
             theme.sidebar,
             theme.background,
+            theme.accent,
         )
     };
     let line_height = px(ROW_HEIGHT);
@@ -607,9 +679,16 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     }
 
     let physical_address = params.doc.offset_to_address(offset);
+    let is_structure_header_row = is_struct_mode && chunk_len == 0;
 
     // 1. Draw Left Columns (Address OR Offset)
-    let addr_color = if is_cursor_row { fg_color } else { muted_color };
+    let addr_color = if is_structure_header_row {
+        muted_color.opacity(0.4)
+    } else if is_cursor_row {
+        fg_color
+    } else {
+        muted_color
+    };
     let (offset_w, gap) = if is_struct_mode {
         let addr_str = format_offset_08(physical_address);
         let run = TextRun {
@@ -681,6 +760,24 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             bounds: scrollable_mask_bounds,
         }),
         |window| {
+            if is_structure_header_row {
+                let bar_start_x = hex_start_x;
+                let bar_end_x = params.bounds.right() - px(VERTICAL_SCROLLBAR_WIDTH + 8.0);
+                let bar_width = (bar_end_x - bar_start_x).max(px(0.0));
+                let banner_bounds = Bounds::new(point(bar_start_x, params.bounds.top() + px(1.0)), size(bar_width, px(ROW_HEIGHT - 2.0)));
+                window.paint_quad(fill(banner_bounds, accent_color.opacity(0.06)));
+
+                let pip_bounds = Bounds::new(point(bar_start_x + px(2.0), params.bounds.top() + px(3.0)), size(px(3.0), px(ROW_HEIGHT - 6.0)));
+                window.paint_quad(fill(pip_bounds, accent_color.opacity(0.7)));
+
+                let line_y = params.bounds.top() + px(ROW_HEIGHT / 2.0);
+                let leader_end_x = desc_start_x - px(8.0);
+                if leader_end_x > bar_start_x + px(16.0) {
+                    let leader_bounds = Bounds::new(point(bar_start_x + px(10.0), line_y), size(leader_end_x - bar_start_x - px(10.0), px(1.0)));
+                    window.paint_quad(fill(leader_bounds, border_color.opacity(0.35)));
+                }
+            }
+
             let div2_x = hex_start_x + px(params.hex_col_width + (gap / 2.0));
             window.paint_quad(fill(
                 Bounds::new(point(div2_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
@@ -1406,7 +1503,10 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             parse_res.find_active_struct_ranges(offset, query_len)
         };
 
-        let is_collapsed = container_structs.first().map(|c| params.collapsed_structs.contains(&c.id)).unwrap_or(false);
+        let is_collapsed = container_structs
+            .first()
+            .map(|c| params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id))
+            .unwrap_or(false);
 
         let struct_depth = active_ranges.len().saturating_sub(1);
         let indent_level = if !container_structs.is_empty() {
@@ -1423,34 +1523,44 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         };
         let indent_px = indent_level as f32 * 14.0;
 
-        let mut desc_parts = Vec::new();
+        let mut desc_runs = Vec::new();
+        let mut desc_full_text = String::new();
         if let Some(container) = container_structs.first() {
             let icon = if is_collapsed { "▶" } else { "▼" };
-            let label = container.format_container_label();
-            if is_collapsed {
-                desc_parts.push(format!("{} {} ({} bytes)", icon, label, container.size));
-            } else {
-                desc_parts.push(format!("{} {}", icon, label));
-            }
+            let (hdr_text, hdr_runs) = build_structure_header_runs(container, icon, is_collapsed, font.clone(), fg_color, muted_color, accent_fg_color);
+            desc_full_text.push_str(&hdr_text);
+            desc_runs.extend(hdr_runs);
         }
         if !is_collapsed {
             for f in leaf_fields.iter() {
-                desc_parts.push(f.format_expression().to_string());
+                if !desc_full_text.is_empty() {
+                    desc_full_text.push_str("  ");
+                    desc_runs.push(TextRun {
+                        len: 2,
+                        font: font.clone(),
+                        color: muted_color.opacity(0.5),
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    });
+                }
+                let expr = f.format_expression();
+                let expr_start = desc_full_text.len();
+                desc_full_text.push_str(expr);
+                desc_runs.push(TextRun {
+                    len: desc_full_text.len() - expr_start,
+                    font: font.clone(),
+                    color: fg_color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                });
             }
         }
 
-        if !desc_parts.is_empty() {
-            let expr_shared = SharedString::from(desc_parts.join("  "));
-            let text_color = if !container_structs.is_empty() { accent_fg_color } else { fg_color };
-            let run = TextRun {
-                len: expr_shared.len(),
-                font: font.clone(),
-                color: text_color,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            let shaped_expr = window.text_system().shape_line(expr_shared, params.font_size, &[run], None);
+        if !desc_full_text.is_empty() {
+            let expr_shared = SharedString::from(desc_full_text);
+            let shaped_expr = window.text_system().shape_line(expr_shared, params.font_size, &desc_runs, None);
             let desc_mask_bounds = Bounds::new(point(desc_start_x, params.bounds.top()), size(px(params.desc_col_width), px(ROW_HEIGHT)));
             let desc_text_width = f32::from(shaped_expr.width) + indent_px + 8.0;
 
@@ -1832,5 +1942,39 @@ mod tests {
         assert_eq!(custom_palette.non_ascii, theme.yellow);
         assert_eq!(custom_palette.max, theme.magenta);
         assert_eq!(custom_palette.default, theme.foreground);
+    }
+
+    #[test]
+    fn test_build_structure_header_runs() {
+        use super::*;
+        use gpui::Font;
+
+        let theme = test_theme();
+        let font = Font::default();
+        let container = IndexedField {
+            id: "sections[0]".into(),
+            offset: 0x1E,
+            size: 30,
+            depth: 1,
+            is_instance: false,
+            type_name: "section".into(),
+            collapse_key: "0x1E:1:sections[0]".into(),
+            formatted_value: String::new(),
+            enum_label: None,
+            description: None,
+            color: None,
+            validation_failed: false,
+            expression: String::new(),
+        };
+
+        // Expanded
+        let (text_exp, runs_exp) = build_structure_header_runs(&container, "▼", false, font.clone(), theme.foreground, theme.muted_foreground, theme.accent);
+        assert_eq!(text_exp, "▼ sections[0]: section (30B)");
+        assert_eq!(runs_exp.iter().map(|r| r.len).sum::<usize>(), text_exp.len());
+
+        // Collapsed
+        let (text_col, runs_col) = build_structure_header_runs(&container, "▶", true, font, theme.foreground, theme.muted_foreground, theme.accent);
+        assert_eq!(text_col, "▶ sections[0]: section (30B, collapsed)");
+        assert_eq!(runs_col.iter().map(|r| r.len).sum::<usize>(), text_col.len());
     }
 }
