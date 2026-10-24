@@ -2189,3 +2189,19 @@ fn test_eof_cursor_line_navigation_on_full_row() {
     editor.move_left();
     assert_eq!(editor.cursor.offset, 15);
 }
+
+#[test]
+fn test_toggle_struct_collapsed_updates_state_and_layout() {
+    let mut editor = create_editor_with_content(&[0u8; 32]);
+    let collapse_key = "0:0:header";
+
+    assert!(!editor.structure.is_collapsed(collapse_key));
+
+    // Collapse
+    editor.toggle_struct_collapsed(collapse_key);
+    assert!(editor.structure.is_collapsed(collapse_key));
+
+    // Expand
+    editor.toggle_struct_collapsed(collapse_key);
+    assert!(!editor.structure.is_collapsed(collapse_key));
+}

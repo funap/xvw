@@ -3320,6 +3320,82 @@ impl Render for HexView {
                             this.notify_document_changed(cx);
                             return;
                         }
+
+                        let (is_struct_collapse_toggle, struct_collapse_target, is_desc_field_selection) = {
+                            let editor = this.editor.read(cx);
+                            let line_starts = editor.line_starts();
+                            let layout = this.current_layout(cx);
+                            let mut is_toggle = false;
+                            let mut collapse_key = None;
+                            let mut selected_field_range = None;
+
+                            if editor.structure.show_inline_structure_view
+                                && let Some(parse_res) = editor.parse_result()
+                                && let Some(list_bounds) = this.list_bounds.get()
+                            {
+                                let rel_y = f32::from(event.position.y - list_bounds.top()).max(0.0);
+                                let top_overscroll_px = this.scroll.top_overscroll_rows as f32 * ROW_HEIGHT;
+                                if rel_y >= top_overscroll_px {
+                                    let row_offset_in_view = ((rel_y - top_overscroll_px) / ROW_HEIGHT).floor() as usize;
+                                    let row_idx = this.scroll.scroll_offset + row_offset_in_view;
+                                    if row_idx < line_starts.len() {
+                                        let line_offset = line_starts.get(row_idx).unwrap_or(0);
+                                        let next_offset = if row_idx + 1 < line_starts.len() {
+                                            line_starts.get(row_idx + 1).unwrap_or(line_offset)
+                                        } else {
+                                            editor.total_size()
+                                        };
+                                        let chunk_len = next_offset.saturating_sub(line_offset);
+                                        let base_x = f32::from(list_bounds.left()) + 8.0;
+                                        let relative_x = f32::from(event.position.x) - base_x;
+                                        let world_x = relative_x + this.scroll.outer_scroll_x;
+                                        let in_desc = layout.description.is_some_and(|col| world_x >= col.start);
+
+                                        if chunk_len == 0 {
+                                            let containers = parse_res.find_container_structs_starting_at(line_offset, 1);
+                                            if let Some(c) = containers.first() {
+                                                is_toggle = true;
+                                                collapse_key = Some(c.collapse_key.clone());
+                                            }
+                                        } else if in_desc {
+                                            let containers = parse_res.find_container_structs_starting_at(line_offset, chunk_len);
+                                            if let Some(c) = containers.first()
+                                                && editor.structure.is_struct_collapsed(&c.collapse_key, &c.id)
+                                            {
+                                                is_toggle = true;
+                                                collapse_key = Some(c.collapse_key.clone());
+                                            } else if event.click_count >= 2 {
+                                                let leaves = parse_res.find_leaf_fields_starting_at(line_offset, chunk_len);
+                                                let leaf = leaves.first().or_else(|| parse_res.find_deepest_leaf_at(target_pos));
+                                                if let Some(l) = leaf {
+                                                    selected_field_range = Some(l.offset..l.offset + l.size);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            (is_toggle, collapse_key, selected_field_range)
+                        };
+
+                        if is_struct_collapse_toggle && let Some(key) = struct_collapse_target {
+                            this.editor.update(cx, |editor, cx| {
+                                editor.toggle_struct_collapsed(&key);
+                                cx.notify();
+                            });
+                            this.notify_document_changed(cx);
+                            return;
+                        }
+
+                        if let Some(range) = is_desc_field_selection {
+                            this.editor.update(cx, |editor, cx| {
+                                editor.set_selection_range(range.clone());
+                                editor.set_cursor_offset_exact(range.start);
+                                cx.notify();
+                            });
+                            return;
+                        }
+
                         let selection_anchor = {
                             let editor = this.editor.read(cx);
                             editor.selection().anchor()
