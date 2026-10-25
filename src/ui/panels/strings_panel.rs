@@ -571,7 +571,7 @@ pub(crate) fn strings_row_colors(is_selected: bool, is_table_focused: bool, them
             StringsRowColors {
                 bg_color: theme.selection,
                 border_color: theme.accent,
-                hover_bg: theme.selection.opacity(0.7),
+                hover_bg: theme.selection,
                 address_color: theme.accent_foreground,
                 size_color: theme.accent_foreground,
                 value_color: theme.accent_foreground,
@@ -579,8 +579,8 @@ pub(crate) fn strings_row_colors(is_selected: bool, is_table_focused: bool, them
         } else {
             StringsRowColors {
                 bg_color: theme.muted,
-                border_color: theme.muted_foreground.opacity(0.4),
-                hover_bg: theme.muted.opacity(0.8),
+                border_color: theme.border,
+                hover_bg: theme.muted,
                 address_color: theme.foreground,
                 size_color: theme.muted_foreground,
                 value_color: theme.foreground,
@@ -589,8 +589,8 @@ pub(crate) fn strings_row_colors(is_selected: bool, is_table_focused: bool, them
     } else {
         StringsRowColors {
             bg_color: theme.sidebar,
-            border_color: theme.border.opacity(0.5),
-            hover_bg: theme.selection.opacity(0.3),
+            border_color: theme.table_row_border,
+            hover_bg: theme.table_hover,
             address_color: theme.foreground,
             size_color: theme.muted_foreground,
             value_color: theme.foreground,
@@ -654,7 +654,7 @@ impl Render for StringsPanel {
         let result_summary = div()
             .px_2()
             .py_1()
-            .bg(theme.accent.opacity(0.1))
+            .bg(theme.secondary)
             .border_b_1()
             .border_color(theme.border)
             .text_xs()
@@ -808,7 +808,7 @@ impl Render for StringsPanel {
                                                     .into_any_element(),
                                                 _ => div().into_any_element(),
                                             };
-                                            VirtualTable::render_data_cell(col_ix, width, is_first, theme.border.opacity(0.35), cell_content)
+                                            VirtualTable::render_data_cell(col_ix, width, is_first, theme.table_row_border, cell_content)
                                         })),
                                 )
                                 .into_any_element()
@@ -999,7 +999,7 @@ mod tests {
         let theme = super::Theme::default();
         let colors = strings_row_colors(false, false, &theme);
         assert_eq!(colors.bg_color, theme.sidebar);
-        assert_eq!(colors.border_color, theme.border.opacity(0.5));
+        assert_eq!(colors.border_color, theme.table_row_border);
         assert_eq!(colors.address_color, theme.foreground);
         assert_eq!(colors.size_color, theme.muted_foreground);
         assert_eq!(colors.value_color, theme.foreground);
@@ -1023,7 +1023,7 @@ mod tests {
         let theme = super::Theme::default();
         let colors = strings_row_colors(true, false, &theme);
         assert_eq!(colors.bg_color, theme.muted);
-        assert_eq!(colors.border_color, theme.muted_foreground.opacity(0.4));
+        assert_eq!(colors.border_color, theme.border);
         assert_eq!(colors.address_color, theme.foreground);
         assert_eq!(colors.size_color, theme.muted_foreground);
         assert_eq!(colors.value_color, theme.foreground);

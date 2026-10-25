@@ -1035,15 +1035,11 @@ impl StructTreeView {
         let theme = cx.theme();
         let font_family = cx.global::<Appearance>().font_family.clone();
         let bg_color = if is_selected {
-            if is_focused { theme.selection } else { theme.muted_foreground.opacity(0.3) }
+            if is_focused { theme.selection } else { theme.muted }
         } else {
             hsla(0.0, 0.0, 0.0, 0.0)
         };
-        let hover_color = if is_selected {
-            theme.selection.opacity(0.82)
-        } else {
-            theme.muted.opacity(0.42)
-        };
+        let hover_color = if is_selected { theme.selection } else { theme.table_hover };
 
         let focus_handle_left = focus_handle.clone();
         let focus_handle_right = focus_handle.clone();
@@ -1144,7 +1140,7 @@ impl StructTreeView {
                                 .into_any_element(),
                             2 => div()
                                 .rounded_sm()
-                                .bg(theme.accent.opacity(0.14))
+                                .bg(theme.secondary)
                                 .text_xs()
                                 .font_family(font_family.clone())
                                 .text_color(theme.accent_foreground)
@@ -1159,7 +1155,7 @@ impl StructTreeView {
                             4 => div().text_xs().text_color(theme.muted_foreground).child(value.clone()).into_any_element(),
                             _ => div().into_any_element(),
                         };
-                        VirtualTable::render_data_cell(col_ix, width, is_first, theme.border.opacity(0.35), cell_content)
+                        VirtualTable::render_data_cell(col_ix, width, is_first, theme.table_row_border, cell_content)
                     })),
             )
             .into_any_element()
@@ -1249,7 +1245,7 @@ impl Render for StructTreeView {
                     .px_2()
                     .py_1()
                     .border_b_1()
-                    .border_color(theme.border.opacity(0.7))
+                    .border_color(theme.border)
                     .child(
                         h_flex().w_full().justify_end().items_center().gap_1().child(
                             Toolbar::new("structure-toolbar")
@@ -1284,8 +1280,8 @@ impl Render for StructTreeView {
             StructureExportStatus::Idle => None,
             StructureExportStatus::Copying => Some((IconName::LoaderCircle, "Preparing structure text...".to_string(), theme.accent)),
             StructureExportStatus::Exporting => Some((IconName::LoaderCircle, "Preparing YAML export...".to_string(), theme.accent)),
-            StructureExportStatus::Success(message) => Some((IconName::Check, message.clone(), theme.green)),
-            StructureExportStatus::Error(message) => Some((IconName::TriangleAlert, message.clone(), theme.red)),
+            StructureExportStatus::Success(message) => Some((IconName::Check, message.clone(), theme.success)),
+            StructureExportStatus::Error(message) => Some((IconName::TriangleAlert, message.clone(), theme.danger)),
         };
 
         crate::ui::panels::panel_container(is_focused, theme)
@@ -1357,7 +1353,7 @@ impl Render for StructTreeView {
                         .gap_1()
                         .px_3()
                         .py_1()
-                        .bg(color.opacity(0.08))
+                        .bg(theme.secondary)
                         .text_xs()
                         .text_color(color)
                         .child(Icon::new(icon).size(px(13.0)))
@@ -1371,8 +1367,13 @@ impl Render for StructTreeView {
                         .h(px(3.0))
                         .w_full()
                         .overflow_hidden()
-                        .bg(theme.border.opacity(0.35))
-                        .child(div().h_full().w(relative(progress)).bg(if is_finalizing { theme.yellow } else { theme.accent })),
+                        .bg(theme.progress_bar)
+                        .child(
+                            div()
+                                .h_full()
+                                .w(relative(progress))
+                                .bg(if is_finalizing { theme.warning } else { theme.accent }),
+                        ),
                 )
                 .child(
                     h_flex()
@@ -1426,8 +1427,7 @@ impl Render for StructTreeView {
                                         .gap_1()
                                         .px_1()
                                         .cursor_pointer()
-                                        .when(!has_active_editor, |style| style.opacity(0.5))
-                                        .hover(|style| style.bg(theme.muted.opacity(0.4)))
+                                        .hover(|style| style.bg(theme.list_hover))
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             if has_active_editor {
                                                 this.focus_handle.focus(window, cx);
@@ -1467,7 +1467,7 @@ impl Render for StructTreeView {
                                     .mt_4()
                                     .pt_3()
                                     .border_t_1()
-                                    .border_color(theme.border.opacity(0.6))
+                                    .border_color(theme.border)
                                     .items_start()
                                     .gap_1()
                                     .child(div().px_1().text_xs().font_semibold().text_color(theme.muted_foreground).child("Recents"))

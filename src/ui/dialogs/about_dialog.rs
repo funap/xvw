@@ -76,9 +76,9 @@ pub fn open_about_dialog(window: &mut Window, cx: &mut App) {
                                         .justify_center()
                                         .size(px(48.0))
                                         .rounded_lg()
-                                        .bg(theme.accent.opacity(0.12))
+                                        .bg(theme.secondary)
                                         .border_1()
-                                        .border_color(theme.accent.opacity(0.3))
+                                        .border_color(theme.border)
                                         .child(Icon::new(IconName::Binary).size(px(28.0)).text_color(theme.primary)),
                                 )
                                 .child(
@@ -96,7 +96,7 @@ pub fn open_about_dialog(window: &mut Window, cx: &mut App) {
                                                         .px_1p5()
                                                         .py_0p5()
                                                         .rounded_md()
-                                                        .bg(theme.muted.opacity(0.2))
+                                                        .bg(theme.secondary)
                                                         .border_1()
                                                         .border_color(theme.border)
                                                         .text_xs()

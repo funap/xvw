@@ -268,7 +268,7 @@ use gpui_kit::component::theme::Theme;
 pub fn resolve_category_color(choice: CategoryColor, theme: &Theme) -> Hsla {
     match choice {
         CategoryColor::Default => theme.foreground,
-        CategoryColor::Muted => theme.muted_foreground.opacity(0.5),
+        CategoryColor::Muted => theme.muted_foreground,
         CategoryColor::Red => theme.red,
         CategoryColor::Green => theme.green,
         CategoryColor::Blue => theme.blue,
@@ -342,7 +342,7 @@ impl RowThemeColors {
             fg_color: theme.foreground,
             accent_fg_color: theme.accent_foreground,
             border_color: theme.border,
-            border_line_color: theme.border.opacity(0.4),
+            border_line_color: theme.border,
             bg_color_theme: theme.background,
         }
     }

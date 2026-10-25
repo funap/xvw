@@ -51,7 +51,7 @@ pub fn panel_badge(count_or_text: impl Into<SharedString>, theme: &Theme) -> Div
         .px_1p5()
         .py_0p5()
         .rounded_sm()
-        .bg(theme.muted.opacity(0.6))
+        .bg(theme.secondary)
         .text_xs()
         .text_color(theme.muted_foreground)
         .child(count_or_text.into())
@@ -71,7 +71,7 @@ pub fn panel_empty_state(
         .items_center()
         .px_4()
         .gap_2p5()
-        .child(Icon::new(icon).size(px(28.0)).text_color(theme.muted_foreground.opacity(0.4)))
+        .child(Icon::new(icon).size(px(28.0)).text_color(theme.muted_foreground))
         .child(div().text_xs().font_medium().text_color(theme.foreground).child(title.into()));
 
     if let Some(desc) = description {

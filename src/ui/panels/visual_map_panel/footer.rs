@@ -97,7 +97,7 @@ pub fn render_footer(
                         .px_1()
                         .py_0p5()
                         .rounded_sm()
-                        .bg(theme.muted.opacity(0.4))
+                        .bg(theme.muted)
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
                         .child(bit_pos_str),
@@ -114,7 +114,7 @@ pub fn render_footer(
                         .px_1p5()
                         .py_0p5()
                         .rounded_sm()
-                        .bg(theme.accent.opacity(0.2))
+                        .bg(theme.secondary)
                         .text_color(theme.accent)
                         .font_medium()
                         .child(mode_name),
@@ -160,7 +160,7 @@ pub fn render_footer(
                         .px_1()
                         .py_0p5()
                         .rounded_sm()
-                        .bg(theme.muted.opacity(0.4))
+                        .bg(theme.muted)
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
                         .child(format!("BP:[{bp0:02X} {bp1:02X} {bp2:02X} {bp3:02X}]")),
@@ -182,7 +182,7 @@ pub fn render_footer(
                         .px_1p5()
                         .py_0p5()
                         .rounded_sm()
-                        .bg(theme.accent.opacity(0.2))
+                        .bg(theme.secondary)
                         .text_color(theme.accent)
                         .font_medium()
                         .child("4BPP Planar"),
@@ -233,7 +233,7 @@ pub fn render_footer(
                         .px_1()
                         .py_0p5()
                         .rounded_sm()
-                        .bg(theme.muted.opacity(0.4))
+                        .bg(theme.muted)
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
                         .child(format!("[{:02X} {:02X}]", b0, b1)),
@@ -255,7 +255,7 @@ pub fn render_footer(
                         .px_1p5()
                         .py_0p5()
                         .rounded_sm()
-                        .bg(theme.muted.opacity(0.3))
+                        .bg(theme.muted)
                         .text_color(muted_color)
                         .child(format!("R:{} G:{} B:{}", r_bits, g_bits, b_bits)),
                 )
@@ -264,7 +264,7 @@ pub fn render_footer(
                         .px_1p5()
                         .py_0p5()
                         .rounded_sm()
-                        .bg(theme.accent.opacity(0.2))
+                        .bg(theme.secondary)
                         .text_color(theme.accent)
                         .font_medium()
                         .child(mode_name),
@@ -304,7 +304,7 @@ pub fn render_footer(
                         .px_1()
                         .py_0p5()
                         .rounded_sm()
-                        .bg(theme.muted.opacity(0.4))
+                        .bg(theme.muted)
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
                         .child(format!("[{:02X} {:02X} {:02X}]", b0, b1, b2)),
@@ -326,7 +326,7 @@ pub fn render_footer(
                         .px_1p5()
                         .py_0p5()
                         .rounded_sm()
-                        .bg(theme.accent.opacity(0.2))
+                        .bg(theme.secondary)
                         .text_color(theme.accent)
                         .font_medium()
                         .child(mode_name),
@@ -367,7 +367,7 @@ pub fn render_footer(
                         .px_1()
                         .py_0p5()
                         .rounded_sm()
-                        .bg(theme.muted.opacity(0.4))
+                        .bg(theme.muted)
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
                         .child(format!("[{:02X} {:02X} {:02X} {:02X}]", b0, b1, b2, b3)),
@@ -389,7 +389,7 @@ pub fn render_footer(
                         .px_1p5()
                         .py_0p5()
                         .rounded_sm()
-                        .bg(theme.accent.opacity(0.2))
+                        .bg(theme.secondary)
                         .text_color(theme.accent)
                         .font_medium()
                         .child(mode_name),
@@ -422,7 +422,7 @@ pub fn render_footer(
                         .px_1()
                         .py_0p5()
                         .rounded_sm()
-                        .bg(theme.muted.opacity(0.4))
+                        .bg(theme.muted)
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
                         .child(if color_mode == ColorMode::Vga256 {
@@ -455,7 +455,7 @@ pub fn render_footer(
                             .px_1p5()
                             .py_0p5()
                             .rounded_sm()
-                            .bg(theme.accent.opacity(0.2))
+                            .bg(theme.secondary)
                             .text_color(theme.accent)
                             .font_medium()
                             .child("8BPP VGA"),
@@ -482,7 +482,7 @@ pub fn render_footer(
                             .px_1p5()
                             .py_0p5()
                             .rounded_sm()
-                            .bg(color.opacity(0.2))
+                            .bg(theme.secondary)
                             .text_color(color)
                             .font_medium()
                             .child(format!("H: {:.2} ({:.0}%) {}", h, norm * 100.0, label))
@@ -492,7 +492,7 @@ pub fn render_footer(
                             .px_1p5()
                             .py_0p5()
                             .rounded_sm()
-                            .bg(cat.color(theme).opacity(0.2))
+                            .bg(theme.secondary)
                             .text_color(cat.color(theme))
                             .font_medium()
                             .child(cat.label()),

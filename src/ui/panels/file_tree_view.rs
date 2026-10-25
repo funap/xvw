@@ -627,7 +627,7 @@ impl Render for FileTreeView {
                                 .px_1()
                                 .cursor_pointer()
                                 .tooltip(move |_window, cx| cx.new(|_| gpui_kit::component::tooltip::Tooltip::new(tooltip_text.clone())).into())
-                                .hover(|style| style.bg(theme.muted.opacity(0.4)))
+                                .hover(|style| style.bg(theme.list_hover))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.focus_handle.focus(window, cx);
                                     cx.emit(FileTreeViewEvent::OpenFile {
@@ -678,7 +678,7 @@ impl Render for FileTreeView {
                                 .mt_4()
                                 .pt_3()
                                 .border_t_1()
-                                .border_color(theme.border.opacity(0.6))
+                                .border_color(theme.border)
                                 .items_start()
                                 .gap_1()
                                 .child(div().px_1().text_xs().font_semibold().text_color(theme.muted_foreground).child("Recents"))

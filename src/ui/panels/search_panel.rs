@@ -637,7 +637,7 @@ impl Render for SearchPanel {
                 div()
                     .px_2()
                     .py_1()
-                    .bg(theme.accent.opacity(0.1))
+                    .bg(theme.secondary)
                     .border_b_1()
                     .border_color(theme.border)
                     .text_xs()
@@ -719,19 +719,15 @@ impl Render for SearchPanel {
                                 if is_table_focused {
                                     (theme.selection, theme.accent)
                                 } else {
-                                    (theme.muted, theme.muted_foreground.opacity(0.4))
+                                    (theme.muted, theme.border)
                                 }
                             } else {
-                                (theme.sidebar, theme.border.opacity(0.5))
+                                (theme.sidebar, theme.table_row_border)
                             };
                             let hover_bg = if is_selected {
-                                if is_table_focused {
-                                    theme.selection.opacity(0.7)
-                                } else {
-                                    theme.muted.opacity(0.8)
-                                }
+                                if is_table_focused { theme.selection } else { theme.muted }
                             } else {
-                                theme.selection.opacity(0.3)
+                                theme.table_hover
                             };
 
                             let offset = item.offset;
@@ -792,7 +788,7 @@ impl Render for SearchPanel {
                                                     .into_any_element(),
                                                 _ => div().into_any_element(),
                                             };
-                                            VirtualTable::render_data_cell(col_ix, width, is_first, theme.border.opacity(0.35), cell_content)
+                                            VirtualTable::render_data_cell(col_ix, width, is_first, theme.table_row_border, cell_content)
                                         })),
                                 )
                                 .into_any_element()

@@ -612,7 +612,6 @@ impl Render for BookmarkPanel {
                         h_flex()
                             .items_center()
                             .gap_1()
-                            .opacity(if is_color_hidden { 0.45 } else { 1.0 })
                             .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(badge_hsla))
                             .child(
                                 div()
@@ -692,9 +691,9 @@ impl Render for BookmarkPanel {
                 .justify_between()
                 .px_2()
                 .py_1()
-                .bg(theme.muted.opacity(0.15))
+                .bg(theme.secondary)
                 .border_b_1()
-                .border_color(theme.border.opacity(0.4))
+                .border_color(theme.border)
                 .child(chips_row)
                 .child(filter_actions);
 
@@ -788,9 +787,8 @@ impl BookmarkPanel {
             .w_full()
             .rounded_md()
             .border_1()
-            .border_color(if is_selected { theme.accent } else { theme.border.opacity(0.5) })
+            .border_color(if is_selected { theme.accent } else { theme.border })
             .bg(bg_color)
-            .opacity(if is_item_hidden { 0.6 } else { 1.0 })
             .p_2()
             .gap_1p5();
 
@@ -853,7 +851,7 @@ impl BookmarkPanel {
                                             .px_1()
                                             .py_0p5()
                                             .rounded_sm()
-                                            .bg(theme.muted.opacity(0.5))
+                                            .bg(theme.secondary)
                                             .text_xs()
                                             .font_family(font_family.clone())
                                             .text_color(theme.muted_foreground)
@@ -933,7 +931,7 @@ impl BookmarkPanel {
 
         // 2. Optional Color Picker row
         if show_color_picker {
-            let mut picker_row = h_flex().items_center().gap_1().py_1().px_1().bg(theme.muted.opacity(0.3)).rounded_sm();
+            let mut picker_row = h_flex().items_center().gap_1().py_1().px_1().bg(theme.muted).rounded_sm();
             for &preset in BookmarkColor::ALL_PRESETS {
                 let p_badge = preset.to_badge_hsla();
                 let item_id_for_preset = item_id.clone();
@@ -949,7 +947,6 @@ impl BookmarkPanel {
                         .cursor_pointer()
                         .border_1()
                         .border_color(if is_current { theme.foreground } else { hsla(0.0, 0.0, 0.0, 0.0) })
-                        .hover(|s| s.opacity(0.8))
                         .on_click(cx.listener({
                             let item_id = item_id_for_preset.clone();
                             move |this, _, _window, cx| {
@@ -1002,7 +999,7 @@ impl BookmarkPanel {
             row_container = row_container.child(edit_box);
         } else {
             let comment_text = if item.comment.trim().is_empty() {
-                div().text_xs().italic().text_color(theme.muted_foreground.opacity(0.7)).child("(No comment)")
+                div().text_xs().italic().text_color(theme.muted_foreground).child("(No comment)")
             } else {
                 div().text_xs().text_color(theme.foreground).child(item.comment.clone())
             };

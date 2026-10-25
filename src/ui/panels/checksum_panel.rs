@@ -605,7 +605,7 @@ impl ChecksumPanel {
                 .font_medium()
                 .whitespace_nowrap()
                 .text_color(if is_matched {
-                    theme.green
+                    theme.success
                 } else if is_selected {
                     theme.foreground
                 } else {
@@ -619,8 +619,8 @@ impl ChecksumPanel {
                 div()
                     .px_1()
                     .rounded_xs()
-                    .bg(theme.green.opacity(0.18))
-                    .text_color(theme.green)
+                    .bg(theme.success)
+                    .text_color(theme.success_foreground)
                     .text_xs()
                     .font_semibold()
                     .child("MATCH"),
@@ -635,7 +635,7 @@ impl ChecksumPanel {
             .overflow_hidden()
             .text_ellipsis()
             .whitespace_nowrap()
-            .text_color(if is_matched { theme.green } else { theme.foreground })
+            .text_color(if is_matched { theme.success } else { theme.foreground })
             .child(val_str);
 
         let copy_icon = if is_copied { IconName::Check } else { IconName::Copy };
@@ -660,9 +660,9 @@ impl ChecksumPanel {
             .child(copy_button);
 
         let row_bg = if is_matched {
-            theme.green.opacity(0.12)
+            theme.secondary
         } else if is_selected {
-            theme.selection.opacity(0.45)
+            theme.list_active
         } else {
             gpui::transparent_black()
         };
@@ -678,9 +678,9 @@ impl ChecksumPanel {
             .pr_1()
             .rounded_sm()
             .bg(row_bg)
-            .when(is_matched, |el| el.border_1().border_color(theme.green.opacity(0.5)))
+            .when(is_matched, |el| el.border_1().border_color(theme.success))
             .cursor_pointer()
-            .hover(|style| style.bg(theme.muted.opacity(0.4)))
+            .hover(|style| style.bg(theme.list_hover))
             .on_click(window.listener_for(view, move |this, event: &ClickEvent, window, cx| {
                 this.focus_handle.focus(window, cx);
                 this.selected_algorithm = Some(algo);
@@ -739,7 +739,7 @@ impl ChecksumPanel {
                 .font_medium()
                 .whitespace_nowrap()
                 .text_color(if is_matched {
-                    theme.green
+                    theme.success
                 } else if is_selected {
                     theme.foreground
                 } else {
@@ -753,8 +753,8 @@ impl ChecksumPanel {
                 div()
                     .px_1()
                     .rounded_xs()
-                    .bg(theme.green.opacity(0.18))
-                    .text_color(theme.green)
+                    .bg(theme.success)
+                    .text_color(theme.success_foreground)
                     .text_xs()
                     .font_semibold()
                     .child("MATCH"),
@@ -775,9 +775,9 @@ impl ChecksumPanel {
         let header_row = h_flex().w_full().justify_between().items_center().child(label_el).child(copy_button);
 
         let card_bg = if is_matched {
-            theme.green.opacity(0.12)
+            theme.secondary
         } else if is_selected {
-            theme.selection.opacity(0.45)
+            theme.list_active
         } else {
             gpui::transparent_black()
         };
@@ -792,9 +792,9 @@ impl ChecksumPanel {
             .gap_1()
             .rounded_sm()
             .bg(card_bg)
-            .when(is_matched, |el| el.border_1().border_color(theme.green.opacity(0.5)))
+            .when(is_matched, |el| el.border_1().border_color(theme.success))
             .cursor_pointer()
-            .hover(|style| style.bg(theme.muted.opacity(0.4)))
+            .hover(|style| style.bg(theme.list_hover))
             .on_click(window.listener_for(view, move |this, event: &ClickEvent, window, cx| {
                 this.focus_handle.focus(window, cx);
                 this.selected_algorithm = Some(algo);
@@ -818,7 +818,7 @@ impl ChecksumPanel {
                 hex_display
                     .font_family(font_family.to_string())
                     .text_xs()
-                    .text_color(if is_matched { theme.green } else { theme.foreground }),
+                    .text_color(if is_matched { theme.success } else { theme.foreground }),
             )
     }
 }
@@ -878,7 +878,7 @@ impl ChecksumPanel {
         h_flex()
             .p_0p5()
             .rounded_md()
-            .bg(theme.muted.opacity(0.4))
+            .bg(theme.muted)
             .items_center()
             .gap_0p5()
             .child(
@@ -1000,7 +1000,7 @@ impl ChecksumPanel {
                 .px_2p5()
                 .py_1p5()
                 .rounded_md()
-                .bg(theme.muted.opacity(0.2))
+                .bg(theme.secondary)
                 .items_center()
                 .gap_2()
                 .child(Icon::new(IconName::Binary).size(px(14.0)).text_color(theme.muted_foreground))
@@ -1012,7 +1012,7 @@ impl ChecksumPanel {
                 .px_2p5()
                 .py_1p5()
                 .rounded_md()
-                .bg(theme.muted.opacity(0.2))
+                .bg(theme.secondary)
                 .items_center()
                 .gap_2()
                 .child(Icon::new(IconName::Binary).size(px(14.0)).text_color(theme.muted_foreground))
@@ -1024,7 +1024,7 @@ impl ChecksumPanel {
                 .px_2p5()
                 .py_1p5()
                 .rounded_md()
-                .bg(theme.muted.opacity(0.2))
+                .bg(theme.secondary)
                 .justify_between()
                 .items_center()
                 .child(
@@ -1058,14 +1058,14 @@ impl ChecksumPanel {
                 .px_2p5()
                 .py_1p5()
                 .rounded_md()
-                .bg(theme.muted.opacity(0.2))
+                .bg(theme.secondary)
                 .border_1()
-                .border_color(theme.border.opacity(0.4))
+                .border_color(theme.border)
                 .justify_between()
                 .items_center()
                 .gap_2()
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.muted.opacity(0.35)))
+                .hover(|style| style.bg(theme.muted))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.navigate_to_range(nav_range.clone(), false, cx);
                 }))
@@ -1093,7 +1093,7 @@ impl ChecksumPanel {
                         .px_1p5()
                         .py_0p5()
                         .rounded_xs()
-                        .bg(theme.muted.opacity(0.5))
+                        .bg(theme.secondary)
                         .font_family(font_family.to_string())
                         .text_xs()
                         .text_color(theme.muted_foreground)
@@ -1121,14 +1121,14 @@ impl ChecksumPanel {
                     .px_2()
                     .py_1()
                     .rounded_sm()
-                    .bg(theme.accent.opacity(0.12))
+                    .bg(theme.secondary)
                     .border_1()
-                    .border_color(theme.accent.opacity(0.35))
+                    .border_color(theme.border)
                     .justify_between()
                     .items_center()
                     .gap_1p5()
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.accent.opacity(0.2)))
+                    .hover(|s| s.bg(theme.accent))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.navigate_to_range(res_range.clone(), true, cx);
                     }))
@@ -1168,8 +1168,8 @@ impl ChecksumPanel {
                         .items_center()
                         .gap_1p5()
                         .px_1()
-                        .child(Icon::new(IconName::TriangleAlert).size(px(12.0)).text_color(theme.red))
-                        .child(div().text_xs().text_color(theme.red).child("Invalid hexadecimal characters in query")),
+                        .child(Icon::new(IconName::TriangleAlert).size(px(12.0)).text_color(theme.danger))
+                        .child(div().text_xs().text_color(theme.danger).child("Invalid hexadecimal characters in query")),
                 );
             }
             ChecksumCompareStatus::NoMatch => {
@@ -1178,8 +1178,8 @@ impl ChecksumPanel {
                         .items_center()
                         .gap_1p5()
                         .px_1()
-                        .child(Icon::new(IconName::Close).size(px(12.0)).text_color(theme.red))
-                        .child(div().text_xs().text_color(theme.red).child("No matching checksum or hash")),
+                        .child(Icon::new(IconName::Close).size(px(12.0)).text_color(theme.danger))
+                        .child(div().text_xs().text_color(theme.danger).child("No matching checksum or hash")),
                 );
             }
             ChecksumCompareStatus::Matched(algos) => {
@@ -1189,7 +1189,7 @@ impl ChecksumPanel {
                         .items_center()
                         .gap_1p5()
                         .px_1()
-                        .child(Icon::new(IconName::Check).size(px(12.0)).text_color(theme.green))
+                        .child(Icon::new(IconName::Check).size(px(12.0)).text_color(theme.success))
                         .child(
                             div()
                                 .min_w_0()
@@ -1199,7 +1199,7 @@ impl ChecksumPanel {
                                 .whitespace_nowrap()
                                 .text_xs()
                                 .font_medium()
-                                .text_color(theme.green)
+                                .text_color(theme.success)
                                 .child(format!("Matched: {}", names)),
                         ),
                 );

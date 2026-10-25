@@ -12,11 +12,11 @@ pub trait ByteCategoryExt {
 impl ByteCategoryExt for ByteCategory {
     fn color(self, theme: &gpui_kit::component::Theme) -> Hsla {
         match self {
-            ByteCategory::Null => theme.muted_foreground.opacity(0.4),
-            ByteCategory::Control => theme.red.opacity(0.85),
-            ByteCategory::Space => theme.blue.opacity(0.75),
-            ByteCategory::Ascii => theme.green.opacity(0.9),
-            ByteCategory::Extended => theme.accent.opacity(0.85),
+            ByteCategory::Null => theme.muted_foreground,
+            ByteCategory::Control => theme.red,
+            ByteCategory::Space => theme.blue,
+            ByteCategory::Ascii => theme.green,
+            ByteCategory::Extended => theme.accent,
         }
     }
 }
@@ -61,7 +61,7 @@ pub fn render_legend(color_mode: ColorMode, theme: &gpui_kit::component::Theme) 
         .py_1()
         .border_t_1()
         .border_color(theme.border)
-        .bg(theme.muted.opacity(0.15))
+        .bg(theme.muted)
         .text_xs()
         .items_center();
 
@@ -134,7 +134,7 @@ pub fn render_legend(color_mode: ColorMode, theme: &gpui_kit::component::Theme) 
                 .child(legend_chip(rgb(0x0000FF).into(), "B: 5b [0..4]", false, theme));
         }
         ColorMode::Rgb555 => {
-            let x_col = theme.muted_foreground.opacity(0.4);
+            let x_col = theme.muted_foreground;
             row = row
                 .child(legend_chip(x_col, "X: 1b [15]", false, theme))
                 .child(legend_chip(rgb(0xFF0000).into(), "R: 5b [10..14]", false, theme))
@@ -154,7 +154,7 @@ pub fn render_legend(color_mode: ColorMode, theme: &gpui_kit::component::Theme) 
                 .child(legend_chip(rgb(0xFF0000).into(), "R: 8b [2]", false, theme));
         }
         ColorMode::Rgba => {
-            let a_col = theme.muted_foreground.opacity(0.6);
+            let a_col = theme.muted_foreground;
             row = row
                 .child(legend_chip(rgb(0xFF0000).into(), "R: 8b [0]", false, theme))
                 .child(legend_chip(rgb(0x00FF00).into(), "G: 8b [1]", false, theme))
@@ -162,7 +162,7 @@ pub fn render_legend(color_mode: ColorMode, theme: &gpui_kit::component::Theme) 
                 .child(legend_chip(a_col, "A: 8b [3]", false, theme));
         }
         ColorMode::Argb => {
-            let a_col = theme.muted_foreground.opacity(0.6);
+            let a_col = theme.muted_foreground;
             row = row
                 .child(legend_chip(a_col, "A: 8b [0]", false, theme))
                 .child(legend_chip(rgb(0xFF0000).into(), "R: 8b [1]", false, theme))
@@ -170,7 +170,7 @@ pub fn render_legend(color_mode: ColorMode, theme: &gpui_kit::component::Theme) 
                 .child(legend_chip(rgb(0x0000FF).into(), "B: 8b [3]", false, theme));
         }
         ColorMode::Bgra => {
-            let a_col = theme.muted_foreground.opacity(0.6);
+            let a_col = theme.muted_foreground;
             row = row
                 .child(legend_chip(rgb(0x0000FF).into(), "B: 8b [0]", false, theme))
                 .child(legend_chip(rgb(0x00FF00).into(), "G: 8b [1]", false, theme))

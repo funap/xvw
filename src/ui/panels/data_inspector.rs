@@ -297,7 +297,7 @@ impl DataInspector {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .when(has_error, |el| el.border_1().border_color(red()).rounded_sm())
+                        .when(has_error, |el| el.border_1().border_color(theme.danger).rounded_sm())
                         .child(Input::new(&self.edit_input).with_size(gpui_kit::component::Size::XSmall)),
                 )
                 .child(
@@ -391,7 +391,7 @@ impl DataInspector {
             .rounded_sm();
 
         if !is_editing {
-            row_content = row_content.cursor_pointer().hover(|style| style.bg(theme.muted.opacity(0.4)));
+            row_content = row_content.cursor_pointer().hover(|style| style.bg(theme.table_hover));
 
             row_content = row_content.on_mouse_down(
                 MouseButton::Left,
@@ -409,7 +409,7 @@ impl DataInspector {
             v_flex()
                 .w_full()
                 .child(row_content)
-                .child(div().px_3().pb_1().text_xs().text_color(red()).child(err.clone()))
+                .child(div().px_3().pb_1().text_xs().text_color(theme.danger).child(err.clone()))
                 .into_any_element()
         } else {
             row_content.into_any_element()

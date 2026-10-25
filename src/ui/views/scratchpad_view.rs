@@ -537,7 +537,7 @@ impl Render for ScratchpadView {
                                 .px_1()
                                 .py_0p5()
                                 .rounded_md()
-                                .bg(theme.primary.opacity(0.15))
+                                .bg(theme.secondary)
                                 .text_xs()
                                 .text_color(theme.primary)
                                 .child(target_name),
@@ -548,7 +548,7 @@ impl Render for ScratchpadView {
                             .px_1()
                             .py_0p5()
                             .rounded_md()
-                            .bg(theme.accent.opacity(0.4))
+                            .bg(theme.secondary)
                             .text_xs()
                             .text_color(theme.muted_foreground)
                             .child(filename_str),
@@ -592,7 +592,7 @@ impl Render for ScratchpadView {
             .flex()
             .items_center()
             .rounded_md()
-            .bg(theme.accent.opacity(0.2))
+            .bg(theme.muted)
             .p_0p5()
             .gap_0p5()
             .child(

@@ -470,8 +470,8 @@ impl VirtualTable {
             .flex_shrink_0()
             .overflow_hidden()
             .border_b_1()
-            .border_color(theme.border.opacity(0.7))
-            .bg(theme.muted.opacity(0.18))
+            .border_color(theme.border)
+            .bg(theme.table_head)
             .text_xs()
             .font_semibold()
             .text_color(theme.muted_foreground)
@@ -528,7 +528,7 @@ impl VirtualTable {
             .bottom_0()
             .w(px(6.0))
             .cursor_col_resize()
-            .hover(|style| style.bg(theme.accent.opacity(0.4)))
+            .hover(|style| style.bg(theme.accent))
     }
 
     /// Builds a complete table header row with automatic column label rendering, sorting triggers, and resize handles.
@@ -553,8 +553,8 @@ impl VirtualTable {
             .flex_shrink_0()
             .overflow_hidden()
             .border_b_1()
-            .border_color(theme.border.opacity(0.7))
-            .bg(theme.muted.opacity(0.18))
+            .border_color(theme.border)
+            .bg(theme.table_head)
             .text_xs()
             .font_semibold()
             .text_color(theme.muted_foreground)
@@ -623,7 +623,7 @@ impl VirtualTable {
                             None
                         };
 
-                        VirtualTable::render_header_cell(col_ix, col.width, is_first, theme.border.opacity(0.7), label_area, resize_handle)
+                        VirtualTable::render_header_cell(col_ix, col.width, is_first, theme.border, label_area, resize_handle)
                     })),
             )
     }

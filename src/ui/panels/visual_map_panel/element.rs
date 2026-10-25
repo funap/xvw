@@ -22,11 +22,11 @@ pub(crate) fn category_palette_from_theme(theme: &gpui_kit::component::Theme) ->
         ]
     };
     CategoryPalette {
-        null: to_bgra(theme.muted_foreground.opacity(0.18)),
-        control: to_bgra(theme.red.opacity(0.75)),
-        space: to_bgra(theme.blue.opacity(0.55)),
-        ascii: to_bgra(theme.green.opacity(0.85)),
-        extended: to_bgra(theme.accent.opacity(0.8)),
+        null: to_bgra(theme.muted_foreground),
+        control: to_bgra(theme.red),
+        space: to_bgra(theme.blue),
+        ascii: to_bgra(theme.green),
+        extended: to_bgra(theme.accent),
     }
 }
 
@@ -222,7 +222,7 @@ impl Element for VisualMapElement {
                 let cell_h = px(pixel_size);
                 let cell_bounds = Bounds::new(point(cell_x, cell_y), size(cell_w, cell_h));
 
-                let outline_color = theme.foreground.opacity(0.75);
+                let outline_color = theme.foreground;
                 let border_w = if pixel_size >= 4.0 { px(1.0) } else { px(0.5) };
                 window.paint_quad(outline(cell_bounds, outline_color, BorderStyle::Solid).border_widths(border_w));
             }
@@ -252,7 +252,6 @@ impl Element for VisualMapElement {
                 } else {
                     let cur_bounds = Bounds::new(point(cell_x, cell_y), size(w, h));
                     window.paint_quad(outline(cur_bounds, theme.accent, BorderStyle::Solid).border_widths(px(1.5)));
-                    window.paint_quad(fill(cur_bounds, theme.accent.opacity(0.3)));
                 }
             }
         }

@@ -6,7 +6,7 @@ use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable, IntoElement, SharedString, Subscription, Task, WeakEntity, Window, div,
-    hsla, px,
+    px,
 };
 
 use crate::actions::{
@@ -479,22 +479,8 @@ impl EditorView {
                         &segments,
                         Some(scan_start..scan_end),
                     );
-                    let is_dark = cx.theme().mode.is_dark();
-                    let (search_color, current_result_color) = if is_dark {
-                        (
-                            // Translucent amber/gold for matches in dark mode
-                            hsla(48.0 / 360.0, 0.85, 0.45, 0.35),
-                            // Richer warm amber/orange for the current match at cursor
-                            hsla(36.0 / 360.0, 0.95, 0.50, 0.55),
-                        )
-                    } else {
-                        (
-                            // Translucent yellow for matches in light mode
-                            hsla(48.0 / 360.0, 0.90, 0.55, 0.35),
-                            // Warm amber for the current match at cursor in light mode
-                            hsla(36.0 / 360.0, 0.95, 0.50, 0.50),
-                        )
-                    };
+                    let theme = cx.theme();
+                    let (search_color, current_result_color) = (theme.warning, theme.warning_active);
                     let cursor_offset = editor.cursor.offset;
 
                     for result_offset in matches {

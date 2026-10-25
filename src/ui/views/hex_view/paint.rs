@@ -215,16 +215,16 @@ pub fn ascii_item_text_color(
     muted_color: Hsla,
 ) -> Hsla {
     if has_hl || in_selected_group {
-        if !is_printable { fg_color.opacity(0.65) } else { fg_color }
+        if !is_printable { muted_color } else { fg_color }
     } else {
         let cat = byte_category(byte);
         let color = palette.color_for(Some(cat));
         if is_printable {
             color
-        } else if color == fg_color || color == muted_color.opacity(0.5) {
-            muted_color.opacity(0.4)
+        } else if color == fg_color || color == muted_color {
+            muted_color
         } else {
-            color.opacity(0.7)
+            color
         }
     }
 }
@@ -474,12 +474,7 @@ pub struct DescriptionPalette {
 impl DescriptionPalette {
     pub fn from_theme(theme: &Theme) -> Self {
         let bg = theme.background;
-        let is_dark = theme.mode.is_dark();
-        let punct_base = if is_dark {
-            theme.foreground.opacity(0.65)
-        } else {
-            theme.foreground.opacity(0.7)
-        };
+        let punct_base = theme.muted_foreground;
         Self {
             field_id: ensure_contrast(theme.foreground, bg, 4.5),
             type_name: ensure_contrast(theme.blue, bg, 4.5),
@@ -494,7 +489,7 @@ impl DescriptionPalette {
             continuation: ensure_contrast(theme.muted_foreground, bg, 3.5),
             size_badge: ensure_contrast(theme.muted_foreground, bg, 3.5),
             tree_guide: ensure_contrast(theme.border, bg, 1.8),
-            active_bg: if is_dark { theme.blue.opacity(0.18) } else { theme.blue.opacity(0.14) },
+            active_bg: theme.secondary,
         }
     }
 }
@@ -903,11 +898,7 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
     // Address column
     let shaped_addr = if is_struct_mode || params.show_offset {
         let addr_str = format_offset_08(physical_address);
-        let addr_color = if is_structure_header_row || is_collapsed_struct_row {
-            params.theme_colors.muted_color.opacity(0.4)
-        } else {
-            params.theme_colors.muted_color
-        };
+        let addr_color = params.theme_colors.muted_color;
         let run = TextRun {
             len: addr_str.len(),
             font: font.clone(),
@@ -1215,7 +1206,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
         if is_struct_mode || params.show_offset {
             let is_cursor_in_fold = active_cursor_offset >= offset && active_cursor_offset < fold_end;
-            let addr_color = if is_cursor_in_fold { fg_color } else { muted_color.opacity(0.8) };
+            let addr_color = if is_cursor_in_fold { fg_color } else { muted_color };
             let addr_str = format_offset_08(fold_start_addr);
             let run = TextRun {
                 len: addr_str.len(),
@@ -1233,7 +1224,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             let div1_x = base_x + px(offset_w + (gap / 2.0));
             window.paint_quad(fill(
                 Bounds::new(point(div1_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
-                border_color.opacity(0.4),
+                border_color,
             ));
         }
 
@@ -1264,12 +1255,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 fold_start_addr, fold_end_addr, fold_size, fold_size
             )
         };
+        let theme = cx.theme();
         let (fill_bg, border_tint, text_tint) = if is_unbookmarked {
-            (muted_color.opacity(0.12), border_color.opacity(0.4), muted_color)
+            (theme.secondary, border_color, muted_color)
         } else if let Some(c) = color {
-            (c.to_hsla().opacity(0.18), c.to_badge_hsla().opacity(0.5), c.to_badge_hsla())
+            (theme.secondary, c.to_badge_hsla(), c.to_badge_hsla())
         } else {
-            (muted_color.opacity(0.12), border_color.opacity(0.4), muted_color)
+            (theme.secondary, border_color, muted_color)
         };
 
         let run = TextRun {
@@ -1314,7 +1306,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             let run = TextRun {
                 len: addr_str.len(),
                 font: font.clone(),
-                color: muted_color.opacity(0.6),
+                color: muted_color,
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -1327,7 +1319,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             let div1_x = base_x + px(offset_w + (gap / 2.0));
             window.paint_quad(fill(
                 Bounds::new(point(div1_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
-                border_color.opacity(0.4),
+                border_color,
             ));
         }
 
@@ -1355,8 +1347,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
         let bar_bounds = Bounds::new(point(bar_start_x, params.bounds.top() + px(2.0)), size(bar_width, px(ROW_HEIGHT - 4.0)));
         let theme = cx.theme();
-        window.paint_quad(fill(bar_bounds, theme.accent.opacity(0.12)));
-        let outline = outline(bar_bounds, border_color.opacity(0.4), BorderStyle::Solid).border_widths(px(1.0));
+        window.paint_quad(fill(bar_bounds, theme.secondary));
+        let outline = outline(bar_bounds, border_color, BorderStyle::Solid).border_widths(px(1.0));
         window.paint_quad(outline);
 
         let text_x = bar_start_x + px(12.0);
@@ -1385,13 +1377,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     };
 
     // 1. Draw Left Columns (Address OR Offset)
-    let addr_color = if is_structure_header_row || is_collapsed_struct_row {
-        muted_color.opacity(0.4)
-    } else if is_cursor_row {
-        fg_color
-    } else {
-        muted_color
-    };
+    let addr_color = if is_cursor_row { fg_color } else { muted_color };
     let (offset_w, gap) = if is_struct_mode {
         let addr_pos = point(params.bounds.left() + px(8.0), params.bounds.top() + px(2.0));
         if is_cursor_row {
@@ -1475,10 +1461,10 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 let bar_end_x = params.bounds.right() - px(VERTICAL_SCROLLBAR_WIDTH + 8.0);
                 let bar_width = (bar_end_x - bar_start_x).max(px(0.0));
                 let banner_bounds = Bounds::new(point(bar_start_x, params.bounds.top() + px(1.0)), size(bar_width, px(ROW_HEIGHT - 2.0)));
-                window.paint_quad(fill(banner_bounds, desc_palette.type_name.opacity(0.06)));
+                window.paint_quad(fill(banner_bounds, desc_palette.active_bg));
 
                 let pip_bounds = Bounds::new(point(bar_start_x + px(2.0), params.bounds.top() + px(3.0)), size(px(3.0), px(ROW_HEIGHT - 6.0)));
-                window.paint_quad(fill(pip_bounds, desc_palette.type_name.opacity(0.85)));
+                window.paint_quad(fill(pip_bounds, desc_palette.type_name));
 
                 let line_y = params.bounds.top() + px(ROW_HEIGHT / 2.0);
                 let leader_end_x = desc_start_x - px(8.0);
@@ -1605,7 +1591,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         (
             Cow::Owned(dyn_source),
             dyn_shaped,
-            pending_byte_char_start.map(|char_start| (char_start, caret_color, muted_color.opacity(0.6))),
+            pending_byte_char_start.map(|char_start| (char_start, caret_color, muted_color)),
         )
     } else {
         (Cow::Borrowed(&cached.hex_source), cached.shaped_hex.clone(), None)
@@ -1698,32 +1684,23 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         group_end_x
                     };
 
-                    // 0. Structure field background tint and active underline
+                    // 0. Structure field active underline
                     if is_struct_mode && params.parse_result.is_some() {
-                        let field_at_item = if is_uniform_row_leaf {
-                            first_leaf
-                        } else {
-                            row_leaf_fields.get(group.chunk_start).and_then(|f| f.as_ref())
-                        };
                         let is_in_active_field = active_leaf_field.is_some_and(|af| item_start_offset >= af.offset && item_start_offset < af.offset + af.size);
 
-                        if let Some(field) = field_at_item {
-                            let field_hsla = field.color.map(Hsla::from).unwrap_or(desc_palette.type_name);
-                            let bg_opacity = if is_in_active_field { 0.18 } else { 0.06 };
-                            let field_tint = field_hsla.opacity(bg_opacity);
-
-                            let field_fill_bounds = Bounds::new(
-                                point(group_start_x, params.bounds.top() + px(1.0)),
-                                size(group_end_x - group_start_x, px(ROW_HEIGHT - 2.0)),
-                            );
-                            window.paint_quad(fill(field_fill_bounds, field_tint));
-
-                            if is_in_active_field {
+                        if is_in_active_field {
+                            let field_at_item = if is_uniform_row_leaf {
+                                first_leaf
+                            } else {
+                                row_leaf_fields.get(group.chunk_start).and_then(|f| f.as_ref())
+                            };
+                            if let Some(field) = field_at_item {
+                                let field_hsla = field.color.map(Hsla::from).unwrap_or(desc_palette.type_name);
                                 let underline_bounds = Bounds::new(
-                                    point(group_start_x, params.bounds.top() + px(ROW_HEIGHT - 2.5)),
-                                    size(group_end_x - group_start_x, px(1.5)),
+                                    point(group_start_x, params.bounds.top() + px(ROW_HEIGHT - 2.0)),
+                                    size(group_end_x - group_start_x, px(2.0)),
                                 );
-                                window.paint_quad(fill(underline_bounds, field_hsla.opacity(0.85)));
+                                window.paint_quad(fill(underline_bounds, field_hsla));
                             }
                         }
                     }
@@ -1774,11 +1751,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
                     // 3. Cursor Pass
                     if is_cursor && !params.insert_mode && pending_byte_char_start.is_none() {
-                        let cursor_border_color = if params.is_focused {
-                            caret_color
-                        } else {
-                            darken_cursor_color(muted_color).opacity(0.8)
-                        };
+                        let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
 
                         if params.radix == DisplayRadix::Hexadecimal {
                             let byte_index = params.cursor_offset.saturating_sub(item_start_offset);
@@ -1832,11 +1805,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 }
 
                 if is_eof_on_this_row && !params.insert_mode && pending_byte_char_start.is_none() {
-                    let cursor_border_color = if params.is_focused {
-                        caret_color
-                    } else {
-                        darken_cursor_color(muted_color).opacity(0.8)
-                    };
+                    let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
                     let (eof_start_x, eof_width) = if hex_source_ref.groups.is_empty() {
                         (text_origin_x, hex_grid_x(2, params.hex_cell_width))
                     } else {
@@ -2010,24 +1979,22 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             window.paint_quad(fill(ascii_item_bounds, hl_color));
                         }
 
-                        // Structure field background tint and active underline in ASCII
+                        // Structure field active underline in ASCII
                         if is_struct_mode && params.parse_result.is_some() {
                             let is_ascii_in_active = active_leaf_field.is_some_and(|af| byte_pos >= af.offset && byte_pos < af.offset + af.size);
-                            let ascii_field = if is_uniform_row_leaf {
-                                first_leaf
-                            } else {
-                                row_leaf_fields.get(j).and_then(|f| f.as_ref())
-                            };
-                            if let Some(field) = ascii_field {
-                                let field_hsla = field.color.map(Hsla::from).unwrap_or(desc_palette.type_name);
-                                let bg_opacity = if is_ascii_in_active { 0.16 } else { 0.05 };
-                                window.paint_quad(fill(ascii_item_bounds, field_hsla.opacity(bg_opacity)));
-                                if is_ascii_in_active {
+                            if is_ascii_in_active {
+                                let ascii_field = if is_uniform_row_leaf {
+                                    first_leaf
+                                } else {
+                                    row_leaf_fields.get(j).and_then(|f| f.as_ref())
+                                };
+                                if let Some(field) = ascii_field {
+                                    let field_hsla = field.color.map(Hsla::from).unwrap_or(desc_palette.type_name);
                                     let underline_bounds = Bounds::new(
-                                        point(ascii_item_bounds.left(), params.bounds.top() + px(ROW_HEIGHT - 2.5)),
-                                        size(ascii_item_bounds.size.width, px(1.5)),
+                                        point(ascii_item_bounds.left(), params.bounds.top() + px(ROW_HEIGHT - 2.0)),
+                                        size(ascii_item_bounds.size.width, px(2.0)),
                                     );
-                                    window.paint_quad(fill(underline_bounds, field_hsla.opacity(0.85)));
+                                    window.paint_quad(fill(underline_bounds, field_hsla));
                                 }
                             }
                         }
@@ -2045,22 +2012,14 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             let cell_start = char_range.start.saturating_sub(offset);
                             let cell_end = (char_range.end.saturating_sub(offset)).min(chunk.len());
                             if cell_end > cell_start {
-                                let cursor_border_color = if params.is_focused {
-                                    caret_color
-                                } else {
-                                    darken_cursor_color(muted_color).opacity(0.8)
-                                };
+                                let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
                                 let char_start_x = ascii_content_start_x + px(cell_start as f32 * ASCII_CELL_WIDTH);
                                 let char_width = px((cell_end - cell_start) as f32 * ASCII_CELL_WIDTH);
                                 let ascii_char_bounds = Bounds::new(point(char_start_x, params.bounds.top() + px(1.0)), size(char_width, px(ROW_HEIGHT - 2.0)));
                                 paint_cursor_border(window, ascii_char_bounds, cursor_border_color);
                             }
                         } else if is_eof_on_this_row && !params.insert_mode {
-                            let cursor_border_color = if params.is_focused {
-                                caret_color
-                            } else {
-                                darken_cursor_color(muted_color).opacity(0.8)
-                            };
+                            let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
                             let ascii_x = ascii_content_start_x + px(chunk_len as f32 * ASCII_CELL_WIDTH);
                             let ascii_box_bounds = Bounds::new(point(ascii_x, params.bounds.top() + px(1.0)), size(px(ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)));
                             paint_cursor_border(window, ascii_box_bounds, cursor_border_color);
@@ -2072,11 +2031,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             let is_cursor = params.cursor_offset >= item_start_offset && params.cursor_offset < item_end_offset;
 
                             if is_cursor && !params.insert_mode {
-                                let cursor_border_color = if params.is_focused {
-                                    caret_color
-                                } else {
-                                    darken_cursor_color(muted_color).opacity(0.8)
-                                };
+                                let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
                                 let group_start_x = ascii_content_start_x + px(group.chunk_start as f32 * ASCII_CELL_WIDTH);
                                 let group_width = px((group.chunk_end - group.chunk_start) as f32 * ASCII_CELL_WIDTH);
                                 let ascii_group_bounds =
@@ -2085,11 +2040,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             }
                         }
                         if is_eof_on_this_row && !params.insert_mode {
-                            let cursor_border_color = if params.is_focused {
-                                caret_color
-                            } else {
-                                darken_cursor_color(muted_color).opacity(0.8)
-                            };
+                            let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
                             let ascii_x = ascii_content_start_x + px(chunk_len as f32 * ASCII_CELL_WIDTH);
                             let ascii_box_bounds = Bounds::new(point(ascii_x, params.bounds.top() + px(1.0)), size(px(ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)));
                             paint_underscore_cursor_at(window, ascii_box_bounds, ascii_x, px(ASCII_CELL_WIDTH), cursor_border_color);
@@ -2577,7 +2528,7 @@ mod tests {
         assert_eq!(hex_item_text_color(false, false, false, &[0x42], &dim_zero_palette, fg), fg);
 
         // DimPadding mode: 0x00 and 0xFF are dimmed
-        assert_eq!(hex_item_text_color(false, false, false, &[0xFF], &dim_padding_palette, fg), muted.opacity(0.5));
+        assert_eq!(hex_item_text_color(false, false, false, &[0xFF], &dim_padding_palette, fg), muted);
 
         // Category mode: distinct colors for different categories
         let null_col = hex_item_text_color(false, false, false, &[0x00], &category_palette, fg);
@@ -2619,14 +2570,8 @@ mod tests {
 
         // Normal mode (DimZero)
         assert_eq!(ascii_item_text_color(false, false, b'A', true, &dim_zero_palette, fg, muted), fg);
-        assert_eq!(
-            ascii_item_text_color(false, false, 0x00, false, &dim_zero_palette, fg, muted),
-            muted.opacity(0.4)
-        );
-        assert_eq!(
-            ascii_item_text_color(false, false, 0x01, false, &dim_zero_palette, fg, muted),
-            muted.opacity(0.4)
-        );
+        assert_eq!(ascii_item_text_color(false, false, 0x00, false, &dim_zero_palette, fg, muted), muted);
+        assert_eq!(ascii_item_text_color(false, false, 0x01, false, &dim_zero_palette, fg, muted), muted);
 
         // Category mode
         let printable_col = ascii_item_text_color(false, false, b'A', true, &category_palette, fg, muted);
@@ -2635,7 +2580,7 @@ mod tests {
         assert_eq!(ws_col, category_palette.ascii_whitespace);
 
         let unprintable_col = ascii_item_text_color(false, false, 0x01, false, &category_palette, fg, muted);
-        assert_eq!(unprintable_col, category_palette.ascii_control.opacity(0.7));
+        assert_eq!(unprintable_col, category_palette.ascii_control);
     }
 
     #[test]
@@ -2652,7 +2597,7 @@ mod tests {
         };
 
         let custom_palette = ByteCategoryPalette::from_colors(custom_colors, &theme);
-        assert_eq!(custom_palette.null, theme.muted_foreground.opacity(0.5));
+        assert_eq!(custom_palette.null, theme.muted_foreground);
         assert_eq!(custom_palette.ascii_printable, theme.foreground);
         assert_eq!(custom_palette.ascii_whitespace, theme.green);
         assert_eq!(custom_palette.ascii_control, theme.red);

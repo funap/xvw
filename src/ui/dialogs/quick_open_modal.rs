@@ -534,8 +534,8 @@ impl Render for QuickOpenModal {
                             .py_1p5()
                             .rounded_md()
                             .cursor_pointer()
-                            .when(is_selected, |el| el.bg(theme.accent.opacity(0.2)))
-                            .when(!is_selected, |el| el.hover(|s| s.bg(theme.accent.opacity(0.08))))
+                            .when(is_selected, |el| el.bg(theme.list_active))
+                            .when(!is_selected, |el| el.hover(|s| s.bg(theme.list_hover)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.selected_index = idx;
                                 this.confirm(cx);
@@ -555,7 +555,7 @@ impl Render for QuickOpenModal {
                                     .px_1p5()
                                     .py_0p5()
                                     .rounded_sm()
-                                    .bg(theme.accent.opacity(0.12))
+                                    .bg(theme.secondary)
                                     .text_color(theme.muted_foreground)
                                     .child("Recent"),
                             )
@@ -592,8 +592,8 @@ impl Render for QuickOpenModal {
                             .py_1p5()
                             .rounded_md()
                             .cursor_pointer()
-                            .when(is_selected, |el| el.bg(theme.accent.opacity(0.2)))
-                            .when(!is_selected, |el| el.hover(|s| s.bg(theme.accent.opacity(0.08))))
+                            .when(is_selected, |el| el.bg(theme.list_active))
+                            .when(!is_selected, |el| el.hover(|s| s.bg(theme.list_hover)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.selected_index = idx;
                                 this.confirm(cx);
@@ -613,7 +613,7 @@ impl Render for QuickOpenModal {
                                     .px_1p5()
                                     .py_0p5()
                                     .rounded_sm()
-                                    .bg(theme.accent.opacity(0.08))
+                                    .bg(theme.secondary)
                                     .text_color(theme.muted_foreground)
                                     .child("File"),
                             )
@@ -665,8 +665,8 @@ impl Render for QuickOpenModal {
                             .py_1p5()
                             .rounded_md()
                             .cursor_pointer()
-                            .when(is_selected, |el| el.bg(theme.accent.opacity(0.2)))
-                            .when(!is_selected, |el| el.hover(|s| s.bg(theme.accent.opacity(0.08))))
+                            .when(is_selected, |el| el.bg(theme.list_active))
+                            .when(!is_selected, |el| el.hover(|s| s.bg(theme.list_hover)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.selected_index = idx;
                                 this.confirm(cx);
@@ -685,7 +685,7 @@ impl Render for QuickOpenModal {
                                                 .px_1()
                                                 .py_0p5()
                                                 .rounded_md()
-                                                .bg(theme.primary.opacity(0.15))
+                                                .bg(theme.secondary)
                                                 .text_xs()
                                                 .text_color(theme.primary)
                                                 .child(target_name),
@@ -705,7 +705,7 @@ impl Render for QuickOpenModal {
                                             .px_1p5()
                                             .py_0p5()
                                             .rounded_sm()
-                                            .bg(theme.accent.opacity(0.12))
+                                            .bg(theme.secondary)
                                             .text_color(theme.muted_foreground)
                                             .child("Note"),
                                     ),
@@ -727,8 +727,8 @@ impl Render for QuickOpenModal {
                             .py_1p5()
                             .rounded_md()
                             .cursor_pointer()
-                            .when(is_selected, |el| el.bg(theme.accent.opacity(0.2)))
-                            .when(!is_selected, |el| el.hover(|s| s.bg(theme.accent.opacity(0.08))))
+                            .when(is_selected, |el| el.bg(theme.list_active))
+                            .when(!is_selected, |el| el.hover(|s| s.bg(theme.list_hover)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.selected_index = idx;
                                 this.confirm(cx);
@@ -746,7 +746,7 @@ impl Render for QuickOpenModal {
                                     .px_1p5()
                                     .py_0p5()
                                     .rounded_sm()
-                                    .bg(theme.accent.opacity(0.3))
+                                    .bg(theme.secondary)
                                     .text_color(theme.foreground)
                                     .child("New"),
                             )

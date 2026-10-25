@@ -208,11 +208,7 @@ impl Render for CommandPaletteModal {
                 let is_selected = idx == self.selected_index;
                 let is_executable = item.is_executable;
 
-                let title_color = if is_executable {
-                    theme.foreground
-                } else {
-                    theme.muted_foreground.opacity(0.6)
-                };
+                let title_color = if is_executable { theme.foreground } else { theme.muted_foreground };
 
                 let title_element = render_highlighted_text(
                     &item.title,
@@ -228,15 +224,15 @@ impl Render for CommandPaletteModal {
                         .py_0p5()
                         .rounded_sm()
                         .border_1()
-                        .border_color(theme.border.opacity(0.6))
-                        .bg(theme.secondary.opacity(0.3))
+                        .border_color(theme.border)
+                        .bg(theme.secondary)
                         .text_xs()
                         .text_color(theme.muted_foreground)
                         .child(sc.clone())
                 });
 
                 let status_badge = if !is_executable {
-                    Some(div().text_xs().text_color(theme.muted_foreground.opacity(0.5)).child("unavailable"))
+                    Some(div().text_xs().text_color(theme.muted_foreground).child("unavailable"))
                 } else {
                     None
                 };
@@ -249,8 +245,8 @@ impl Render for CommandPaletteModal {
                     .py_1p5()
                     .rounded_md()
                     .cursor_pointer()
-                    .when(is_selected, |el| el.bg(theme.accent.opacity(0.2)))
-                    .when(!is_selected && is_executable, |el| el.hover(|s| s.bg(theme.accent.opacity(0.08))))
+                    .when(is_selected, |el| el.bg(theme.list_active))
+                    .when(!is_selected && is_executable, |el| el.hover(|s| s.bg(theme.list_hover)))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.selected_index = idx;
                         this.confirm(cx);
@@ -266,7 +262,7 @@ impl Render for CommandPaletteModal {
                                     .px_1p5()
                                     .py_0p5()
                                     .rounded_sm()
-                                    .bg(theme.accent.opacity(0.12))
+                                    .bg(theme.secondary)
                                     .text_color(theme.primary)
                                     .child(item.category.clone()),
                             )

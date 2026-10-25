@@ -141,11 +141,11 @@ impl Render for GotoOffsetBar {
                     .items_center()
                     .gap_1()
                     .text_xs()
-                    .text_color(if parsed.is_out_of_bounds { theme.yellow } else { theme.foreground })
+                    .text_color(if parsed.is_out_of_bounds { theme.warning } else { theme.foreground })
                     .child(text)
-                    .when(!warning.is_empty(), |el| el.child(div().text_color(theme.yellow).child(warning)))
+                    .when(!warning.is_empty(), |el| el.child(div().text_color(theme.warning).child(warning)))
             }
-            Some(Err(err)) => div().px_1().text_xs().text_color(theme.red).child(format!("{}", err)),
+            Some(Err(err)) => div().px_1().text_xs().text_color(theme.danger).child(format!("{}", err)),
         };
 
         div()

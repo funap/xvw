@@ -442,9 +442,7 @@ impl Render for EditorGroup {
                                     .border_color(theme.border)
                                     .when(is_active, |s| s.bg(theme.background).text_color(theme.foreground))
                                     .when(!is_active, |s| {
-                                        s.bg(tab_bar_bg)
-                                            .text_color(theme.muted_foreground)
-                                            .hover(|style| style.bg(theme.accent.opacity(0.12)))
+                                        s.bg(tab_bar_bg).text_color(theme.muted_foreground).hover(|style| style.bg(theme.accent))
                                     })
                                     .when(is_workspace_active, |s| {
                                         s.child(div().absolute().top_0().left_0().right_0().h(px(2.0)).bg(theme.primary))
@@ -648,7 +646,7 @@ impl Render for EditorGroup {
                                             .w(px(18.0))
                                             .h(px(18.0))
                                             .rounded_sm()
-                                            .hover(|style| style.bg(theme.accent.opacity(0.2)).text_color(theme.accent_foreground))
+                                            .hover(|style| style.bg(theme.accent).text_color(theme.accent_foreground))
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(move |this, _, window, cx| {
@@ -753,7 +751,10 @@ impl Render for EditorGroup {
                                 .left_0()
                                 .w(px(80.0))
                                 .h_full()
-                                .drag_over::<TabDrag>(|style, _drag, _window, _cx| style.bg(rgba(0x3182ce40)).border_r_2().border_color(rgb(0x3182ce)))
+                                .drag_over::<TabDrag>(|style, _drag, _window, cx| {
+                                    let theme = cx.theme();
+                                    style.bg(theme.drop_target).border_r_2().border_color(theme.drag_border)
+                                })
                                 .on_drop(cx.listener(|_, drag: &TabDrag, _, cx| {
                                     cx.emit(EditorGroupEvent::SplitWithDrop {
                                         drag: *drag,
@@ -769,7 +770,10 @@ impl Render for EditorGroup {
                                 .right_0()
                                 .w(px(80.0))
                                 .h_full()
-                                .drag_over::<TabDrag>(|style, _drag, _window, _cx| style.bg(rgba(0x3182ce40)).border_l_2().border_color(rgb(0x3182ce)))
+                                .drag_over::<TabDrag>(|style, _drag, _window, cx| {
+                                    let theme = cx.theme();
+                                    style.bg(theme.drop_target).border_l_2().border_color(theme.drag_border)
+                                })
                                 .on_drop(cx.listener(|_, drag: &TabDrag, _, cx| {
                                     cx.emit(EditorGroupEvent::SplitWithDrop {
                                         drag: *drag,
@@ -785,7 +789,10 @@ impl Render for EditorGroup {
                                 .left(px(80.0))
                                 .right(px(80.0))
                                 .h(px(50.0))
-                                .drag_over::<TabDrag>(|style, _drag, _window, _cx| style.bg(rgba(0x3182ce40)).border_b_2().border_color(rgb(0x3182ce)))
+                                .drag_over::<TabDrag>(|style, _drag, _window, cx| {
+                                    let theme = cx.theme();
+                                    style.bg(theme.drop_target).border_b_2().border_color(theme.drag_border)
+                                })
                                 .on_drop(cx.listener(|_, drag: &TabDrag, _, cx| {
                                     cx.emit(EditorGroupEvent::SplitWithDrop {
                                         drag: *drag,
@@ -801,7 +808,10 @@ impl Render for EditorGroup {
                                 .left(px(80.0))
                                 .right(px(80.0))
                                 .h(px(50.0))
-                                .drag_over::<TabDrag>(|style, _drag, _window, _cx| style.bg(rgba(0x3182ce40)).border_t_2().border_color(rgb(0x3182ce)))
+                                .drag_over::<TabDrag>(|style, _drag, _window, cx| {
+                                    let theme = cx.theme();
+                                    style.bg(theme.drop_target).border_t_2().border_color(theme.drag_border)
+                                })
                                 .on_drop(cx.listener(|_, drag: &TabDrag, _, cx| {
                                     cx.emit(EditorGroupEvent::SplitWithDrop {
                                         drag: *drag,
@@ -819,14 +829,15 @@ struct DragPreview {
 }
 
 impl Render for DragPreview {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
         div()
             .px_3()
             .py_1()
-            .bg(rgb(0x2d3748))
-            .text_color(rgb(0xffffff))
+            .bg(theme.popover)
+            .text_color(theme.popover_foreground)
             .border_1()
-            .border_color(rgb(0x4a5568))
+            .border_color(theme.border)
             .rounded_sm()
             .shadow_md()
             .text_sm()

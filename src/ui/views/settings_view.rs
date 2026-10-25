@@ -995,7 +995,7 @@ impl Render for SettingsView {
                                     .py_3()
                                     .border_l_2()
                                     .border_color(border_accent)
-                                    .bg(cx.theme().muted.opacity(0.2))
+                                    .bg(cx.theme().secondary)
                                     .rounded_md()
                                     .flex()
                                     .flex_col()
@@ -1043,7 +1043,7 @@ impl Render for SettingsView {
                                                             .flex_shrink_0()
                                                             .bg(swatch_color)
                                                             .border_1()
-                                                            .border_color(cx.theme().border.opacity(0.6)),
+                                                            .border_color(cx.theme().border),
                                                     )
                                                     .child(div().text_xs().whitespace_nowrap().child(cat.label())),
                                             )

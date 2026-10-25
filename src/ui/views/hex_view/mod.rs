@@ -38,11 +38,12 @@ use crate::actions::{
     ToggleByteOrder, ToggleHideUnbookmarked, ToggleInlineStructureView, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
 };
 use crate::app_state::InsertModeState;
-use crate::core::bookmark::BookmarkItem;
+use crate::core::bookmark::{BookmarkColor, BookmarkItem};
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::format::CopyFormat;
 use crate::core::radix::{ByteCategoryColors, ByteColoring, ByteGroupSize, DisplayRadix};
+use crate::ui::color::BookmarkColorExt;
 
 use crate::core::structure::{IndexedField, ParseResult};
 use crate::ui::icon::IconName;
@@ -995,8 +996,7 @@ impl HexView {
     }
 
     pub fn set_highlight_ranges(&mut self, ranges: Vec<Range<usize>>, cx: &mut Context<Self>) {
-        let is_dark = cx.theme().mode.is_dark();
-        let highlight_color = if is_dark { hsla(0.0, 0.75, 0.55, 0.35) } else { hsla(0.0, 0.75, 0.50, 0.35) };
+        let highlight_color = cx.theme().danger;
         let highlights: Vec<_> = ranges.into_iter().map(|range| (range, highlight_color)).collect();
         self.set_highlights(highlights, cx);
     }
@@ -2092,35 +2092,35 @@ impl HexView {
     }
 
     pub fn bookmark_red(&mut self, _: &BookmarkRed, window: &mut Window, cx: &mut Context<Self>) {
-        self.apply_bookmark(Some(hsla(0.0, 0.75, 0.55, 0.35)), window, cx);
+        self.apply_bookmark(Some(BookmarkColor::Red.to_hsla()), window, cx);
     }
 
     pub fn bookmark_orange(&mut self, _: &BookmarkOrange, window: &mut Window, cx: &mut Context<Self>) {
-        self.apply_bookmark(Some(hsla(30.0 / 360.0, 0.85, 0.55, 0.35)), window, cx);
+        self.apply_bookmark(Some(BookmarkColor::Orange.to_hsla()), window, cx);
     }
 
     pub fn bookmark_yellow(&mut self, _: &BookmarkYellow, window: &mut Window, cx: &mut Context<Self>) {
-        self.apply_bookmark(Some(hsla(50.0 / 360.0, 0.85, 0.50, 0.35)), window, cx);
+        self.apply_bookmark(Some(BookmarkColor::Yellow.to_hsla()), window, cx);
     }
 
     pub fn bookmark_green(&mut self, _: &BookmarkGreen, window: &mut Window, cx: &mut Context<Self>) {
-        self.apply_bookmark(Some(hsla(120.0 / 360.0, 0.65, 0.45, 0.35)), window, cx);
+        self.apply_bookmark(Some(BookmarkColor::Green.to_hsla()), window, cx);
     }
 
     pub fn bookmark_cyan(&mut self, _: &BookmarkCyan, window: &mut Window, cx: &mut Context<Self>) {
-        self.apply_bookmark(Some(hsla(180.0 / 360.0, 0.70, 0.45, 0.35)), window, cx);
+        self.apply_bookmark(Some(BookmarkColor::Cyan.to_hsla()), window, cx);
     }
 
     pub fn bookmark_blue(&mut self, _: &BookmarkBlue, window: &mut Window, cx: &mut Context<Self>) {
-        self.apply_bookmark(Some(hsla(215.0 / 360.0, 0.75, 0.55, 0.35)), window, cx);
+        self.apply_bookmark(Some(BookmarkColor::Blue.to_hsla()), window, cx);
     }
 
     pub fn bookmark_purple(&mut self, _: &BookmarkPurple, window: &mut Window, cx: &mut Context<Self>) {
-        self.apply_bookmark(Some(hsla(280.0 / 360.0, 0.70, 0.55, 0.35)), window, cx);
+        self.apply_bookmark(Some(BookmarkColor::Purple.to_hsla()), window, cx);
     }
 
     pub fn bookmark_pink(&mut self, _: &BookmarkPink, window: &mut Window, cx: &mut Context<Self>) {
-        self.apply_bookmark(Some(hsla(330.0 / 360.0, 0.75, 0.55, 0.35)), window, cx);
+        self.apply_bookmark(Some(BookmarkColor::Pink.to_hsla()), window, cx);
     }
 
     pub fn clear_bookmark(&mut self, _: &ClearBookmark, window: &mut Window, cx: &mut Context<Self>) {
@@ -2728,7 +2728,7 @@ impl Render for HexView {
                                         .top_0()
                                         .bottom_0()
                                         .w(px(14.0))
-                                        .bg(theme.sidebar.opacity(0.85))
+                                        .bg(theme.sidebar)
                                         .text_color(theme.muted_foreground)
                                         .child("…"),
                                 )
@@ -2741,7 +2741,7 @@ impl Render for HexView {
                                         .top_0()
                                         .bottom_0()
                                         .w(px(14.0))
-                                        .bg(theme.sidebar.opacity(0.85))
+                                        .bg(theme.sidebar)
                                         .text_color(theme.muted_foreground)
                                         .child("…"),
                                 )
@@ -2763,7 +2763,7 @@ impl Render for HexView {
                             .items_center()
                             .justify_center()
                             .cursor(CursorStyle::ResizeLeftRight)
-                            .hover(|s| s.bg(theme.accent.opacity(0.2)))
+                            .hover(|s| s.bg(theme.accent))
                             .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -2820,7 +2820,7 @@ impl Render for HexView {
                                 .items_center()
                                 .justify_center()
                                 .cursor(CursorStyle::ResizeLeftRight)
-                                .hover(|s| s.bg(theme.accent.opacity(0.2)))
+                                .hover(|s| s.bg(theme.accent))
                                 .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                                 .on_mouse_down(
                                     MouseButton::Left,
@@ -2893,7 +2893,7 @@ impl Render for HexView {
                                                         .items_center()
                                                         .justify_start()
                                                         .pl_1()
-                                                        .bg(theme.sidebar.opacity(0.85))
+                                                        .bg(theme.sidebar)
                                                         .text_xs()
                                                         .font_semibold()
                                                         .text_color(theme.muted_foreground)
@@ -2912,7 +2912,7 @@ impl Render for HexView {
                                                         .items_center()
                                                         .justify_end()
                                                         .pr_1()
-                                                        .bg(theme.sidebar.opacity(0.85))
+                                                        .bg(theme.sidebar)
                                                         .text_xs()
                                                         .font_semibold()
                                                         .text_color(theme.muted_foreground)
@@ -2928,7 +2928,7 @@ impl Render for HexView {
                                             .items_center()
                                             .justify_center()
                                             .cursor(CursorStyle::ResizeLeftRight)
-                                            .hover(|s| s.bg(theme.accent.opacity(0.2)))
+                                            .hover(|s| s.bg(theme.accent))
                                             .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                                             .on_mouse_down(
                                                 MouseButton::Left,
@@ -2970,7 +2970,7 @@ impl Render for HexView {
                                                                         .top_0()
                                                                         .bottom_0()
                                                                         .w(px(18.0))
-                                                                        .bg(theme.sidebar.opacity(0.85))
+                                                                        .bg(theme.sidebar)
                                                                         .text_xs()
                                                                         .font_semibold()
                                                                         .text_color(theme.muted_foreground)
@@ -2985,7 +2985,7 @@ impl Render for HexView {
                                                                         .top_0()
                                                                         .bottom_0()
                                                                         .w(px(18.0))
-                                                                        .bg(theme.sidebar.opacity(0.85))
+                                                                        .bg(theme.sidebar)
                                                                         .text_xs()
                                                                         .font_semibold()
                                                                         .text_color(theme.muted_foreground)
@@ -3009,7 +3009,7 @@ impl Render for HexView {
                                                             .items_center()
                                                             .justify_center()
                                                             .cursor(CursorStyle::ResizeLeftRight)
-                                                            .hover(|s| s.bg(theme.accent.opacity(0.2)))
+                                                            .hover(|s| s.bg(theme.accent))
                                                             .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                                                             .on_mouse_down(
                                                                 MouseButton::Left,
@@ -3040,28 +3040,10 @@ impl Render for HexView {
                                                             .relative()
                                                             .child("Description")
                                                             .when(is_desc_clipped_left, |el| {
-                                                                el.child(
-                                                                    div()
-                                                                        .absolute()
-                                                                        .left_0()
-                                                                        .top_0()
-                                                                        .bottom_0()
-                                                                        .w(px(14.0))
-                                                                        .bg(theme.sidebar.opacity(0.85))
-                                                                        .child("…"),
-                                                                )
+                                                                el.child(div().absolute().left_0().top_0().bottom_0().w(px(14.0)).bg(theme.sidebar).child("…"))
                                                             })
                                                             .when(is_desc_clipped_right, |el| {
-                                                                el.child(
-                                                                    div()
-                                                                        .absolute()
-                                                                        .right_0()
-                                                                        .top_0()
-                                                                        .bottom_0()
-                                                                        .w(px(14.0))
-                                                                        .bg(theme.sidebar.opacity(0.85))
-                                                                        .child("…"),
-                                                                )
+                                                                el.child(div().absolute().right_0().top_0().bottom_0().w(px(14.0)).bg(theme.sidebar).child("…"))
                                                             })
                                                             .on_mouse_down(
                                                                 MouseButton::Left,
@@ -3080,7 +3062,7 @@ impl Render for HexView {
                                                             .items_center()
                                                             .justify_center()
                                                             .cursor(CursorStyle::ResizeLeftRight)
-                                                            .hover(|s| s.bg(theme.accent.opacity(0.2)))
+                                                            .hover(|s| s.bg(theme.accent))
                                                             .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                                                             .on_mouse_down(
                                                                 MouseButton::Left,

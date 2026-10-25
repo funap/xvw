@@ -282,7 +282,7 @@ impl Render for StatusBar {
                             .py_0p5()
                             .rounded_sm()
                             .cursor_pointer()
-                            .hover(|s| s.bg(theme.muted.opacity(0.4)))
+                            .hover(|s| s.bg(theme.muted))
                             .tooltip(|_window, cx| cx.new(|_| gpui_kit::component::tooltip::Tooltip::new("Click to copy exact file size")).into())
                             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(total_size.to_string()));

@@ -14,24 +14,16 @@ pub const SCROLLBAR_THUMB_RADIUS: Pixels = px(4.0);
 pub const SCROLLBAR_MIN_THUMB_LENGTH: Pixels = px(24.0);
 
 /// Returns the scrollbar track background color for the given state.
-pub fn scrollbar_track_color(is_hovered: bool, is_dragging: bool, theme: &Theme) -> Hsla {
-    if is_dragging {
-        theme.foreground.opacity(0.14)
-    } else if is_hovered {
-        theme.foreground.opacity(0.10)
-    } else {
-        theme.foreground.opacity(0.05)
-    }
+pub fn scrollbar_track_color(_is_hovered: bool, _is_dragging: bool, theme: &Theme) -> Hsla {
+    theme.scrollbar
 }
 
 /// Returns the scrollbar thumb background color with strong contrast against backgrounds.
 pub fn scrollbar_thumb_color(is_hovered: bool, is_dragging: bool, theme: &Theme) -> Hsla {
-    if is_dragging {
-        theme.muted_foreground.opacity(1.0)
-    } else if is_hovered {
-        theme.muted_foreground.opacity(0.85)
+    if is_dragging || is_hovered {
+        theme.scrollbar_thumb_hover
     } else {
-        theme.muted_foreground.opacity(0.65)
+        theme.scrollbar_thumb
     }
 }
 
@@ -226,17 +218,17 @@ mod tests {
         let track_hover = scrollbar_track_color(true, false, &theme);
         let track_active = scrollbar_track_color(false, true, &theme);
 
-        assert_eq!(track_idle, theme.foreground.opacity(0.05));
-        assert_eq!(track_hover, theme.foreground.opacity(0.10));
-        assert_eq!(track_active, theme.foreground.opacity(0.14));
+        assert_eq!(track_idle, theme.scrollbar);
+        assert_eq!(track_hover, theme.scrollbar);
+        assert_eq!(track_active, theme.scrollbar);
 
         let thumb_idle = scrollbar_thumb_color(false, false, &theme);
         let thumb_hover = scrollbar_thumb_color(true, false, &theme);
         let thumb_active = scrollbar_thumb_color(false, true, &theme);
 
-        assert_eq!(thumb_idle, theme.muted_foreground.opacity(0.65));
-        assert_eq!(thumb_hover, theme.muted_foreground.opacity(0.85));
-        assert_eq!(thumb_active, theme.muted_foreground.opacity(1.0));
+        assert_eq!(thumb_idle, theme.scrollbar_thumb);
+        assert_eq!(thumb_hover, theme.scrollbar_thumb_hover);
+        assert_eq!(thumb_active, theme.scrollbar_thumb_hover);
 
         let _styles = common_scrollbar_styles(&theme);
         assert_eq!(SCROLLBAR_WIDTH, px(12.0));
