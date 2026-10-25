@@ -12,7 +12,7 @@ categories = ["development-tools", "gui"]
 
 [dependencies]
 dirs = "7.0.0"
-gpui-kit = { version = "0.7.3", features = ["tree-sitter-markdown"] }
+gpui-kit = { version = "0.8.0", features = ["tree-sitter-markdown"] }
 rust-embed = "8.13.0"
 anyhow = "1.0.104"
 tokio = { version = "1.54.1", features = ["full"] }
