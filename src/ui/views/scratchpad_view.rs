@@ -656,77 +656,65 @@ impl Render for ScratchpadView {
         };
 
         let content_view: AnyElement = match mode {
-            ScratchpadMode::Split => div()
-                .flex_1()
-                .size_full()
-                .min_w_0()
-                .min_h_0()
-                .overflow_hidden()
-                .child(
-                    h_resizable("scratchpad-split")
-                        .with_state(&self.split_state)
-                        .on_resize({
-                            let view = cx.entity().clone();
-                            move |resizable_state, _window, cx| {
-                                let (ratio, left_px) = {
-                                    let state = resizable_state.read(cx);
-                                    let sizes = state.sizes();
-                                    if sizes.len() >= 2 {
-                                        let left = sizes[0].as_f32();
-                                        let right = sizes[1].as_f32();
-                                        let total = left + right;
-                                        if total > 0.0 {
-                                            let ratio = (left / total).clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
-                                            (Some(ratio), Some(left))
-                                        } else {
-                                            (None, None)
-                                        }
-                                    } else {
-                                        (None, None)
-                                    }
-                                };
-                                if let (Some(ratio), Some(left_px)) = (ratio, left_px) {
-                                    view.update(cx, |this, cx| {
-                                        this.on_split_resized(ratio, left_px, cx);
-                                    });
+            ScratchpadMode::Split => h_resizable("scratchpad-split")
+                .with_state(&self.split_state)
+                .on_resize({
+                    let view = cx.entity().clone();
+                    move |resizable_state, _window, cx| {
+                        let (ratio, left_px) = {
+                            let state = resizable_state.read(cx);
+                            let sizes = state.sizes();
+                            if sizes.len() >= 2 {
+                                let left = sizes[0].as_f32();
+                                let right = sizes[1].as_f32();
+                                let total = left + right;
+                                if total > 0.0 {
+                                    let ratio = (left / total).clamp(MIN_SPLIT_RATIO, MAX_SPLIT_RATIO);
+                                    (Some(ratio), Some(left))
+                                } else {
+                                    (None, None)
                                 }
+                            } else {
+                                (None, None)
                             }
-                        })
-                        .child(
-                            resizable_panel().size(left_panel_size).child(
-                                div()
-                                    .size_full()
-                                    .min_w_0()
-                                    .min_h_0()
-                                    .overflow_hidden()
-                                    .child(Editor::new(&self.editor).size_full().bordered(false).context_menu(|menu, _, _| menu)),
-                            ),
-                        )
-                        .child(
-                            resizable_panel().child(
-                                div()
-                                    .id("scratchpad_split_preview")
-                                    .size_full()
-                                    .min_w_0()
-                                    .min_h_0()
-                                    .overflow_hidden()
-                                    .p_4()
-                                    .child(self.render_text_view()),
-                            ),
-                        ),
+                        };
+                        if let (Some(ratio), Some(left_px)) = (ratio, left_px) {
+                            view.update(cx, |this, cx| {
+                                this.on_split_resized(ratio, left_px, cx);
+                            });
+                        }
+                    }
+                })
+                .child(
+                    resizable_panel().size(left_panel_size).child(
+                        div()
+                            .size_full()
+                            .min_w_0()
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child(Editor::new(&self.editor).size_full().bordered(false).context_menu(|menu, _, _| menu)),
+                    ),
+                )
+                .child(
+                    resizable_panel().child(
+                        div()
+                            .id("scratchpad_split_preview")
+                            .size_full()
+                            .min_w_0()
+                            .min_h_0()
+                            .overflow_hidden()
+                            .p_4()
+                            .child(self.render_text_view()),
+                    ),
                 )
                 .into_any_element(),
-            ScratchpadMode::Edit => div()
-                .flex_1()
+            ScratchpadMode::Edit => Editor::new(&self.editor)
                 .size_full()
-                .min_w_0()
-                .min_h_0()
-                .overflow_hidden()
-                .child(Editor::new(&self.editor).size_full().bordered(false).context_menu(|menu, _, _| menu))
+                .bordered(false)
+                .context_menu(|menu, _, _| menu)
                 .into_any_element(),
             ScratchpadMode::Preview => div()
                 .id("scratchpad_preview")
-                .flex_1()
                 .size_full()
                 .min_w_0()
                 .min_h_0()
@@ -754,29 +742,20 @@ impl Render for ScratchpadView {
                     .flex()
                     .items_center()
                     .gap_1p5()
-                    .child(div().child(format!("{lines} lines")))
+                    .child(format!("{lines} lines"))
                     .child(div().w_px().h_3().bg(theme.border))
-                    .child(div().child(format!("{words} words")))
+                    .child(format!("{words} words"))
                     .child(div().w_px().h_3().bg(theme.border))
-                    .child(div().child(format!("{chars} chars"))),
+                    .child(format!("{chars} chars")),
             )
-            .child(div().flex().items_center().gap_1().child(if self.is_dirty {
+            .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_1()
-                    .text_color(theme.muted_foreground)
-                    .child(Icon::new(IconName::LoaderCircle).size_3())
-                    .child("Saving...")
-            } else {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .text_color(theme.muted_foreground)
-                    .child(Icon::new(IconName::Check).size_3())
-                    .child("Saved")
-            }));
+                    .child(Icon::new(if self.is_dirty { IconName::LoaderCircle } else { IconName::Check }).size_3())
+                    .child(if self.is_dirty { "Saving..." } else { "Saved" }),
+            );
 
         div()
             .flex()

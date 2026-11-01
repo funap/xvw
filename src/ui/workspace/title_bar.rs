@@ -47,7 +47,7 @@ impl AppTitleBar {
 
 impl Render for AppTitleBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        TitleBar::new().child(div().flex().items_center().child(self.app_menu_bar.clone())).child(
+        TitleBar::new().child(self.app_menu_bar.clone()).child(
             div()
                 .flex()
                 .items_center()

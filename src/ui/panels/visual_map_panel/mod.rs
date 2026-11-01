@@ -613,13 +613,13 @@ impl Render for VisualMapPanel {
                         }),
                     )
                     .child(header)
-                    .child(div().flex_1().min_h_0().w_full().overflow_hidden().child(crate::ui::panels::panel_empty_state(
+                    .child(crate::ui::panels::panel_empty_state(
                         IconName::Map,
                         "No Active File",
                         Some("Open a binary file to visualize byte distribution"),
                         None,
                         &theme,
-                    )));
+                    ));
             }
         };
 

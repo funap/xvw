@@ -720,17 +720,13 @@ impl Render for BookmarkPanel {
             )
             .into_any_element()
         } else {
-            let mut list = v_flex().flex_1().gap_1().p_1();
+            let mut list = v_flex().id("bookmarks-scroll").flex_1().min_h_0().overflow_y_scroll().gap_1().p_1();
 
             for (item, &is_hidden) in bookmarks.iter().zip(item_visibility.iter()) {
                 list = list.child(self.render_bookmark_item(item, &theme, &address_map, is_hidden, window, cx));
             }
 
-            v_flex()
-                .flex_1()
-                .overflow_hidden()
-                .child(div().id("bookmarks-scroll").flex_1().overflow_y_scroll().child(list))
-                .into_any_element()
+            list.into_any_element()
         };
 
         let mut container = crate::ui::panels::panel_container(is_focused, &theme)
@@ -823,8 +819,10 @@ impl BookmarkPanel {
                             })),
                     )
                     .child(
-                        div()
+                        h_flex()
                             .id(SharedString::from(format!("nav-link-{}", item_id)))
+                            .items_center()
+                            .gap_2()
                             .cursor_pointer()
                             .on_click(cx.listener({
                                 let item_id = item_id_select.clone();
@@ -835,28 +833,23 @@ impl BookmarkPanel {
                                 }
                             }))
                             .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .font_family(font_family.clone())
-                                            .text_xs()
-                                            .font_semibold()
-                                            .text_color(theme.foreground)
-                                            .child(format!("0x{:08X}", address_map.offset_to_address(item.offset))),
-                                    )
-                                    .child(
-                                        div()
-                                            .px_1()
-                                            .py_0p5()
-                                            .rounded_sm()
-                                            .bg(theme.secondary)
-                                            .text_xs()
-                                            .font_family(font_family.clone())
-                                            .text_color(theme.muted_foreground)
-                                            .child(format!("{} B", item.size)),
-                                    ),
+                                div()
+                                    .font_family(font_family.clone())
+                                    .text_xs()
+                                    .font_semibold()
+                                    .text_color(theme.foreground)
+                                    .child(format!("0x{:08X}", address_map.offset_to_address(item.offset))),
+                            )
+                            .child(
+                                div()
+                                    .px_1()
+                                    .py_0p5()
+                                    .rounded_sm()
+                                    .bg(theme.secondary)
+                                    .text_xs()
+                                    .font_family(font_family.clone())
+                                    .text_color(theme.muted_foreground)
+                                    .child(format!("{} B", item.size)),
                             ),
                     ),
             )
@@ -998,23 +991,25 @@ impl BookmarkPanel {
                 );
             row_container = row_container.child(edit_box);
         } else {
-            let comment_text = if item.comment.trim().is_empty() {
-                div().text_xs().italic().text_color(theme.muted_foreground).child("(No comment)")
-            } else {
-                div().text_xs().text_color(theme.foreground).child(item.comment.clone())
-            };
-
+            let is_empty_comment = item.comment.trim().is_empty();
             let comment_row = div()
                 .id(SharedString::from(format!("comment-row-{}", item_id)))
                 .w_full()
                 .cursor_pointer()
+                .text_xs()
+                .when(is_empty_comment, |el| el.italic())
+                .text_color(if is_empty_comment { theme.muted_foreground } else { theme.foreground })
                 .on_click(cx.listener({
                     let item_id = item_id.clone();
                     move |this, _, window, cx| {
                         this.start_editing_comment(item_id.clone(), window, cx);
                     }
                 }))
-                .child(comment_text);
+                .child(if is_empty_comment {
+                    SharedString::from("(No comment)")
+                } else {
+                    SharedString::from(item.comment.clone())
+                });
 
             row_container = row_container.child(comment_row);
         }

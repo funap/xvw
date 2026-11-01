@@ -130,20 +130,16 @@ impl Render for GotoOffsetBar {
                 };
                 let max_offset = self.total_size.saturating_sub(1);
                 let max_addr = self.address_map.offset_to_address(max_offset);
-                let warning = if parsed.is_out_of_bounds {
-                    format!(" ⚠ (max 0x{:X})", max_addr)
+                let display_text = if parsed.is_out_of_bounds {
+                    format!("{text} ⚠ (max 0x{max_addr:X})")
                 } else {
-                    String::new()
+                    text
                 };
                 div()
                     .px_1()
-                    .flex()
-                    .items_center()
-                    .gap_1()
                     .text_xs()
                     .text_color(if parsed.is_out_of_bounds { theme.warning } else { theme.foreground })
-                    .child(text)
-                    .when(!warning.is_empty(), |el| el.child(div().text_color(theme.warning).child(warning)))
+                    .child(display_text)
             }
             Some(Err(err)) => div().px_1().text_xs().text_color(theme.danger).child(format!("{}", err)),
         };

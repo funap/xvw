@@ -134,7 +134,7 @@ pub fn open_about_dialog(window: &mut Window, cx: &mut App) {
                                                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                                     cx.open_url(APP_REPOSITORY);
                                                 })
-                                                .child(div().child("funap/xvw"))
+                                                .child("funap/xvw")
                                                 .child(Icon::new(IconName::ExternalLink).size(px(12.0))),
                                         ),
                                 ),

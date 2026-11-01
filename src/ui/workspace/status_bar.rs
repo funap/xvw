@@ -282,16 +282,13 @@ impl Render for StatusBar {
                             .py_0p5()
                             .rounded_sm()
                             .cursor_pointer()
+                            .text_color(theme.muted_foreground)
                             .hover(|s| s.bg(theme.muted))
                             .tooltip(|_window, cx| cx.new(|_| gpui_kit::component::tooltip::Tooltip::new("Click to copy exact file size")).into())
                             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(total_size.to_string()));
                             })
-                            .child(
-                                div()
-                                    .text_color(theme.muted_foreground)
-                                    .child(format!("Size: {}", format_size_friendly(total_size))),
-                            ),
+                            .child(format!("Size: {}", format_size_friendly(total_size))),
                     )
                     .when(active_editor.is_some(), |el| {
                         el.child(
@@ -309,9 +306,8 @@ impl Render for StatusBar {
                                     window.dispatch_action(Box::new(ToggleReadOnly), cx);
                                 })),
                         )
-                    })
-                    .when(active_editor.is_some(), |el| {
-                        el.child(div().w_px().h_3().bg(theme.border)).child(
+                        .child(div().w_px().h_3().bg(theme.border))
+                        .child(
                             Button::new("status-edit-mode-btn")
                                 .label(edit_mode_label)
                                 .ghost()

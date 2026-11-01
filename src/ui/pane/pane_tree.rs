@@ -569,7 +569,7 @@ fn render_node(tree: &PaneTree) -> AnyElement {
                     .expect("reachable pane node must exist in the arena");
                 match node {
                     PaneNode::Leaf { group, .. } => {
-                        elements.push(wrap_pane_content(group.clone().into_any_element()));
+                        elements.push(group.clone().into_any_element());
                     }
                     PaneNode::HSplit { id, left, right } => {
                         let mut children = Vec::new();
@@ -615,7 +615,11 @@ fn render_node(tree: &PaneTree) -> AnyElement {
                         .children(children.into_iter().map(|child| resizable_panel().child(child)))
                         .into_any_element()
                 };
-                elements.push(wrap_pane_content(content));
+                if work.is_empty() {
+                    elements.push(content);
+                } else {
+                    elements.push(wrap_pane_content(content));
+                }
             }
         }
     }
@@ -673,6 +677,8 @@ impl Render for PaneTree {
                 .justify_center()
                 .items_center()
                 .bg(cx.theme().background)
+                .text_xl()
+                .text_color(cx.theme().muted_foreground)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|_this, event: &MouseDownEvent, window, cx| {
@@ -681,7 +687,7 @@ impl Render for PaneTree {
                         }
                     }),
                 )
-                .child(div().text_xl().text_color(cx.theme().muted_foreground).child("Nothing is open"))
+                .child("Nothing is open")
         }
     }
 }

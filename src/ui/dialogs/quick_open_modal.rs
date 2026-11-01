@@ -515,16 +515,8 @@ impl Render for QuickOpenModal {
                         ..
                     } => {
                         let name_elem = render_highlighted_text(file_name, name_matches, theme.foreground, theme.primary, true);
-                        let detail_elem = if !detail.is_empty() {
-                            let elem = if detail_matches.is_empty() {
-                                div().text_xs().text_color(theme.muted_foreground).child(detail.clone()).into_any_element()
-                            } else {
-                                render_highlighted_text(detail, detail_matches, theme.muted_foreground, theme.primary, false)
-                            };
-                            Some(elem)
-                        } else {
-                            None
-                        };
+                        let detail_elem =
+                            (!detail.is_empty()).then(|| render_highlighted_text(detail, detail_matches, theme.muted_foreground, theme.primary, false));
 
                         h_flex()
                             .id(SharedString::from(format!("palette-item-{idx}")))
@@ -569,20 +561,8 @@ impl Render for QuickOpenModal {
                         ..
                     } => {
                         let name_elem = render_highlighted_text(file_name, name_matches, theme.foreground, theme.primary, true);
-                        let path_elem = if relative_path != file_name {
-                            let elem = if path_matches.is_empty() {
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(relative_path.clone())
-                                    .into_any_element()
-                            } else {
-                                render_highlighted_text(relative_path, path_matches, theme.muted_foreground, theme.primary, false)
-                            };
-                            Some(elem)
-                        } else {
-                            None
-                        };
+                        let path_elem = (relative_path != file_name)
+                            .then(|| render_highlighted_text(relative_path, path_matches, theme.muted_foreground, theme.primary, false));
 
                         h_flex()
                             .id(SharedString::from(format!("palette-item-{idx}")))
@@ -638,7 +618,8 @@ impl Render for QuickOpenModal {
                             h_flex()
                                 .items_center()
                                 .text_xs()
-                                .child(div().text_color(theme.muted_foreground).child("("))
+                                .text_color(theme.muted_foreground)
+                                .child("(")
                                 .child(render_highlighted_text(
                                     &entry.filename,
                                     filename_matches,
@@ -646,7 +627,7 @@ impl Render for QuickOpenModal {
                                     theme.primary,
                                     false,
                                 ))
-                                .child(div().text_color(theme.muted_foreground).child(")"))
+                                .child(")")
                                 .into_any_element()
                         };
 

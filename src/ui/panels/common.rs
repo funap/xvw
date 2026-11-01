@@ -39,7 +39,7 @@ pub fn panel_header(title: impl Into<SharedString>, is_focused: bool, theme: &Th
         .child(title_part);
 
     if let Some(act) = actions {
-        header = header.child(h_flex().items_center().gap_1().child(act));
+        header = header.child(act);
     }
 
     header

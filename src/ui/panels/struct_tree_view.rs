@@ -1239,36 +1239,36 @@ impl Render for StructTreeView {
 
         let structure_toolbar = if has_structure {
             Some(
-                v_flex()
+                h_flex()
                     .w_full()
+                    .justify_end()
+                    .items_center()
                     .gap_1()
                     .px_2()
                     .py_1()
                     .border_b_1()
                     .border_color(theme.border)
                     .child(
-                        h_flex().w_full().justify_end().items_center().gap_1().child(
-                            Toolbar::new("structure-toolbar")
-                                .with_size(gpui_kit::component::Size::XSmall)
-                                .child(
-                                    gpui_kit::component::button::Button::new("expand-all-struct-btn")
-                                        .ghost()
-                                        .icon(IconName::ListTree)
-                                        .tooltip("Expand all fields")
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.expand_all(cx);
-                                        })),
-                                )
-                                .child(
-                                    gpui_kit::component::button::Button::new("collapse-all-struct-btn")
-                                        .ghost()
-                                        .icon(IconName::Minimize)
-                                        .tooltip("Collapse all fields")
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.collapse_all(cx);
-                                        })),
-                                ),
-                        ),
+                        Toolbar::new("structure-toolbar")
+                            .with_size(gpui_kit::component::Size::XSmall)
+                            .child(
+                                gpui_kit::component::button::Button::new("expand-all-struct-btn")
+                                    .ghost()
+                                    .icon(IconName::ListTree)
+                                    .tooltip("Expand all fields")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.expand_all(cx);
+                                    })),
+                            )
+                            .child(
+                                gpui_kit::component::button::Button::new("collapse-all-struct-btn")
+                                    .ghost()
+                                    .icon(IconName::Minimize)
+                                    .tooltip("Collapse all fields")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.collapse_all(cx);
+                                    })),
+                            ),
                     )
                     .into_any_element(),
             )

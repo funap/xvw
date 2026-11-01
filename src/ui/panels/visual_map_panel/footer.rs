@@ -520,16 +520,10 @@ pub fn render_footer(
                 .gap_2()
                 .items_center()
                 .text_color(muted_color)
-                .child(div().child(crate::core::format::format_size_friendly(buffer_len)))
-                .child(div().child("|"))
-                .child(div().child(format!("{} rows", crate::core::format::format_with_commas(total_rows))))
-                .children(cursor_str.map(|c| {
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .child(div().child("|"))
-                        .child(div().font_family(font_family.clone()).child(c))
-                }))
+                .child(crate::core::format::format_size_friendly(buffer_len))
+                .child("|")
+                .child(format!("{} rows", crate::core::format::format_with_commas(total_rows)))
+                .when_some(cursor_str, |el, c| el.child("|").child(div().font_family(font_family.clone()).child(c)))
                 .into_any_element();
 
             let offset_spec = if header_offset > 0 {

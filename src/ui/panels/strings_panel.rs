@@ -612,18 +612,16 @@ impl Render for StringsPanel {
         let minimum_length_is_valid = self.minimum_length(cx).is_some();
         let visible_indices = self.sorted_indices(cx);
 
-        let actions = h_flex().items_center().gap_1().child(
-            Button::new("clear-strings")
-                .ghost()
-                .icon(IconName::Eraser)
-                .with_size(Size::XSmall)
-                .tooltip("Clear results")
-                .disabled(!self.has_scanned && !self.is_scanning)
-                .on_click(cx.listener(|this, _, _window, cx| {
-                    this.invalidate_scan();
-                    cx.notify();
-                })),
-        );
+        let actions = Button::new("clear-strings")
+            .ghost()
+            .icon(IconName::Eraser)
+            .with_size(Size::XSmall)
+            .tooltip("Clear results")
+            .disabled(!self.has_scanned && !self.is_scanning)
+            .on_click(cx.listener(|this, _, _window, cx| {
+                this.invalidate_scan();
+                cx.notify();
+            }));
         let header = crate::ui::panels::panel_header("STRINGS", is_focused, theme, None, Some(actions.into_any_element()));
 
         let scan_controls = h_flex()

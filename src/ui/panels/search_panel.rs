@@ -559,28 +559,26 @@ impl Render for SearchPanel {
             None
         };
 
-        let actions = h_flex().items_center().gap_1().child(
-            Button::new("clear-search")
-                .ghost()
-                .icon(IconName::Eraser)
-                .with_size(Size::XSmall)
-                .tooltip("Clear results")
-                .disabled(!has_editor || (self.results.is_empty() && self.last_query.is_empty()))
-                .on_click(cx.listener(|this, _, _window, cx| {
-                    this.results.clear();
-                    this.is_truncated = false;
-                    this.selected_index = None;
-                    this.last_query.clear();
-                    this.match_len = 0;
-                    if let Some(ed) = &this.editor {
-                        ed.update(cx, |ed, cx| {
-                            ed.search_state_mut().clear();
-                            cx.notify();
-                        });
-                    }
-                    cx.notify();
-                })),
-        );
+        let actions = Button::new("clear-search")
+            .ghost()
+            .icon(IconName::Eraser)
+            .with_size(Size::XSmall)
+            .tooltip("Clear results")
+            .disabled(!has_editor || (self.results.is_empty() && self.last_query.is_empty()))
+            .on_click(cx.listener(|this, _, _window, cx| {
+                this.results.clear();
+                this.is_truncated = false;
+                this.selected_index = None;
+                this.last_query.clear();
+                this.match_len = 0;
+                if let Some(ed) = &this.editor {
+                    ed.update(cx, |ed, cx| {
+                        ed.search_state_mut().clear();
+                        cx.notify();
+                    });
+                }
+                cx.notify();
+            }));
 
         let header = crate::ui::panels::panel_header("SEARCH", is_focused, theme, badge, Some(actions.into_any_element()));
 

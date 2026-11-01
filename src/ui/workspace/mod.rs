@@ -1649,6 +1649,24 @@ impl Workspace {
             }
         });
     }
+
+    fn render_modal_backdrop(overlay_bg: gpui::Hsla, modal: impl IntoElement) -> Div {
+        div()
+            .absolute()
+            .inset_0()
+            .bg(overlay_bg)
+            .flex()
+            .items_center()
+            .justify_center()
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .on_scroll_wheel(|_, _, cx| {
+                cx.stop_propagation();
+            })
+            .child(modal)
+    }
 }
 
 impl Render for Workspace {
@@ -1852,9 +1870,7 @@ impl Render for Workspace {
                                         }
                                     }
                                 })
-                                .child(
-                                    resizable_panel().child(div().relative().size_full().min_w_0().min_h_0().overflow_hidden().child(self.pane_tree.clone())),
-                                )
+                                .child(resizable_panel().child(self.pane_tree.clone()))
                                 .child(
                                     resizable_panel()
                                         .size(px(scratchpad_panel_width))
@@ -1873,14 +1889,7 @@ impl Render for Workspace {
                                 )
                                 .into_any_element()
                         } else {
-                            div()
-                                .relative()
-                                .size_full()
-                                .min_w_0()
-                                .min_h_0()
-                                .overflow_hidden()
-                                .child(self.pane_tree.clone())
-                                .into_any_element()
+                            self.pane_tree.clone().into_any_element()
                         };
 
                         let main_layout = if self.is_left_panel_visible {
@@ -1903,19 +1912,12 @@ impl Render for Workspace {
                                         .size(px(self.left_panel_width))
                                         .size_range(px(MIN_LEFT_PANEL_WIDTH)..px(MAX_LEFT_PANEL_WIDTH))
                                         .flex_none()
-                                        .child(div().size_full().min_w_0().min_h_0().overflow_hidden().child(self.left_panel.clone())),
+                                        .child(self.left_panel.clone()),
                                 )
-                                .child(resizable_panel().child(div().relative().size_full().min_w_0().min_h_0().overflow_hidden().child(center_and_right)))
+                                .child(resizable_panel().child(center_and_right))
                                 .into_any_element()
                         } else {
-                            div()
-                                .relative()
-                                .size_full()
-                                .min_w_0()
-                                .min_h_0()
-                                .overflow_hidden()
-                                .child(center_and_right)
-                                .into_any_element()
+                            center_and_right
                         };
 
                         div()
@@ -1931,42 +1933,10 @@ impl Render for Workspace {
             )
             .child(self.status_bar.clone())
             .when_some(self.new_file_modal.clone(), |el, modal| {
-                el.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .bg(theme.overlay)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .occlude()
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                            cx.stop_propagation();
-                        })
-                        .on_scroll_wheel(|_, _, cx| {
-                            cx.stop_propagation();
-                        })
-                        .child(modal),
-                )
+                el.child(Self::render_modal_backdrop(theme.overlay, modal))
             })
             .when_some(self.fill_selection_modal.clone(), |el, modal| {
-                el.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .bg(theme.overlay)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .occlude()
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                            cx.stop_propagation();
-                        })
-                        .on_scroll_wheel(|_, _, cx| {
-                            cx.stop_propagation();
-                        })
-                        .child(modal),
-                )
+                el.child(Self::render_modal_backdrop(theme.overlay, modal))
             })
             .when_some(self.active_palette.clone(), |el, palette| {
                 let content = match palette {

@@ -2872,7 +2872,7 @@ impl Render for HexView {
                                             .h(px(HEADER_HEIGHT))
                                             .overflow_hidden()
                                             .relative()
-                                            .child(div().relative().w(px(self.hex_col_width)).h(px(HEADER_HEIGHT)).children(hex_cols))
+                                            .children(hex_cols)
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(|this, event: &MouseDownEvent, _window, cx| {
@@ -2944,152 +2944,142 @@ impl Render for HexView {
                                             ),
                                     ),
                             )
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .child({
-                                        let mut trailing = h_flex();
-                                        if self.show_ascii {
-                                            let label = self.encoding.label();
-                                            trailing = trailing.child(
-                                                h_flex()
-                                                    .w(px(ascii_col_width + SECTION_GAP))
-                                                    .child(
+                            .when(self.show_ascii, |el| {
+                                let label = self.encoding.label();
+                                el.child(
+                                    h_flex()
+                                        .w(px(ascii_col_width + SECTION_GAP))
+                                        .child(
+                                            div()
+                                                .w(px(ascii_col_width))
+                                                .overflow_hidden()
+                                                .relative()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child(label)
+                                                .when(is_ascii_clipped_left, |el| {
+                                                    el.child(
                                                         div()
-                                                            .w(px(ascii_col_width))
-                                                            .overflow_hidden()
-                                                            .relative()
+                                                            .absolute()
+                                                            .left_0()
+                                                            .top_0()
+                                                            .bottom_0()
+                                                            .w(px(18.0))
+                                                            .bg(theme.sidebar)
                                                             .text_xs()
+                                                            .font_semibold()
                                                             .text_color(theme.muted_foreground)
-                                                            .child(label)
-                                                            .when(is_ascii_clipped_left, |el| {
-                                                                el.child(
-                                                                    div()
-                                                                        .absolute()
-                                                                        .left_0()
-                                                                        .top_0()
-                                                                        .bottom_0()
-                                                                        .w(px(18.0))
-                                                                        .bg(theme.sidebar)
-                                                                        .text_xs()
-                                                                        .font_semibold()
-                                                                        .text_color(theme.muted_foreground)
-                                                                        .child("…"),
-                                                                )
-                                                            })
-                                                            .when(is_ascii_clipped_right, |el| {
-                                                                el.child(
-                                                                    div()
-                                                                        .absolute()
-                                                                        .right_0()
-                                                                        .top_0()
-                                                                        .bottom_0()
-                                                                        .w(px(18.0))
-                                                                        .bg(theme.sidebar)
-                                                                        .text_xs()
-                                                                        .font_semibold()
-                                                                        .text_color(theme.muted_foreground)
-                                                                        .child("…"),
-                                                                )
-                                                            })
-                                                            .on_mouse_down(
-                                                                MouseButton::Left,
-                                                                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                                                                    if event.click_count >= 2 {
-                                                                        this.auto_fit_column(ResizingColumn::Ascii, cx);
-                                                                    }
-                                                                }),
-                                                            ),
+                                                            .child("…"),
                                                     )
-                                                    .child(
+                                                })
+                                                .when(is_ascii_clipped_right, |el| {
+                                                    el.child(
                                                         div()
-                                                            .w(px(SECTION_GAP))
-                                                            .h_full()
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .cursor(CursorStyle::ResizeLeftRight)
-                                                            .hover(|s| s.bg(theme.accent))
-                                                            .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
-                                                            .on_mouse_down(
-                                                                MouseButton::Left,
-                                                                cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
-                                                                    if event.click_count >= 2 {
-                                                                        this.resizing_column = None;
-                                                                        this.auto_fit_column(ResizingColumn::Ascii, cx);
-                                                                    } else {
-                                                                        this.resizing_column =
-                                                                            Some((ResizingColumn::Ascii, event.position.x.into(), ascii_col_width));
-                                                                        cx.notify();
-                                                                    }
-                                                                }),
-                                                            ),
-                                                    ),
-                                            );
-                                        }
-                                        if is_struct_mode {
-                                            trailing = trailing.child(
-                                                h_flex()
-                                                    .w(px(self.desc_col_width + SECTION_GAP))
-                                                    .child(
-                                                        div()
-                                                            .w(px(self.desc_col_width))
+                                                            .absolute()
+                                                            .right_0()
+                                                            .top_0()
+                                                            .bottom_0()
+                                                            .w(px(18.0))
+                                                            .bg(theme.sidebar)
                                                             .text_xs()
+                                                            .font_semibold()
                                                             .text_color(theme.muted_foreground)
-                                                            .overflow_hidden()
-                                                            .relative()
-                                                            .child("Description")
-                                                            .when(is_desc_clipped_left, |el| {
-                                                                el.child(div().absolute().left_0().top_0().bottom_0().w(px(14.0)).bg(theme.sidebar).child("…"))
-                                                            })
-                                                            .when(is_desc_clipped_right, |el| {
-                                                                el.child(div().absolute().right_0().top_0().bottom_0().w(px(14.0)).bg(theme.sidebar).child("…"))
-                                                            })
-                                                            .on_mouse_down(
-                                                                MouseButton::Left,
-                                                                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                                                                    if event.click_count >= 2 {
-                                                                        this.auto_fit_column(ResizingColumn::Description, cx);
-                                                                    }
-                                                                }),
-                                                            ),
+                                                            .child("…"),
                                                     )
-                                                    .child(
-                                                        div()
-                                                            .w(px(SECTION_GAP))
-                                                            .h_full()
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .cursor(CursorStyle::ResizeLeftRight)
-                                                            .hover(|s| s.bg(theme.accent))
-                                                            .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
-                                                            .on_mouse_down(
-                                                                MouseButton::Left,
-                                                                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                                                                    if event.click_count >= 2 {
-                                                                        this.resizing_column = None;
-                                                                        this.auto_fit_column(ResizingColumn::Description, cx);
-                                                                    } else {
-                                                                        this.resizing_column =
-                                                                            Some((ResizingColumn::Description, event.position.x.into(), this.desc_col_width));
-                                                                        cx.notify();
-                                                                    }
-                                                                }),
-                                                            ),
-                                                    ),
-                                            );
-                                        }
-                                        trailing = trailing.child(comment_header_el(
-                                            self.comment_col_width,
-                                            is_comment_clipped_left,
-                                            is_comment_clipped_right,
-                                            theme,
-                                        ));
-                                        trailing.into_any_element()
-                                    })
-                                    .into_any_element(),
-                            ),
+                                                })
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                                        if event.click_count >= 2 {
+                                                            this.auto_fit_column(ResizingColumn::Ascii, cx);
+                                                        }
+                                                    }),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(px(SECTION_GAP))
+                                                .h_full()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .cursor(CursorStyle::ResizeLeftRight)
+                                                .hover(|s| s.bg(theme.accent))
+                                                .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                                                        if event.click_count >= 2 {
+                                                            this.resizing_column = None;
+                                                            this.auto_fit_column(ResizingColumn::Ascii, cx);
+                                                        } else {
+                                                            this.resizing_column = Some((ResizingColumn::Ascii, event.position.x.into(), ascii_col_width));
+                                                            cx.notify();
+                                                        }
+                                                    }),
+                                                ),
+                                        ),
+                                )
+                            })
+                            .when(is_struct_mode, |el| {
+                                el.child(
+                                    h_flex()
+                                        .w(px(self.desc_col_width + SECTION_GAP))
+                                        .child(
+                                            div()
+                                                .w(px(self.desc_col_width))
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .overflow_hidden()
+                                                .relative()
+                                                .child("Description")
+                                                .when(is_desc_clipped_left, |el| {
+                                                    el.child(div().absolute().left_0().top_0().bottom_0().w(px(14.0)).bg(theme.sidebar).child("…"))
+                                                })
+                                                .when(is_desc_clipped_right, |el| {
+                                                    el.child(div().absolute().right_0().top_0().bottom_0().w(px(14.0)).bg(theme.sidebar).child("…"))
+                                                })
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                                        if event.click_count >= 2 {
+                                                            this.auto_fit_column(ResizingColumn::Description, cx);
+                                                        }
+                                                    }),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(px(SECTION_GAP))
+                                                .h_full()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .cursor(CursorStyle::ResizeLeftRight)
+                                                .hover(|s| s.bg(theme.accent))
+                                                .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                                        if event.click_count >= 2 {
+                                                            this.resizing_column = None;
+                                                            this.auto_fit_column(ResizingColumn::Description, cx);
+                                                        } else {
+                                                            this.resizing_column =
+                                                                Some((ResizingColumn::Description, event.position.x.into(), this.desc_col_width));
+                                                            cx.notify();
+                                                        }
+                                                    }),
+                                                ),
+                                        ),
+                                )
+                            })
+                            .child(comment_header_el(
+                                self.comment_col_width,
+                                is_comment_clipped_left,
+                                is_comment_clipped_right,
+                                theme,
+                            )),
                     ),
                 )
                 .into_any_element()
