@@ -10,6 +10,7 @@ use crate::core::fill::{FillPattern, RandomMode, SequentialWidth, parse_pattern_
 use crate::core::new_file::parse_fill_byte;
 use crate::core::radix::ByteOrder;
 use crate::ui::appearance::Appearance;
+use crate::ui::components::EventInterceptionExt;
 use crate::ui::icon::IconName;
 
 #[derive(Clone, PartialEq, Action)]
@@ -1080,13 +1081,7 @@ impl Render for FillSelectionModal {
             .id("fill-selection-modal")
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
-            .on_scroll_wheel(|_, _, cx| {
-                cx.stop_propagation();
-            })
+            .occlude_and_block_input()
             .on_action(cx.listener(|this, _: &ConfirmFill, _, cx| {
                 this.submit(cx);
             }))

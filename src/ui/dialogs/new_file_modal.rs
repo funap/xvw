@@ -1,4 +1,5 @@
 use crate::core::new_file::{format_fill_preview, format_size_preview, parse_buffer_size, parse_fill_byte};
+use crate::ui::components::EventInterceptionExt;
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{self, Input, InputState};
@@ -330,13 +331,7 @@ impl Render for NewFileModal {
             .id("new-file-modal")
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
-            .on_scroll_wheel(|_, _, cx| {
-                cx.stop_propagation();
-            })
+            .occlude_and_block_input()
             .on_action(cx.listener(|this, _: &ConfirmCreate, _, cx| {
                 this.submit(cx);
             }))

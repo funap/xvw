@@ -9,6 +9,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use crate::core::search::SearchMode;
+use crate::ui::components::EventInterceptionExt;
 use crate::ui::panels::search_panel::SearchModeExt;
 
 #[allow(dead_code)]
@@ -103,16 +104,7 @@ impl Render for SearchBar {
             .rounded_lg()
             .shadow_xl()
             .key_context("SearchBar")
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
-            .on_mouse_down(MouseButton::Right, |_, _, cx| {
-                cx.stop_propagation();
-            })
-            .on_scroll_wheel(|_, _, cx| {
-                cx.stop_propagation();
-            })
+            .occlude_and_block_input()
             .on_action(cx.listener(|_, _: &crate::actions::SearchNext, _, cx| {
                 cx.emit(SearchBarEvent::Next);
             }))

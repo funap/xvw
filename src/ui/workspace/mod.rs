@@ -3,6 +3,7 @@ use gpui_kit::*;
 
 use crate::actions::*;
 
+use crate::ui::components::EventInterceptionExt;
 use crate::ui::pane::{PaneTree, PaneTreeEvent, TabContent};
 use crate::ui::panels::file_tree_view::{FileTreeView, FileTreeViewEvent};
 use crate::ui::panels::left_panel::{LeftPanel, LeftPanelTab};
@@ -1658,13 +1659,7 @@ impl Workspace {
             .flex()
             .items_center()
             .justify_center()
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
-            .on_scroll_wheel(|_, _, cx| {
-                cx.stop_propagation();
-            })
+            .occlude_and_block_input()
             .child(modal)
     }
 }
@@ -1959,9 +1954,7 @@ impl Render for Workspace {
                                 this.close_active_palette(window, cx);
                             }),
                         )
-                        .on_scroll_wheel(|_, _, cx| {
-                            cx.stop_propagation();
-                        })
+                        .block_scroll()
                         .child(content),
                 )
             })

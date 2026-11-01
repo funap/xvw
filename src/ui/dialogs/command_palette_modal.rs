@@ -7,6 +7,7 @@ use gpui_kit::*;
 
 use crate::actions::{PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev};
 use crate::core::fuzzy_matcher::FuzzyMatcher;
+use crate::ui::components::EventInterceptionExt;
 use crate::ui::dialogs::common::{palette_list_container, palette_modal_container, render_highlighted_text, render_palette_empty_message};
 use crate::ui::icon::IconName;
 use crate::ui::menus::{MenuEditorState, PaletteCommand};
@@ -284,13 +285,7 @@ impl Render for CommandPaletteModal {
             .id("command-palette-modal")
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
-            .on_scroll_wheel(|_, _, cx| {
-                cx.stop_propagation();
-            })
+            .occlude_and_block_input()
             .on_action(cx.listener(|this, _: &PaletteSelectNext, _, cx| {
                 this.select_next(cx);
             }))

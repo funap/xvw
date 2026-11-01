@@ -11,6 +11,7 @@ use crate::actions::{PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSe
 use crate::core::format::FileFormat;
 use crate::core::fuzzy_matcher::FuzzyMatcher;
 use crate::service::scratch_service::ScratchEntry;
+use crate::ui::components::EventInterceptionExt;
 use crate::ui::icon::IconName;
 
 const CONTEXT: &str = "QuickOpenModal";
@@ -742,13 +743,7 @@ impl Render for QuickOpenModal {
             .id("quick-open-modal")
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
-            .on_scroll_wheel(|_, _, cx| {
-                cx.stop_propagation();
-            })
+            .occlude_and_block_input()
             .on_action(cx.listener(|this, _: &PaletteSelectNext, _, cx| {
                 this.select_next(cx);
             }))
