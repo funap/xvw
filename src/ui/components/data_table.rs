@@ -3,8 +3,8 @@ use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{StyledExt, h_flex};
 use gpui_kit::{
     AnyElement, App, Context, Div, ElementId, FocusHandle, Hsla, InteractiveElement, IntoElement, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement, Pixels, ScrollEvent, ScrollHandle, ScrollStrategy, SharedString, Stateful, Styled, UniformListScrollHandle, actions,
-    canvas, div, point, px, size,
+    MouseUpEvent, ParentElement, Pixels, ScrollEvent, ScrollHandle, ScrollStrategy, SharedString, Stateful, Styled, UniformListScrollHandle, actions, canvas,
+    div, point, px, size,
 };
 
 pub const CONTEXT: &str = "VirtualTable";
