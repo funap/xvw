@@ -231,7 +231,7 @@ impl VisualMapPanel {
         window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
-    fn on_scroll_wheel(&mut self, event: &ScrollWheelEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_scroll(&mut self, event: &ScrollEvent, _window: &mut Window, cx: &mut Context<Self>) {
         if event.modifiers.platform || event.modifiers.control {
             let delta = event.delta.pixel_delta(px(16.0)).y.as_f32();
             if delta.abs() > 0.5 {
@@ -678,7 +678,7 @@ impl Render for VisualMapPanel {
         let canvas = div()
             .flex_1()
             .relative()
-            .on_scroll_wheel(cx.listener(Self::on_scroll_wheel))
+            .on_scroll(cx.listener(Self::on_scroll))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))

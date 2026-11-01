@@ -3,7 +3,7 @@ use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{StyledExt, h_flex};
 use gpui_kit::{
     AnyElement, App, Context, Div, ElementId, FocusHandle, Hsla, InteractiveElement, IntoElement, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement, Pixels, ScrollHandle, ScrollStrategy, ScrollWheelEvent, SharedString, Stateful, Styled, UniformListScrollHandle, actions,
+    MouseUpEvent, ParentElement, Pixels, ScrollEvent, ScrollHandle, ScrollStrategy, SharedString, Stateful, Styled, UniformListScrollHandle, actions,
     canvas, div, point, px, size,
 };
 
@@ -366,7 +366,7 @@ impl VirtualTable {
             },
             move |bounds, _prepaint, window, _cx| {
                 let view_scroll = view.clone();
-                window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _window, cx| {
+                window.on_mouse_event(move |event: &ScrollEvent, phase, _window, cx| {
                     if !phase.capture() {
                         return;
                     }

@@ -764,7 +764,7 @@ impl HexView {
         cx.notify();
     }
 
-    fn on_scroll_wheel(&mut self, event: &ScrollWheelEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_scroll(&mut self, event: &ScrollEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let now = std::time::Instant::now();
         let pixel_delta = event.delta.pixel_delta(px(ROW_HEIGHT));
         let mut delta_x = f32::from(pixel_delta.x);
@@ -775,7 +775,9 @@ impl HexView {
             delta_x = delta_y;
         }
 
-        if let Some(last_time) = self.scroll.last_scroll_time
+        if event.touch_phase == TouchPhase::Ended {
+            self.scroll.scroll_lock_axis = None;
+        } else if let Some(last_time) = self.scroll.last_scroll_time
             && now.duration_since(last_time).as_millis() > 120
         {
             self.scroll.scroll_lock_axis = None;
@@ -3092,7 +3094,7 @@ impl Render for HexView {
 
         container
             .track_focus(&self.focus_handle(cx))
-            .on_scroll_wheel(cx.listener(Self::on_scroll_wheel))
+            .on_scroll(cx.listener(Self::on_scroll))
             .on_action(cx.listener(Self::move_left))
             .on_action(cx.listener(Self::move_right))
             .on_action(cx.listener(Self::move_up))
