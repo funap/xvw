@@ -316,6 +316,16 @@ impl<'a> CustomLayoutSessionMut<'a> {
         }
     }
 
+    pub fn remove_breaks_in_range(&mut self, range: Range<usize>) -> usize {
+        let mut doc = self.document.write().expect("document write lock");
+        let removed = doc.metadata.custom_layout.remove_breaks_in_range(range);
+        if removed > 0 {
+            doc.bump_layout_version();
+            self.layout.invalidate();
+        }
+        removed
+    }
+
     pub fn toggle_break(&mut self, offset: usize) {
         let mut doc = self.document.write().expect("document write lock");
         doc.bump_layout_version();

@@ -13,10 +13,10 @@ use crate::actions::{
     AddCustomBreak, BookmarkBlue, BookmarkCyan, BookmarkGreen, BookmarkOrange, BookmarkPink, BookmarkPurple, BookmarkRed, BookmarkYellow, ClearAllBookmarks,
     ClearAllCustomBreaks, ClearBookmark, Copy, CopyAsBase64, CopyAsBinary, CopyAsCppArray, CopyAsEscapedString, CopyAsHexDump, CopyAsHexSpaces,
     CopyAsHexStream, CopyAsJsonArray, CopyAsPrintableText, CopyAsRustArray, Cut, FocusHexView, GoToBeginning, GoToEnd, HideAllBookmarks, JoinLine, Paste, Redo,
-    RemoveCustomBreakBackward, RemoveCustomBreakForward, SearchNext, SearchPrev, SelectAll, ShowAllBookmarks, ShowOnlyBookmarkBlue, ShowOnlyBookmarkCyan,
-    ShowOnlyBookmarkGreen, ShowOnlyBookmarkOrange, ShowOnlyBookmarkPink, ShowOnlyBookmarkPurple, ShowOnlyBookmarkRed, ShowOnlyBookmarkYellow,
-    ToggleBookmarkBlue, ToggleBookmarkCyan, ToggleBookmarkGreen, ToggleBookmarkOrange, ToggleBookmarkPink, ToggleBookmarkPurple, ToggleBookmarkRed,
-    ToggleBookmarkYellow, ToggleGoToAddress, ToggleHideUnbookmarked, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
+    RemoveCustomBreakBackward, RemoveCustomBreakForward, RemoveCustomBreaksInRange, SearchNext, SearchPrev, SelectAll, ShowAllBookmarks, ShowOnlyBookmarkBlue,
+    ShowOnlyBookmarkCyan, ShowOnlyBookmarkGreen, ShowOnlyBookmarkOrange, ShowOnlyBookmarkPink, ShowOnlyBookmarkPurple, ShowOnlyBookmarkRed,
+    ShowOnlyBookmarkYellow, ToggleBookmarkBlue, ToggleBookmarkCyan, ToggleBookmarkGreen, ToggleBookmarkOrange, ToggleBookmarkPink, ToggleBookmarkPurple,
+    ToggleBookmarkRed, ToggleBookmarkYellow, ToggleGoToAddress, ToggleHideUnbookmarked, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
 };
 use crate::app_state::{AppState, InsertModeState};
 use crate::core::editor::Editor;
@@ -792,6 +792,10 @@ impl EditorView {
 
     pub fn remove_custom_break_forward(&mut self, action: &RemoveCustomBreakForward, window: &mut Window, cx: &mut Context<Self>) {
         self.hex_view.update(cx, |hv, cx| hv.remove_custom_break_forward(action, window, cx));
+    }
+
+    pub fn remove_custom_breaks_in_range(&mut self, action: &RemoveCustomBreaksInRange, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view.update(cx, |hv, cx| hv.remove_custom_breaks_in_range(action, window, cx));
     }
 
     pub fn join_line(&mut self, action: &JoinLine, window: &mut Window, cx: &mut Context<Self>) {

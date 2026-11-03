@@ -2354,3 +2354,45 @@ fn test_toggle_struct_collapsed_updates_state_and_layout() {
     editor.toggle_struct_collapsed(collapse_key);
     assert!(!editor.structure.is_collapsed(collapse_key));
 }
+
+#[test]
+fn test_custom_layout_toggle_break_at_line_start() {
+    let mut editor = create_editor_with_content(&[0u8; 64]);
+    assert_eq!(editor.line_starts(), vec![0, 16, 32, 48]);
+
+    // Add break at 10
+    editor.custom_layout_mut().toggle_break(10);
+    assert!(editor.custom_layout().has_break(10));
+    assert_eq!(editor.line_starts(), vec![0, 10, 26, 42, 58]);
+
+    // Toggle break at 10 again (simulates pressing return at line start)
+    editor.custom_layout_mut().toggle_break(10);
+    assert!(!editor.custom_layout().has_break(10));
+    assert_eq!(editor.line_starts(), vec![0, 16, 32, 48]);
+}
+
+#[test]
+fn test_custom_layout_remove_breaks_in_range() {
+    let mut editor = create_editor_with_content(&[0u8; 64]);
+
+    // Add breaks at 10, 20, 30
+    editor.custom_layout_mut().add_break(10);
+    editor.custom_layout_mut().add_break(20);
+    editor.custom_layout_mut().add_break(30);
+    assert!(editor.custom_layout().has_break(10));
+    assert!(editor.custom_layout().has_break(20));
+    assert!(editor.custom_layout().has_break(30));
+
+    // Remove breaks in range 10..30 (should remove 10 and 20, keeping 30)
+    let removed = editor.custom_layout_mut().remove_breaks_in_range(10..30);
+    assert_eq!(removed, 2);
+    assert!(!editor.custom_layout().has_break(10));
+    assert!(!editor.custom_layout().has_break(20));
+    assert!(editor.custom_layout().has_break(30));
+
+    // Remove remaining break in range 30..40
+    let removed = editor.custom_layout_mut().remove_breaks_in_range(30..40);
+    assert_eq!(removed, 1);
+    assert!(!editor.custom_layout().has_break(30));
+    assert_eq!(editor.line_starts(), vec![0, 16, 32, 48]);
+}

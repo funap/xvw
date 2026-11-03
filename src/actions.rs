@@ -360,6 +360,9 @@ pub struct JoinLine;
 pub struct ClearAllCustomBreaks;
 
 #[derive(Clone, PartialEq, Action)]
+pub struct RemoveCustomBreaksInRange;
+
+#[derive(Clone, PartialEq, Action)]
 pub struct ShowAllBookmarks;
 
 #[derive(Clone, PartialEq, Action)]

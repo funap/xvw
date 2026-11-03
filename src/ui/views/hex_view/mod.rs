@@ -30,12 +30,12 @@ use crate::actions::{
     AddCustomBreak, BookmarkBlue, BookmarkCyan, BookmarkGreen, BookmarkOrange, BookmarkPink, BookmarkPurple, BookmarkRed, BookmarkYellow, ClearAllBookmarks,
     ClearAllCustomBreaks, ClearBookmark, ClearStructureDefinition, Copy, CopyAsBase64, CopyAsBinary, CopyAsCppArray, CopyAsEscapedString, CopyAsHexDump,
     CopyAsHexSpaces, CopyAsHexStream, CopyAsJsonArray, CopyAsPrintableText, CopyAsRustArray, Cut, ExportBookmarks, FillSelection, HideAllBookmarks,
-    ImportBookmarks, JoinLine, LoadStructureDefinition, Paste, Redo, RemoveCustomBreakBackward, RemoveCustomBreakForward, SearchNext, SearchPrev,
-    SelectAll as AppSelectAll, SetByteOrderBigEndian, SetByteOrderLittleEndian, SetGroupSize1, SetGroupSize2, SetGroupSize4, SetGroupSize8, SetRadixBin,
-    SetRadixDec, SetRadixHex, SetRadixOct, ShowAllBookmarks, ShowBookmarksTab, ShowOnlyBookmarkBlue, ShowOnlyBookmarkCyan, ShowOnlyBookmarkGreen,
-    ShowOnlyBookmarkOrange, ShowOnlyBookmarkPink, ShowOnlyBookmarkPurple, ShowOnlyBookmarkRed, ShowOnlyBookmarkYellow, ShowStructureTab, ToggleBookmarkBlue,
-    ToggleBookmarkCyan, ToggleBookmarkGreen, ToggleBookmarkOrange, ToggleBookmarkPink, ToggleBookmarkPurple, ToggleBookmarkRed, ToggleBookmarkYellow,
-    ToggleByteOrder, ToggleHideUnbookmarked, ToggleInlineStructureView, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
+    ImportBookmarks, JoinLine, LoadStructureDefinition, Paste, Redo, RemoveCustomBreakBackward, RemoveCustomBreakForward, RemoveCustomBreaksInRange,
+    SearchNext, SearchPrev, SelectAll as AppSelectAll, SetByteOrderBigEndian, SetByteOrderLittleEndian, SetGroupSize1, SetGroupSize2, SetGroupSize4,
+    SetGroupSize8, SetRadixBin, SetRadixDec, SetRadixHex, SetRadixOct, ShowAllBookmarks, ShowBookmarksTab, ShowOnlyBookmarkBlue, ShowOnlyBookmarkCyan,
+    ShowOnlyBookmarkGreen, ShowOnlyBookmarkOrange, ShowOnlyBookmarkPink, ShowOnlyBookmarkPurple, ShowOnlyBookmarkRed, ShowOnlyBookmarkYellow, ShowStructureTab,
+    ToggleBookmarkBlue, ToggleBookmarkCyan, ToggleBookmarkGreen, ToggleBookmarkOrange, ToggleBookmarkPink, ToggleBookmarkPurple, ToggleBookmarkRed,
+    ToggleBookmarkYellow, ToggleByteOrder, ToggleHideUnbookmarked, ToggleInlineStructureView, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
 };
 use crate::app_state::InsertModeState;
 use crate::core::bookmark::{BookmarkColor, BookmarkItem};
@@ -1896,10 +1896,34 @@ impl HexView {
 
     pub fn add_custom_break(&mut self, _: &AddCustomBreak, window: &mut Window, cx: &mut Context<Self>) {
         cx.focus_self(window);
+        self.cursor_reveal_pending = true;
         self.editor.update(cx, |editor, cx| {
             let offset = editor.cursor.offset;
             if offset > 0 {
-                editor.custom_layout_mut().add_break(offset);
+                editor.custom_layout_mut().toggle_break(offset);
+            }
+            cx.notify();
+        });
+        self.notify_document_changed(cx);
+    }
+
+    pub fn remove_custom_breaks_in_range(&mut self, _: &RemoveCustomBreaksInRange, window: &mut Window, cx: &mut Context<Self>) {
+        cx.focus_self(window);
+        self.cursor_reveal_pending = true;
+        self.editor.update(cx, |editor, cx| {
+            if let Some(range) = editor.selection_range() {
+                editor.custom_layout_mut().remove_breaks_in_range(range);
+            } else {
+                let offset = editor.cursor.offset;
+                let line_starts = editor.line_starts();
+                let line_idx = match line_starts.binary_search(&offset) {
+                    Ok(idx) => idx,
+                    Err(idx) => idx.saturating_sub(1),
+                };
+                let line_start = line_starts.get(line_idx).unwrap_or(0);
+                if editor.custom_layout().has_break(line_start) {
+                    editor.custom_layout_mut().remove_break(line_start);
+                }
             }
             cx.notify();
         });
@@ -3992,6 +4016,7 @@ impl Render for HexView {
                         .separator()
                         .menu("Break Line", Box::new(AddCustomBreak))
                         .menu("Join Lines", Box::new(JoinLine))
+                        .menu_with_disabled("Reset Breaks in Selection", Box::new(RemoveCustomBreaksInRange), !has_selection)
                         .menu("Reset Layout", Box::new(ClearAllCustomBreaks))
                 }
             })

@@ -1,7 +1,7 @@
 use super::types::CONTEXT;
 use crate::actions::{
-    AddCustomBreak, ClearAllCustomBreaks, Copy, CopyAsHexDump, Cut, GoToBeginning, GoToEnd, JoinLine, Paste, Redo, SearchNext, SearchPrev, ToggleGoToAddress,
-    ToggleSearch, Undo, UnfoldBookmarkAtCursor,
+    AddCustomBreak, ClearAllCustomBreaks, Copy, CopyAsHexDump, Cut, GoToBeginning, GoToEnd, JoinLine, Paste, Redo, RemoveCustomBreaksInRange, SearchNext,
+    SearchPrev, ToggleGoToAddress, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
 };
 use gpui_kit::*;
 
@@ -131,6 +131,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-g", ToggleGoToAddress, Some(CONTEXT)),
         // Custom line breaks & joins
         KeyBinding::new("enter", AddCustomBreak, Some(CONTEXT)),
+        KeyBinding::new("shift-enter", RemoveCustomBreaksInRange, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-j", JoinLine, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]

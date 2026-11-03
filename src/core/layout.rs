@@ -517,6 +517,15 @@ impl CustomLayoutRules {
         self.breaks.remove(&offset)
     }
 
+    pub fn remove_breaks_in_range(&mut self, range: Range<usize>) -> usize {
+        let to_remove: Vec<usize> = self.breaks.range(range).copied().collect();
+        let count = to_remove.len();
+        for b in to_remove {
+            self.breaks.remove(&b);
+        }
+        count
+    }
+
     pub fn toggle_break(&mut self, offset: usize, line_starts: &LineMap, total_size: usize) {
         if self.has_break(offset) {
             self.remove_break(offset);
