@@ -2,11 +2,12 @@ use crate::core::editor::Editor;
 use crate::core::format::{format_size_friendly, format_with_commas};
 use crate::core::radix::DisplayRadix;
 use crate::core::structure::{
-    ParseResult, ParsedField, StructureYamlIncludeOffsets, StructureYamlShaThreshold, YamlExportOptions, format_parse_result_as_text,
+    FieldValue, ParseResult, ParsedField, StructureYamlIncludeOffsets, StructureYamlShaThreshold, YamlExportOptions, format_parse_result_as_text,
     format_parse_result_as_yaml_with_options,
 };
 use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
+use crate::ui::views::hex_view::paint::DescriptionPalette;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu};
 use gpui_kit::component::table::{Column, DataTable, TableDelegate, TableEvent, TableState};
 use gpui_kit::component::{
@@ -154,6 +155,33 @@ fn value_text(parsed_field: &ParsedField, radix: DisplayRadix) -> String {
         format!("{} ({})", parsed_field.value.format_with_radix(radix), label)
     } else {
         parsed_field.value.format_with_radix(radix)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum StructValueStyle {
+    StructSummary(usize),
+    Enum { value: String, label: String },
+    Number(String),
+    String(String),
+    Bytes(String),
+}
+
+pub(crate) fn categorize_field_value(parsed_field: &ParsedField, radix: DisplayRadix) -> StructValueStyle {
+    if parsed_field.is_struct() {
+        StructValueStyle::StructSummary(parsed_field.children.len())
+    } else if let Some(label) = &parsed_field.enum_label {
+        StructValueStyle::Enum {
+            value: parsed_field.value.format_with_radix(radix),
+            label: label.clone(),
+        }
+    } else {
+        let val_str = parsed_field.value.format_with_radix(radix);
+        match &parsed_field.value {
+            FieldValue::String(_) => StructValueStyle::String(val_str),
+            FieldValue::Bytes(_) => StructValueStyle::Bytes(val_str),
+            _ => StructValueStyle::Number(val_str),
+        }
     }
 }
 
@@ -416,6 +444,7 @@ impl TableDelegate for StructTreeTableDelegate {
         };
 
         let theme = cx.theme();
+        let palette = DescriptionPalette::from_theme(theme);
         let font_family = cx.global::<Appearance>().font_family.clone();
         let is_selected = self.selected_index == Some(row_ix);
 
@@ -474,7 +503,7 @@ impl TableDelegate for StructTreeTableDelegate {
                             .whitespace_nowrap()
                             .text_sm()
                             .font_medium()
-                            .text_color(theme.foreground)
+                            .text_color(palette.field_id)
                             .child(id),
                     )
                     .into_any_element()
@@ -485,6 +514,8 @@ impl TableDelegate for StructTreeTableDelegate {
                     .text_xs()
                     .font_family(font_family)
                     .text_color(if is_selected { theme.accent_foreground } else { theme.muted_foreground })
+                    .truncate()
+                    .whitespace_nowrap()
                     .child(format!("0x{:X}", field_offset))
                     .into_any_element()
             }
@@ -496,24 +527,71 @@ impl TableDelegate for StructTreeTableDelegate {
                 };
                 let type_label = SharedString::from(type_name.to_string());
                 div()
-                    .rounded_sm()
-                    .bg(theme.secondary)
                     .text_xs()
                     .font_family(font_family)
-                    .text_color(theme.accent_foreground)
+                    .text_color(palette.type_name)
+                    .truncate()
+                    .whitespace_nowrap()
                     .child(type_label)
                     .into_any_element()
             }
             StructColumn::Size => div()
                 .text_xs()
                 .font_family(font_family)
-                .text_color(if is_selected { theme.accent_foreground } else { theme.muted_foreground })
+                .text_color(palette.number_value)
+                .truncate()
+                .whitespace_nowrap()
                 .child(format!("{} B", format_with_commas(field.size)))
                 .into_any_element(),
-            StructColumn::Value => {
-                let value = SharedString::from(value_text(parsed_field, self.value_radix));
-                div().text_xs().text_color(theme.muted_foreground).child(value).into_any_element()
-            }
+            StructColumn::Value => match categorize_field_value(parsed_field, self.value_radix) {
+                StructValueStyle::StructSummary(count) => {
+                    let text = format!("{} child{}", count, if count == 1 { "" } else { "ren" });
+                    div()
+                        .text_xs()
+                        .font_family(font_family)
+                        .text_color(theme.muted_foreground)
+                        .truncate()
+                        .whitespace_nowrap()
+                        .child(text)
+                        .into_any_element()
+                }
+                StructValueStyle::Enum { value, label } => h_flex()
+                    .items_center()
+                    .text_xs()
+                    .font_family(font_family)
+                    .truncate()
+                    .whitespace_nowrap()
+                    .min_w_0()
+                    .child(div().text_color(palette.number_value).child(value))
+                    .child(div().text_color(palette.punctuation).child(" ("))
+                    .child(div().text_color(palette.enum_label).child(label))
+                    .child(div().text_color(palette.punctuation).child(")"))
+                    .into_any_element(),
+                StructValueStyle::Number(val_str) => div()
+                    .text_xs()
+                    .font_family(font_family)
+                    .text_color(palette.number_value)
+                    .truncate()
+                    .whitespace_nowrap()
+                    .child(val_str)
+                    .into_any_element(),
+                StructValueStyle::String(val_str) => div()
+                    .text_xs()
+                    .font_family(font_family)
+                    .text_color(palette.string_value)
+                    .truncate()
+                    .whitespace_nowrap()
+                    .child(val_str)
+                    .into_any_element(),
+                StructValueStyle::Bytes(val_str) => div()
+                    .text_xs()
+                    .font_family(font_family)
+                    .text_color(palette.bytes_value)
+                    .truncate()
+                    .whitespace_nowrap()
+                    .child(val_str)
+                    .into_any_element(),
+            },
         }
     }
 }
@@ -1752,8 +1830,8 @@ impl Focusable for StructTreeView {
 #[cfg(test)]
 mod tests {
     use super::{
-        AUTOFIT_CHAR_WIDTH, AUTOFIT_WIDE_CHAR_WIDTH, StructColumn, StructTreeView, default_yaml_file_name, estimated_text_width, resolve_field_at_path,
-        value_text,
+        AUTOFIT_CHAR_WIDTH, AUTOFIT_WIDE_CHAR_WIDTH, StructColumn, StructTreeView, StructValueStyle, categorize_field_value, default_yaml_file_name,
+        estimated_text_width, resolve_field_at_path, value_text,
     };
     use crate::core::color::RgbaColor;
     use crate::core::radix::DisplayRadix;
@@ -1833,6 +1911,94 @@ mod tests {
         };
 
         assert_eq!(value_text(&field_struct, DisplayRadix::Decimal), "2 children");
+    }
+
+    #[test]
+    fn test_categorize_field_value() {
+        let field_int = ParsedField {
+            id: "magic".to_string(),
+            field_type: "u4".to_string(),
+            offset: 0,
+            size: 4,
+            value: FieldValue::U32(255),
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: None,
+            is_instance: false,
+            children: Vec::new(),
+        };
+        assert_eq!(
+            categorize_field_value(&field_int, DisplayRadix::Hexadecimal),
+            StructValueStyle::Number("0xFF".to_string())
+        );
+
+        let field_str = ParsedField {
+            id: "tag".to_string(),
+            field_type: "str".to_string(),
+            offset: 0,
+            size: 4,
+            value: FieldValue::String("PNG".to_string()),
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: None,
+            is_instance: false,
+            children: Vec::new(),
+        };
+        assert_eq!(
+            categorize_field_value(&field_str, DisplayRadix::Decimal),
+            StructValueStyle::String("\"PNG\"".to_string())
+        );
+
+        let field_bytes = ParsedField {
+            id: "buf".to_string(),
+            field_type: "bytes".to_string(),
+            offset: 0,
+            size: 4,
+            value: FieldValue::Bytes(vec![0; 4]),
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: None,
+            is_instance: false,
+            children: Vec::new(),
+        };
+        assert_eq!(
+            categorize_field_value(&field_bytes, DisplayRadix::Decimal),
+            StructValueStyle::Bytes("[4 bytes]".to_string())
+        );
+
+        let field_enum = ParsedField {
+            id: "kind".to_string(),
+            field_type: "u1".to_string(),
+            offset: 4,
+            size: 1,
+            value: FieldValue::U8(1),
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: Some("HEADER".to_string()),
+            is_instance: false,
+            children: Vec::new(),
+        };
+        assert_eq!(
+            categorize_field_value(&field_enum, DisplayRadix::Decimal),
+            StructValueStyle::Enum {
+                value: "1".to_string(),
+                label: "HEADER".to_string(),
+            }
+        );
+
+        let field_struct = ParsedField {
+            id: "root".to_string(),
+            field_type: String::new(),
+            offset: 0,
+            size: 5,
+            value: FieldValue::Struct,
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: None,
+            is_instance: false,
+            children: vec![field_int, field_enum],
+        };
+        assert_eq!(categorize_field_value(&field_struct, DisplayRadix::Decimal), StructValueStyle::StructSummary(2));
     }
 
     #[test]
