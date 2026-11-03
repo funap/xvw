@@ -10,6 +10,7 @@ pub const PALETTE_WIDTH: f32 = 580.0;
 pub const PALETTE_LIST_HEIGHT: f32 = 320.0;
 
 /// Creates a standardized top-level palette shell container (width, background, border, shadow, rounded corners).
+#[allow(dead_code)]
 pub fn palette_modal_container(theme: &Theme) -> Div {
     v_flex()
         .w(px(PALETTE_WIDTH))
@@ -22,6 +23,7 @@ pub fn palette_modal_container(theme: &Theme) -> Div {
 }
 
 /// Creates a standardized palette results list container with fixed height and scrolling.
+#[allow(dead_code)]
 pub fn palette_list_container(scroll_handle: &ScrollHandle, id: impl Into<ElementId>) -> Stateful<Div> {
     v_flex()
         .id(id)
