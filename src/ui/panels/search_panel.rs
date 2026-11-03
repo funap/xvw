@@ -482,6 +482,7 @@ impl SearchPanel {
     }
 
     fn clear_results(&mut self, cx: &mut Context<Self>) {
+        self.search_task = None;
         self.results.clear();
         self.is_truncated = false;
         self.selected_index = None;

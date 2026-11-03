@@ -5,8 +5,8 @@ use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, App, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable, IntoElement, SharedString, Subscription, Task, WeakEntity, Window, div,
-    px,
+    AnyElement, App, Context, Entity, EntityId, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement, SharedString, Subscription, Task, WeakEntity, Window,
+    div, px,
 };
 
 use crate::actions::{
@@ -67,6 +67,10 @@ pub struct EditorView {
     tab_group: Option<WeakEntity<TabGroup>>,
     last_bookmark_version: u64,
     last_cursor_offset: Option<usize>,
+    last_search_generation: usize,
+    last_search_current_result: Option<usize>,
+    last_search_results_len: usize,
+    last_find_generation: usize,
     _appearance_subscription: Subscription,
     _bytes_per_row_subscription: Subscription,
     _editor_subscription: Subscription,
@@ -209,11 +213,15 @@ impl EditorView {
         });
 
         let _editor_subscription = cx.observe(&editor, |this, editor, cx| {
-            let (bm_ver, cur, has_editor_search, has_find_search, pending_reparse) = {
+            let (bm_ver, cur, search_gen, search_current, search_results_len, find_gen, has_editor_search, has_find_search, pending_reparse) = {
                 let ed = editor.read(cx);
                 (
                     ed.bookmarks().version(),
                     ed.cursor.offset,
+                    ed.search_state.generation,
+                    ed.search_state.current_result(),
+                    ed.search_state.results.len(),
+                    ed.find_state.generation,
                     !ed.search_state.query.is_empty(),
                     !ed.find_state.query.is_empty(),
                     ed.pending_structure_reparse(),
@@ -221,10 +229,17 @@ impl EditorView {
             };
             let has_search = (this.is_search_visible && (!this.search_bar.read(cx).query(cx).is_empty() || has_find_search)) || has_editor_search;
 
-            if bm_ver != this.last_bookmark_version || (has_search && Some(cur) != this.last_cursor_offset) {
-                this.last_bookmark_version = bm_ver;
-                this.last_cursor_offset = Some(cur);
+            let search_changed = search_gen != this.last_search_generation
+                || search_current != this.last_search_current_result
+                || search_results_len != this.last_search_results_len;
+            let find_changed = find_gen != this.last_find_generation;
+            let bookmark_changed = bm_ver != this.last_bookmark_version;
+            let cursor_changed_with_search = has_search && Some(cur) != this.last_cursor_offset;
+
+            if bookmark_changed || cursor_changed_with_search || search_changed || find_changed {
                 this.update_highlights(cx);
+            } else {
+                this.last_cursor_offset = Some(cur);
             }
 
             if let Some((_, generation)) = pending_reparse {
@@ -261,6 +276,10 @@ impl EditorView {
 
         let last_bookmark_version = editor.read(cx).bookmarks().version();
         let last_cursor_offset = Some(editor.read(cx).cursor.offset);
+        let last_search_generation = editor.read(cx).search_state.generation;
+        let last_search_current_result = editor.read(cx).search_state.current_result();
+        let last_search_results_len = editor.read(cx).search_state.results.len();
+        let last_find_generation = editor.read(cx).find_state.generation;
 
         Self {
             editor,
@@ -274,6 +293,10 @@ impl EditorView {
             tab_group: None,
             last_bookmark_version,
             last_cursor_offset,
+            last_search_generation,
+            last_search_current_result,
+            last_search_results_len,
+            last_find_generation,
             _appearance_subscription,
             _bytes_per_row_subscription,
             _editor_subscription,
@@ -401,6 +424,7 @@ impl EditorView {
     pub fn toggle_goto_address(&mut self, _: &ToggleGoToAddress, window: &mut Window, cx: &mut Context<Self>) {
         self.is_goto_visible = !self.is_goto_visible;
         if self.is_goto_visible {
+            let was_search_visible = self.is_search_visible;
             self.is_search_visible = false;
             let cursor_offset = self.editor.read(cx).cursor.offset;
             let total_size = self.editor.read(cx).total_size();
@@ -409,6 +433,9 @@ impl EditorView {
                 bar.set_context_info(cursor_offset, total_size, address_map, cx);
                 bar.focus(window, cx);
             });
+            if was_search_visible {
+                self.update_highlights(cx);
+            }
         } else {
             self.hex_view.read(cx).focus_handle(cx).focus(window, cx);
         }
@@ -438,6 +465,10 @@ impl EditorView {
         let editor = self.editor.read(cx);
         self.last_bookmark_version = editor.bookmarks().version();
         self.last_cursor_offset = Some(editor.cursor.offset);
+        self.last_search_generation = editor.search_state.generation;
+        self.last_search_current_result = editor.search_state.current_result();
+        self.last_search_results_len = editor.search_state.results.len();
+        self.last_find_generation = editor.find_state.generation;
         let mut highlights = Vec::new();
 
         // 1. Add user custom bookmarks from editor
@@ -449,32 +480,27 @@ impl EditorView {
                 .map(|(range, color)| (range, color.into())),
         );
 
-        // 2. Add search highlights if search is active (either in search bar or search state)
-        let (query, mode) = if self.is_search_visible && !self.search_bar.read(cx).query(cx).is_empty() {
-            (self.search_bar.read(cx).query(cx), self.search_bar.read(cx).mode())
-        } else if !editor.search_state.query.is_empty() {
-            (editor.search_state.query.clone(), editor.search_state.mode)
-        } else {
-            (String::new(), SearchMode::Hex)
-        };
+        let (start, end) = self.hex_view.read(cx).viewport_byte_range(cx);
+        let theme = cx.theme();
 
-        if !query.is_empty() {
-            let pattern = match mode {
-                crate::core::search::SearchMode::Text => crate::core::search::parse_text_pattern(&query, editor.options.encoding),
-                crate::core::search::SearchMode::Hex => crate::core::search::parse_hex_pattern(&query),
-            };
+        let (search_highlights, find_highlights) = if let Ok(doc) = editor.document.read() {
+            let data = doc.buffer.data();
+            let segments = doc.address_map.segment_ranges();
 
-            if let Some(pattern) = pattern
-                && !pattern.is_empty()
-            {
-                let pattern_len = pattern.len();
-                let (start, end) = self.hex_view.read(cx).viewport_byte_range(cx);
-                let scan_start = start.saturating_sub(pattern_len);
-                let scan_end = end.saturating_add(pattern_len);
+            // 2. Scan SearchPanel highlights (if search_state has a query)
+            let search_hl = if !editor.search_state.query.is_empty() {
+                let pattern = match editor.search_state.mode {
+                    SearchMode::Text => crate::core::search::parse_text_pattern(&editor.search_state.query, editor.options.encoding),
+                    SearchMode::Hex => crate::core::search::parse_hex_pattern(&editor.search_state.query),
+                };
 
-                if let Ok(doc) = editor.document.read() {
-                    let data = doc.buffer.data();
-                    let segments = doc.address_map.segment_ranges();
+                if let Some(pattern) = pattern
+                    && !pattern.is_empty()
+                {
+                    let pattern_len = pattern.len();
+                    let scan_start = start.saturating_sub(pattern_len);
+                    let scan_end = end.saturating_add(pattern_len);
+
                     let matches = crate::core::search::find_occurrences_segmented(
                         data,
                         &pattern,
@@ -482,17 +508,81 @@ impl EditorView {
                         &segments,
                         Some(scan_start..scan_end),
                     );
-                    let theme = cx.theme();
+
+                    let search_panel_color = Hsla { a: 0.35, ..theme.warning };
+                    let search_panel_active_color = theme.warning;
+                    let current_result = editor.search_state.current_result();
+                    let selection_range = editor.selection_range();
+
+                    let mut list = Vec::with_capacity(matches.len());
+                    for result_offset in matches {
+                        let range = result_offset..result_offset + pattern_len;
+                        let is_current = Some(result_offset) == current_result || selection_range.as_ref() == Some(&range);
+                        let color = if is_current { search_panel_active_color } else { search_panel_color };
+                        list.push((range, color));
+                    }
+                    list
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+
+            // 3. Scan Find Widget highlights (ONLY IF self.is_search_visible && search_bar has query)
+            let find_hl = if self.is_search_visible && !self.search_bar.read(cx).query(cx).is_empty() {
+                let query = self.search_bar.read(cx).query(cx);
+                let mode = self.search_bar.read(cx).mode();
+                let pattern = match mode {
+                    SearchMode::Text => crate::core::search::parse_text_pattern(&query, editor.options.encoding),
+                    SearchMode::Hex => crate::core::search::parse_hex_pattern(&query),
+                };
+
+                if let Some(pattern) = pattern
+                    && !pattern.is_empty()
+                {
+                    let pattern_len = pattern.len();
+                    let scan_start = start.saturating_sub(pattern_len);
+                    let scan_end = end.saturating_add(pattern_len);
+
+                    let matches = crate::core::search::find_occurrences_segmented(
+                        data,
+                        &pattern,
+                        crate::core::search::SearchLimit::Unlimited,
+                        &segments,
+                        Some(scan_start..scan_end),
+                    );
+
                     let (search_color, current_result_color) = (theme.warning, theme.warning_active);
                     let cursor_offset = editor.cursor.offset;
 
+                    let mut list = Vec::with_capacity(matches.len());
                     for result_offset in matches {
-                        let is_current = result_offset == cursor_offset || (cursor_offset >= result_offset && cursor_offset < result_offset + pattern_len);
+                        let is_current = cursor_offset >= result_offset && cursor_offset < result_offset + pattern_len;
                         let color = if is_current { current_result_color } else { search_color };
-                        highlights.push((result_offset..result_offset + pattern_len, color));
+                        list.push((result_offset..result_offset + pattern_len, color));
                     }
+                    list
+                } else {
+                    Vec::new()
                 }
-            }
+            } else {
+                Vec::new()
+            };
+
+            (search_hl, find_hl)
+        } else {
+            (Vec::new(), Vec::new())
+        };
+
+        // 4. Merge highlights: Find Widget highlights take precedence over SearchPanel highlights where they overlap
+        if find_highlights.is_empty() {
+            highlights.extend(search_highlights);
+        } else {
+            let find_mask: Vec<Range<usize>> = find_highlights.iter().map(|(r, _)| r.clone()).collect();
+            let effective_search_highlights = subtract_ranges(search_highlights, &find_mask);
+            highlights.extend(effective_search_highlights);
+            highlights.extend(find_highlights);
         }
 
         self.hex_view.update(cx, |view, cx| {
@@ -1118,5 +1208,153 @@ impl crate::ui::pane::WorkspaceTab for Entity<EditorView> {
     fn create_split(&self, window: &mut Window, cx: &mut App) -> Option<crate::ui::pane::TabContent> {
         let new_editor_view = self.update(cx, |ep, cx| ep.create_split_clone(window, cx));
         Some(crate::ui::pane::TabContent::new(new_editor_view))
+    }
+}
+
+/// Subtracts a slice of mask ranges from a vector of highlighted ranges, preserving
+/// non-overlapping portions with their original colors.
+pub fn subtract_ranges(source_ranges: Vec<(Range<usize>, Hsla)>, mask_ranges: &[Range<usize>]) -> Vec<(Range<usize>, Hsla)> {
+    if mask_ranges.is_empty() {
+        return source_ranges;
+    }
+
+    let mut result = Vec::new();
+
+    for (range, color) in source_ranges {
+        if range.start >= range.end {
+            continue;
+        }
+        let mut current_pieces = vec![range];
+
+        for mask in mask_ranges {
+            if mask.start >= mask.end {
+                continue;
+            }
+            let mut next_pieces = Vec::new();
+            for piece in current_pieces {
+                if piece.start >= mask.end || piece.end <= mask.start {
+                    // No overlap
+                    next_pieces.push(piece);
+                } else {
+                    // Overlap exists
+                    if piece.start < mask.start {
+                        next_pieces.push(piece.start..mask.start);
+                    }
+                    if piece.end > mask.end {
+                        next_pieces.push(mask.end..piece.end);
+                    }
+                }
+            }
+            current_pieces = next_pieces;
+            if current_pieces.is_empty() {
+                break;
+            }
+        }
+
+        for piece in current_pieces {
+            if piece.start < piece.end {
+                result.push((piece, color));
+            }
+        }
+    }
+
+    result
+}
+
+#[cfg(test)]
+#[allow(clippy::single_range_in_vec_init)]
+mod tests {
+    use super::*;
+    use gpui_kit::Hsla;
+
+    #[test]
+    fn test_subtract_ranges_no_overlap() {
+        let color = Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.5,
+            a: 1.0,
+        };
+        let source = vec![(0..10, color), (20..30, color)];
+        let result = subtract_ranges(source.clone(), &[12..18]);
+        assert_eq!(result, source);
+    }
+
+    #[test]
+    fn test_subtract_ranges_exact_match() {
+        let color = Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.5,
+            a: 1.0,
+        };
+        let source = vec![(10..20, color)];
+        let result = subtract_ranges(source, &[10..20]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_subtract_ranges_interior_split() {
+        let color = Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.5,
+            a: 1.0,
+        };
+        let source = vec![(10..20, color)];
+        let result = subtract_ranges(source, &[12..15]);
+        assert_eq!(result, vec![(10..12, color), (15..20, color)]);
+    }
+
+    #[test]
+    fn test_subtract_ranges_overlap_left_and_right() {
+        let color = Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.5,
+            a: 1.0,
+        };
+        let source = vec![(10..20, color), (30..40, color)];
+        let result = subtract_ranges(source, &[5..15, 35..45]);
+        assert_eq!(result, vec![(15..20, color), (30..35, color)]);
+    }
+
+    #[test]
+    fn test_subtract_ranges_multiple_masks() {
+        let color = Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.5,
+            a: 1.0,
+        };
+        let source = vec![(0..50, color)];
+        let result = subtract_ranges(source, &[10..20, 30..40]);
+        assert_eq!(result, vec![(0..10, color), (20..30, color), (40..50, color)]);
+    }
+
+    #[test]
+    fn test_subtract_ranges_overlapping_masks() {
+        let color = Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.5,
+            a: 1.0,
+        };
+        let source = vec![(0..50, color)];
+        let result = subtract_ranges(source, &[10..25, 20..35]);
+        assert_eq!(result, vec![(0..10, color), (35..50, color)]);
+    }
+
+    #[test]
+    fn test_subtract_ranges_encompassing_mask() {
+        let color = Hsla {
+            h: 0.0,
+            s: 0.0,
+            l: 0.5,
+            a: 1.0,
+        };
+        let source = vec![(10..20, color)];
+        let result = subtract_ranges(source, &[5..25]);
+        assert!(result.is_empty());
     }
 }
