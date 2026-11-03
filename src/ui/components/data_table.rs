@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use gpui_kit::component::scroll::{Scrollbar, ScrollbarAxis, ScrollbarMode};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{StyledExt, h_flex};

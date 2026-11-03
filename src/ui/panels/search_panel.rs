@@ -2,11 +2,12 @@ use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::search::{SearchLimit, SearchMode, find_occurrences_segmented, parse_hex_pattern, parse_text_pattern};
 use crate::ui::appearance::Appearance;
-use crate::ui::components::data_table::{self as table, TableColumn, VirtualTable, VirtualTableState};
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{self, Input, InputState};
-use gpui_kit::component::menu::ContextMenuExt as _;
+use gpui_kit::component::menu::PopupMenu;
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::table::{Column, DataTable, TableDelegate, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, Disableable, Sizable, Size, StyledExt, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -24,7 +25,7 @@ impl SearchModeExt for SearchMode {
     }
 }
 
-actions!(search_panel, [FocusTable, ClearResults]);
+actions!(search_panel, [FocusTable, ClearResults, ConfirmSelect, DismissTable]);
 
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = search_panel, no_json)]
@@ -47,21 +48,11 @@ struct CopyText {
 const CONTEXT: &str = "SearchPanel";
 pub const MAX_SEARCH_RESULTS: usize = 10_000;
 
-const SEARCH_ROW_HEIGHT: f32 = 24.0;
-
 pub fn init(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("escape", FocusTable, Some("SearchPanel"))]);
-}
-
-fn default_search_columns() -> Vec<TableColumn> {
-    vec![
-        TableColumn::new("address", "Address", px(88.0))
-            .min_width(px(50.0))
-            .sortable(true)
-            .resizable(true),
-        TableColumn::new("hex", "Hex", px(180.0)).min_width(px(80.0)).resizable(true),
-        TableColumn::new("text", "Text", px(140.0)).min_width(px(60.0)).resizable(true),
-    ]
+    cx.bind_keys([
+        KeyBinding::new("escape", FocusTable, Some("SearchPanel")),
+        KeyBinding::new("enter", ConfirmSelect, Some("SearchPanel")),
+    ]);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,11 +66,147 @@ pub enum SearchPanelEvent {
     FocusEditor,
 }
 
+pub struct SearchTableDelegate {
+    panel: WeakEntity<SearchPanel>,
+}
+
+impl TableDelegate for SearchTableDelegate {
+    fn columns_count(&self, _cx: &App) -> usize {
+        3
+    }
+
+    fn rows_count(&self, cx: &App) -> usize {
+        self.panel.upgrade().map(|p| p.read(cx).results.len()).unwrap_or(0)
+    }
+
+    fn column(&self, col_ix: usize, _cx: &App) -> Column {
+        match col_ix {
+            0 => Column::new("address", "Address").width(px(88.0)).min_width(px(50.0)).resizable(true),
+            1 => Column::new("hex", "Hex").width(px(180.0)).min_width(px(80.0)).resizable(true),
+            2 => Column::new("text", "Text").width(px(140.0)).min_width(px(60.0)).resizable(true),
+            _ => Column::default(),
+        }
+    }
+
+    fn fit_column(&mut self, col_ix: usize, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> Option<Pixels> {
+        let panel = self.panel.upgrade()?;
+        let panel = panel.read(cx);
+        let (encoding, buffer, address_map) = if let Some(ed) = &panel.editor {
+            let ed_ref = ed.read(cx);
+            let doc = ed_ref.document.read().ok();
+            let buf = doc.as_ref().map(|d| d.buffer.clone());
+            let map = doc.as_ref().map(|d| d.address_map.clone()).unwrap_or_default();
+            (ed_ref.options.encoding, buf, map)
+        } else {
+            (Encoding::Ascii, None, crate::core::address_map::AddressMap::default())
+        };
+        let buffer_slice = buffer.as_ref().map(|b| b.data());
+
+        let max_len = panel
+            .results
+            .iter()
+            .take(128)
+            .map(|item| match col_ix {
+                0 => format!("0x{:08X}", address_map.offset_to_address(item.offset)).chars().count(),
+                1 => {
+                    let (hex, _) = format_row_previews(buffer_slice, item.offset, panel.match_len, encoding);
+                    hex.chars().count()
+                }
+                2 => {
+                    let (_, text) = format_row_previews(buffer_slice, item.offset, panel.match_len, encoding);
+                    text.chars().count()
+                }
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0);
+
+        Some(px(max_len as f32 * 7.5 + 24.0))
+    }
+
+    fn context_menu(&mut self, row_ix: usize, menu: PopupMenu, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> PopupMenu {
+        let Some(panel) = self.panel.upgrade() else {
+            return menu;
+        };
+        let panel_ref = panel.read(cx);
+        let Some(item) = panel_ref.results.get(row_ix) else {
+            return menu;
+        };
+        let offset = item.offset;
+        let match_len = panel_ref.match_len;
+        let (encoding, buffer, address_map) = if let Some(ed) = &panel_ref.editor {
+            let ed_ref = ed.read(cx);
+            let doc = ed_ref.document.read().ok();
+            let buf = doc.as_ref().map(|d| d.buffer.clone());
+            let map = doc.as_ref().map(|d| d.address_map.clone()).unwrap_or_default();
+            (ed_ref.options.encoding, buf, map)
+        } else {
+            (Encoding::Ascii, None, crate::core::address_map::AddressMap::default())
+        };
+        let offset_value = format!("0x{:08X}", address_map.offset_to_address(offset));
+        let buffer_data = buffer.as_ref().map(|b| b.data());
+        let (preview_hex, preview_text) = format_row_previews(buffer_data, offset, match_len, encoding);
+
+        menu.menu_with_icon("Copy Address", IconName::Hash, Box::new(CopyAddress { value: offset_value }))
+            .menu_with_icon("Copy Hex Value", IconName::Binary, Box::new(CopyValue { value: preview_hex }))
+            .menu_with_icon("Copy Text", IconName::TextInitial, Box::new(CopyText { value: preview_text }))
+    }
+
+    fn render_td(&mut self, row_ix: usize, col_ix: usize, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
+        let Some(panel) = self.panel.upgrade() else {
+            return div().into_any_element();
+        };
+        let panel_ref = panel.read(cx);
+        let Some(item) = panel_ref.results.get(row_ix) else {
+            return div().into_any_element();
+        };
+        let theme = cx.theme();
+        let font_family = cx.global::<Appearance>().font_family.clone();
+        let (encoding, buffer, address_map) = if let Some(ed) = &panel_ref.editor {
+            let ed_ref = ed.read(cx);
+            let doc = ed_ref.document.read().ok();
+            let buf = doc.as_ref().map(|d| d.buffer.clone());
+            let map = doc.as_ref().map(|d| d.address_map.clone()).unwrap_or_default();
+            (ed_ref.options.encoding, buf, map)
+        } else {
+            (Encoding::Ascii, None, crate::core::address_map::AddressMap::default())
+        };
+        let buffer_data = buffer.as_ref().map(|b| b.data());
+        let offset = item.offset;
+        let offset_value = format!("0x{:08X}", address_map.offset_to_address(offset));
+        let (preview_hex, preview_text) = format_row_previews(buffer_data, offset, panel_ref.match_len, encoding);
+
+        let is_selected = panel_ref.selected_index == Some(row_ix);
+
+        match col_ix {
+            0 => div()
+                .text_xs()
+                .font_family(font_family)
+                .font_semibold()
+                .text_color(if is_selected { theme.accent_foreground } else { theme.muted_foreground })
+                .child(offset_value)
+                .into_any_element(),
+            1 => div()
+                .text_xs()
+                .font_family(font_family)
+                .text_color(theme.muted_foreground)
+                .child(preview_hex)
+                .into_any_element(),
+            2 => div()
+                .text_xs()
+                .font_family(font_family)
+                .text_color(theme.foreground)
+                .child(preview_text)
+                .into_any_element(),
+            _ => div().into_any_element(),
+        }
+    }
+}
+
 pub struct SearchPanel {
     pub editor: Option<Entity<Editor>>,
     pub focus_handle: FocusHandle,
-    pub table_state: VirtualTableState,
-    pub last_container_width: Pixels,
+    pub table_state: Entity<TableState<SearchTableDelegate>>,
     pub input: Entity<InputState>,
     pub mode: SearchMode,
     pub is_searching: bool,
@@ -89,6 +216,7 @@ pub struct SearchPanel {
     pub last_query: String,
     pub match_len: usize,
     pub search_task: Option<Task<()>>,
+    _table_subscription: Option<Subscription>,
     _input_subscription: Option<Subscription>,
     _editor_subscription: Option<Subscription>,
 }
@@ -98,8 +226,30 @@ impl EventEmitter<SearchPanelEvent> for SearchPanel {}
 impl SearchPanel {
     pub fn new(editor: Option<Entity<Editor>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
-        let table_focus_handle = cx.focus_handle();
-        let table_state = VirtualTableState::new("search-table", default_search_columns(), table_focus_handle);
+        let view = cx.entity().downgrade();
+        let delegate = SearchTableDelegate { panel: view };
+        let table_state = cx.new(|cx| {
+            TableState::new(delegate, window, cx)
+                .row_selectable(true)
+                .col_selectable(false)
+                .col_resizable(true)
+                .col_movable(false)
+        });
+
+        let table_subscription = cx.subscribe_in(&table_state, window, |this, _, event: &TableEvent, window, cx| match event {
+            TableEvent::SelectRow(row_ix) => {
+                if this.selected_index != Some(*row_ix) {
+                    this.select_item(*row_ix, cx);
+                }
+            }
+            TableEvent::DoubleClickedRow(row_ix) => {
+                this.select_item(*row_ix, cx);
+                cx.emit(SearchPanelEvent::FocusEditor);
+                window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
+            }
+            _ => {}
+        });
+
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(SearchMode::Hex.placeholder()));
 
         let input_sub = cx.subscribe_in(&input, window, |this, _, event: &input::InputEvent, _window, cx| match event {
@@ -116,7 +266,6 @@ impl SearchPanel {
             editor: None,
             focus_handle,
             table_state,
-            last_container_width: px(300.0),
             input,
             mode: SearchMode::Hex,
             is_searching: false,
@@ -126,6 +275,7 @@ impl SearchPanel {
             last_query: String::new(),
             match_len: 0,
             search_task: None,
+            _table_subscription: Some(table_subscription),
             _input_subscription: Some(input_sub),
             _editor_subscription: None,
         };
@@ -142,6 +292,10 @@ impl SearchPanel {
         self.selected_index = None;
         self.is_searching = false;
         self.search_task = None;
+        self.table_state.update(cx, |table, cx| {
+            table.refresh(cx);
+            table.clear_selection(cx);
+        });
 
         if let Some(ed) = &editor {
             self._editor_subscription = Some(cx.observe(ed, |this, ed, cx| {
@@ -158,6 +312,15 @@ impl SearchPanel {
             self.input.update(cx, |input, cx| {
                 input.set_placeholder(mode.placeholder(), window, cx);
             });
+            self.results.clear();
+            self.is_truncated = false;
+            self.selected_index = None;
+            self.last_query.clear();
+            self.match_len = 0;
+            self.table_state.update(cx, |table, cx| {
+                table.refresh(cx);
+                table.clear_selection(cx);
+            });
             cx.notify();
         }
     }
@@ -170,6 +333,10 @@ impl SearchPanel {
             self.selected_index = None;
             self.last_query.clear();
             self.match_len = 0;
+            self.table_state.update(cx, |table, cx| {
+                table.refresh(cx);
+                table.clear_selection(cx);
+            });
             if let Some(ed) = &self.editor {
                 ed.update(cx, |ed, cx| {
                     ed.search_state_mut().clear();
@@ -197,6 +364,10 @@ impl SearchPanel {
             self.selected_index = None;
             self.last_query = query.clone();
             self.match_len = 0;
+            self.table_state.update(cx, |table, cx| {
+                table.refresh(cx);
+                table.clear_selection(cx);
+            });
             if let Some(ed) = &self.editor {
                 ed.update(cx, |ed, cx| {
                     ed.search_state_mut().clear();
@@ -273,8 +444,15 @@ impl SearchPanel {
                     this.results = items;
                     if !this.results.is_empty() {
                         this.selected_index = Some(0);
-                        this.table_state.scroll_to_row(0, ScrollStrategy::Top);
                     }
+                    this.table_state.update(cx, |table, cx| {
+                        table.refresh(cx);
+                        if let Some(idx) = this.selected_index {
+                            table.set_selected_row(idx, cx);
+                        } else {
+                            table.clear_selection(cx);
+                        }
+                    });
                     if let Some(ed) = &this.editor {
                         let generation = ed.read(cx).search_state.generation;
                         ed.update(cx, |editor, cx| {
@@ -297,6 +475,12 @@ impl SearchPanel {
             let offset = self.results[index].offset;
             let len = self.match_len;
 
+            self.table_state.update(cx, |table, cx| {
+                if table.selected_row() != Some(index) {
+                    table.set_selected_row(index, cx);
+                }
+            });
+
             if let Some(ed) = &self.editor {
                 ed.update(cx, |editor, cx| {
                     if len > 0 {
@@ -314,91 +498,27 @@ impl SearchPanel {
         }
     }
 
-    fn table_move_up(&mut self, _: &table::MoveUp, _: &mut Window, cx: &mut Context<Self>) {
-        if self.results.is_empty() {
-            return;
-        }
-        let new_idx = match self.selected_index {
-            Some(0) | None => self.results.len().saturating_sub(1),
-            Some(idx) => idx - 1,
-        };
-        self.table_state.scroll_to_row(new_idx, ScrollStrategy::Top);
-        self.select_item(new_idx, cx);
-    }
-
-    fn table_move_down(&mut self, _: &table::MoveDown, _: &mut Window, cx: &mut Context<Self>) {
-        if self.results.is_empty() {
-            return;
-        }
-        let new_idx = match self.selected_index {
-            Some(idx) if idx + 1 < self.results.len() => idx + 1,
-            _ => 0,
-        };
-        self.table_state.scroll_to_row(new_idx, ScrollStrategy::Top);
-        self.select_item(new_idx, cx);
-    }
-
-    fn table_move_top(&mut self, _: &table::MoveTop, _: &mut Window, cx: &mut Context<Self>) {
-        if self.results.is_empty() {
-            return;
-        }
-        self.table_state.scroll_to_row(0, ScrollStrategy::Top);
-        self.select_item(0, cx);
-    }
-
-    fn table_move_bottom(&mut self, _: &table::MoveBottom, _: &mut Window, cx: &mut Context<Self>) {
-        if self.results.is_empty() {
-            return;
-        }
-        let last_idx = self.results.len().saturating_sub(1);
-        self.table_state.scroll_to_row(last_idx, ScrollStrategy::Top);
-        self.select_item(last_idx, cx);
-    }
-
-    fn table_page_up(&mut self, _: &table::PageUp, _: &mut Window, cx: &mut Context<Self>) {
-        if self.results.is_empty() {
-            return;
-        }
-        let current = self.selected_index.unwrap_or(0);
-        let page_size = 10;
-        let new_idx = current.saturating_sub(page_size);
-        self.table_state.scroll_to_row(new_idx, ScrollStrategy::Top);
-        self.select_item(new_idx, cx);
-    }
-
-    fn table_page_down(&mut self, _: &table::PageDown, _: &mut Window, cx: &mut Context<Self>) {
-        if self.results.is_empty() {
-            return;
-        }
-        let current = self.selected_index.unwrap_or(0);
-        let page_size = 10;
-        let last_idx = self.results.len().saturating_sub(1);
-        let new_idx = (current + page_size).min(last_idx);
-        self.table_state.scroll_to_row(new_idx, ScrollStrategy::Top);
-        self.select_item(new_idx, cx);
-    }
-
-    fn table_select_current(&mut self, _: &table::SelectCurrent, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(idx) = self.selected_index {
-            self.select_item(idx, cx);
-        }
-    }
-
-    fn table_dismiss(&mut self, _: &table::Dismiss, window: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(SearchPanelEvent::FocusEditor);
-        window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
-    }
-
     fn focus_table(&mut self, _: &FocusTable, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.results.is_empty()
-            && let Some(handle) = &self.table_state.focus_handle
-        {
-            handle.focus(window, cx);
+        if !self.results.is_empty() {
+            let focus_handle = self.table_state.read(cx).focus_handle(cx);
+            focus_handle.focus(window, cx);
         } else {
             cx.emit(SearchPanelEvent::FocusEditor);
             window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
         }
-        cx.notify();
+    }
+
+    fn confirm_select(&mut self, _: &ConfirmSelect, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(idx) = self.selected_index {
+            self.select_item(idx, cx);
+            cx.emit(SearchPanelEvent::FocusEditor);
+            window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
+        }
+    }
+
+    fn dismiss_table(&mut self, _: &DismissTable, window: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(SearchPanelEvent::FocusEditor);
+        window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
     fn clear_results_action(&mut self, _: &ClearResults, _: &mut Window, cx: &mut Context<Self>) {
@@ -407,6 +527,10 @@ impl SearchPanel {
         self.selected_index = None;
         self.last_query.clear();
         self.match_len = 0;
+        self.table_state.update(cx, |table, cx| {
+            table.refresh(cx);
+            table.clear_selection(cx);
+        });
         if let Some(ed) = &self.editor {
             ed.update(cx, |ed, cx| {
                 ed.search_state_mut().clear();
@@ -418,52 +542,20 @@ impl SearchPanel {
 
     fn copy_address(&mut self, action: &CopyAddress, window: &mut Window, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(action.value.clone()));
-        window.push_notification(
-            gpui_kit::component::notification::Notification::info(format!("Copied address {}", action.value)),
-            cx,
-        );
+        window.push_notification(Notification::info(format!("Copied address {}", action.value)), cx);
     }
 
     fn copy_value(&mut self, action: &CopyValue, window: &mut Window, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(action.value.clone()));
-        window.push_notification(gpui_kit::component::notification::Notification::info("Copied hex value"), cx);
+        window.push_notification(Notification::info("Copied hex value"), cx);
     }
 
     fn copy_text(&mut self, action: &CopyText, window: &mut Window, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(action.value.clone()));
-        window.push_notification(gpui_kit::component::notification::Notification::info("Copied text value"), cx);
+        window.push_notification(Notification::info("Copied text value"), cx);
     }
 
-    fn auto_fit_column(&mut self, col_ix: usize, cx: &mut Context<Self>) {
-        let (encoding, buffer, address_map) = if let Some(ed) = &self.editor {
-            let ed_ref = ed.read(cx);
-            let doc = ed_ref.document.read().ok();
-            let buf = doc.as_ref().map(|d| d.buffer.clone());
-            let map = doc.as_ref().map(|d| d.address_map.clone()).unwrap_or_default();
-            (ed_ref.options.encoding, buf, map)
-        } else {
-            (Encoding::Ascii, None, crate::core::address_map::AddressMap::default())
-        };
-        let buffer_slice = buffer.as_ref().map(|b| b.data());
-
-        let texts = self.results.iter().take(128).map(|item| match col_ix {
-            0 => format!("0x{:08X}", address_map.offset_to_address(item.offset)),
-            1 => {
-                let (hex, _) = format_row_previews(buffer_slice, item.offset, self.match_len, encoding);
-                hex
-            }
-            2 => {
-                let (_, text) = format_row_previews(buffer_slice, item.offset, self.match_len, encoding);
-                text
-            }
-            _ => String::new(),
-        });
-
-        self.table_state.auto_fit_column_with_texts(col_ix, texts);
-        cx.notify();
-    }
-
-    fn sync_selected_index_from_editor(&mut self, editor: &Entity<Editor>, cx: &App) {
+    fn sync_selected_index_from_editor(&mut self, editor: &Entity<Editor>, cx: &mut Context<Self>) {
         if self.results.is_empty() {
             return;
         }
@@ -502,6 +594,17 @@ impl SearchPanel {
 
         if self.selected_index != found_index {
             self.selected_index = found_index;
+            if let Some(idx) = found_index {
+                self.table_state.update(cx, |table, cx| {
+                    if table.selected_row() != Some(idx) {
+                        table.set_selected_row(idx, cx);
+                    }
+                });
+            } else {
+                self.table_state.update(cx, |table, cx| {
+                    table.clear_selection(cx);
+                });
+            }
         }
     }
 }
@@ -528,12 +631,9 @@ fn format_row_previews(buffer_data: Option<&[u8]>, offset: usize, match_len: usi
 
 impl Render for SearchPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let table_overlay = VirtualTable::render_table_overlay(&self.table_state, cx, |this| &mut this.table_state);
-
         let theme = cx.theme();
-        let font_family = cx.global::<Appearance>().font_family.clone();
         let is_input_focused = self.input.read(cx).focus_handle(cx).is_focused(window);
-        let is_table_focused = self.table_state.focus_handle.as_ref().is_some_and(|h| h.is_focused(window));
+        let is_table_focused = self.table_state.read(cx).focus_handle(cx).is_focused(window);
         let is_focused = self.focus_handle.is_focused(window) || is_input_focused || is_table_focused;
         let has_editor = self.editor.is_some();
         let is_query_empty = self.input.read(cx).value().trim().is_empty();
@@ -571,6 +671,10 @@ impl Render for SearchPanel {
                 this.selected_index = None;
                 this.last_query.clear();
                 this.match_len = 0;
+                this.table_state.update(cx, |table, cx| {
+                    table.refresh(cx);
+                    table.clear_selection(cx);
+                });
                 if let Some(ed) = &this.editor {
                     ed.update(cx, |ed, cx| {
                         ed.search_state_mut().clear();
@@ -675,275 +779,20 @@ impl Render for SearchPanel {
             };
             crate::ui::panels::panel_empty_state(IconName::Search, "No Results", Some(message), None, theme).into_any_element()
         } else {
-            let header_row = VirtualTable::render_header_row(
-                &self.table_state,
-                "search-column-header",
-                theme,
-                cx,
-                None::<fn(usize, &TableColumn) -> Option<AnyElement>>,
-                Self::auto_fit_column,
-                None::<fn(&mut Self, usize, &mut Context<Self>)>,
-                |this| &mut this.table_state,
-            );
-
-            let visible_cols: Vec<(usize, Pixels)> = self.table_state.visible_columns().map(|(ix, col)| (ix, col.width)).collect();
-            let total_visible_width = self.table_state.total_visible_width();
-            let scroll_offset_x = self.table_state.scroll_offset_x;
-            let row_count = self.results.len();
-            let view = cx.entity().clone();
-            let list_view = view.clone();
-            let context_focus_handle = self.focus_handle.clone();
-
-            let list = uniform_list("search-virtual-table", row_count, move |visible_range, window, cx| {
-                let this = list_view.read(cx);
-                let theme = cx.theme();
-
-                let (encoding, buffer, address_map) = if let Some(ed) = &this.editor {
-                    let ed_ref = ed.read(cx);
-                    let doc = ed_ref.document.read().ok();
-                    let buf = doc.as_ref().map(|d| d.buffer.clone());
-                    let map = doc.as_ref().map(|d| d.address_map.clone()).unwrap_or_default();
-                    (ed_ref.options.encoding, buf, map)
-                } else {
-                    (Encoding::Ascii, None, crate::core::address_map::AddressMap::default())
-                };
-                let buffer_data = buffer.as_ref().map(|b| b.data());
-
-                visible_range
-                    .map(|idx| {
-                        if let Some(item) = this.results.get(idx) {
-                            let is_selected = this.selected_index == Some(idx);
-                            let (bg_color, border_color) = if is_selected {
-                                if is_table_focused {
-                                    (theme.selection, theme.accent)
-                                } else {
-                                    (theme.muted, theme.border)
-                                }
-                            } else {
-                                (theme.sidebar, theme.table_row_border)
-                            };
-                            let hover_bg = if is_selected {
-                                if is_table_focused { theme.selection } else { theme.muted }
-                            } else {
-                                theme.table_hover
-                            };
-
-                            let offset = item.offset;
-                            let offset_value = format!("0x{:08X}", address_map.offset_to_address(offset));
-                            let (preview_hex, preview_text) = format_row_previews(buffer_data, offset, this.match_len, encoding);
-                            h_flex()
-                                .id(("search-result-item", idx))
-                                .w_full()
-                                .h(px(SEARCH_ROW_HEIGHT))
-                                .flex_shrink_0()
-                                .overflow_hidden()
-                                .border_b_1()
-                                .border_color(border_color)
-                                .bg(bg_color)
-                                .cursor_pointer()
-                                .hover(move |style| style.bg(hover_bg))
-                                .on_click(window.listener_for(&list_view, move |this, _, window, cx| {
-                                    if let Some(handle) = &this.table_state.focus_handle {
-                                        handle.focus(window, cx);
-                                    }
-                                    this.select_item(idx, cx);
-                                }))
-                                .on_mouse_down(
-                                    MouseButton::Right,
-                                    window.listener_for(&list_view, move |this, _, window, cx| {
-                                        if let Some(handle) = &this.table_state.focus_handle {
-                                            handle.focus(window, cx);
-                                        }
-                                        this.select_item(idx, cx);
-                                    }),
-                                )
-                                .child(
-                                    h_flex()
-                                        .w(total_visible_width)
-                                        .h_full()
-                                        .ml(-scroll_offset_x)
-                                        .children(visible_cols.iter().enumerate().map(|(vis_ix, &(col_ix, width))| {
-                                            let is_first = vis_ix == 0;
-                                            let cell_content = match col_ix {
-                                                0 => div()
-                                                    .text_xs()
-                                                    .font_family(font_family.clone())
-                                                    .font_semibold()
-                                                    .text_color(if is_selected { theme.accent_foreground } else { theme.muted_foreground })
-                                                    .child(offset_value.clone())
-                                                    .into_any_element(),
-                                                1 => div()
-                                                    .text_xs()
-                                                    .font_family(font_family.clone())
-                                                    .text_color(theme.muted_foreground)
-                                                    .child(preview_hex.clone())
-                                                    .into_any_element(),
-                                                2 => div()
-                                                    .text_xs()
-                                                    .font_family(font_family.clone())
-                                                    .text_color(theme.foreground)
-                                                    .child(preview_text.clone())
-                                                    .into_any_element(),
-                                                _ => div().into_any_element(),
-                                            };
-                                            VirtualTable::render_data_cell(col_ix, width, is_first, theme.table_row_border, cell_content)
-                                        })),
-                                )
-                                .into_any_element()
-                        } else {
-                            div().into_any_element()
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .track_scroll(&self.table_state.vertical_scroll_handle)
-            .size_full();
-
-            let horizontal_scrollbar = VirtualTable::render_horizontal_scrollbar(&self.table_state, self.last_container_width, theme);
-            let vertical_scrollbar = VirtualTable::render_vertical_scrollbar(&self.table_state, theme);
-            let context_view = view.clone();
-
-            let table_focus_handle = self.table_state.focus_handle.clone();
-            let mut table_container = v_flex()
-                .id(self.table_state.id.clone())
-                .key_context(table::CONTEXT)
+            v_flex()
                 .flex_1()
                 .overflow_hidden()
-                .relative();
-
-            if let Some(focus_handle) = &table_focus_handle {
-                table_container = table_container.track_focus(focus_handle).on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
-                        if let Some(handle) = &this.table_state.focus_handle {
-                            handle.focus(window, cx);
-                        }
-                    }),
-                );
-            }
-
-            table_container = table_container
-                .on_action(cx.listener(Self::table_move_up))
-                .on_action(cx.listener(Self::table_move_down))
-                .on_action(cx.listener(Self::table_move_top))
-                .on_action(cx.listener(Self::table_move_bottom))
-                .on_action(cx.listener(Self::table_page_up))
-                .on_action(cx.listener(Self::table_page_down))
-                .on_action(cx.listener(Self::table_select_current))
-                .on_action(cx.listener(Self::table_dismiss));
-
-            table_container
-                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                    if this.table_state.resizing_column.is_some() {
-                        if event.pressed_button != Some(MouseButton::Left) {
-                            this.table_state.end_resize();
-                            cx.notify();
-                        } else {
-                            this.table_state.update_resize(event.position.x);
-                            cx.notify();
-                        }
-                    }
-                }))
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                        if this.table_state.resizing_column.is_some() {
-                            this.table_state.end_resize();
-                            cx.notify();
-                        }
-                    }),
-                )
-                .on_mouse_up_out(
-                    MouseButton::Left,
-                    cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                        if this.table_state.resizing_column.is_some() {
-                            this.table_state.end_resize();
-                            cx.notify();
-                        }
-                    }),
-                )
-                .on_action(cx.listener(Self::clear_results_action))
-                .on_action(cx.listener(Self::copy_address))
-                .on_action(cx.listener(Self::copy_value))
-                .on_action(cx.listener(Self::copy_text))
-                .child(table_overlay)
                 .children(truncation_notice)
-                .child(header_row)
-                .child(
-                    div()
-                        .id("search-results-container")
-                        .flex_1()
-                        .overflow_hidden()
-                        .relative()
-                        .child(list)
-                        .child(vertical_scrollbar)
-                        .children(horizontal_scrollbar),
-                )
-                .context_menu(move |menu, _window, cx| {
-                    let selected_info = {
-                        let this = context_view.read(cx);
-                        this.selected_index.and_then(|idx| {
-                            let item = this.results.get(idx)?;
-                            let offset = item.offset;
-                            let (encoding, buffer, address_map) = if let Some(ed) = &this.editor {
-                                let ed_ref = ed.read(cx);
-                                let doc = ed_ref.document.read().ok();
-                                let buf = doc.as_ref().map(|d| d.buffer.clone());
-                                let map = doc.as_ref().map(|d| d.address_map.clone()).unwrap_or_default();
-                                (ed_ref.options.encoding, buf, map)
-                            } else {
-                                (Encoding::Ascii, None, crate::core::address_map::AddressMap::default())
-                            };
-                            let offset_value = format!("0x{:08X}", address_map.offset_to_address(offset));
-                            let buffer_data = buffer.as_ref().map(|b| b.data());
-                            let (preview_hex, preview_text) = format_row_previews(buffer_data, offset, this.match_len, encoding);
-                            Some((offset_value, preview_hex, preview_text))
-                        })
-                    };
-                    let Some((menu_offset, menu_hex, menu_text)) = selected_info else {
-                        return menu;
-                    };
-                    menu.action_context(context_focus_handle.clone())
-                        .menu_with_icon("Copy Address", IconName::Hash, Box::new(CopyAddress { value: menu_offset }))
-                        .menu_with_icon("Copy Hex Value", IconName::Binary, Box::new(CopyValue { value: menu_hex }))
-                        .menu_with_icon("Copy Text", IconName::TextInitial, Box::new(CopyText { value: menu_text }))
-                })
+                .child(DataTable::new(&self.table_state).bordered(true).stripe(true))
                 .into_any_element()
         };
 
         crate::ui::panels::panel_container(is_focused, theme)
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                if this.table_state.resizing_column.is_some() {
-                    if event.pressed_button != Some(MouseButton::Left) {
-                        this.table_state.end_resize();
-                        cx.notify();
-                    } else {
-                        this.table_state.update_resize(event.position.x);
-                        cx.notify();
-                    }
-                }
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                    if this.table_state.resizing_column.is_some() {
-                        this.table_state.end_resize();
-                        cx.notify();
-                    }
-                }),
-            )
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                    if this.table_state.resizing_column.is_some() {
-                        this.table_state.end_resize();
-                        cx.notify();
-                    }
-                }),
-            )
             .on_action(cx.listener(Self::focus_table))
+            .on_action(cx.listener(Self::confirm_select))
+            .on_action(cx.listener(Self::dismiss_table))
             .on_action(cx.listener(Self::clear_results_action))
             .on_action(cx.listener(Self::copy_address))
             .on_action(cx.listener(Self::copy_value))
