@@ -680,6 +680,78 @@ fn test_find_and_search_state_independence() {
 }
 
 #[test]
+fn test_editor_maintains_simultaneous_queries_without_interference() {
+    use crate::core::search::SearchMode;
+
+    let mut editor = create_editor_with_content(b"ALPHA BRAVO ALPHA CHARLIE ALPHA DELTA");
+
+    // 1. Configure SearchPanel query: "ALPHA" (Text mode) with simulated search results
+    editor.search_state_mut().set_query_and_mode("ALPHA".to_string(), SearchMode::Text);
+    let search_gen = editor.search_state().generation;
+    editor.search_state_mut().set_results(vec![0, 12, 26], search_gen, true);
+
+    // 2. Configure Find Widget query: "42 52 41" (Hex mode for "BRA")
+    editor.find_state_mut().set_query_and_mode("42 52 41".to_string(), SearchMode::Hex);
+
+    // Verify both states coexist without mutual interference
+    assert_eq!(editor.search_state().query, "ALPHA");
+    assert_eq!(editor.search_state().mode, SearchMode::Text);
+    assert_eq!(editor.search_state().results, vec![0, 12, 26]);
+    assert_eq!(editor.find_state().query, "42 52 41");
+    assert_eq!(editor.find_state().mode, SearchMode::Hex);
+    assert!(editor.find_state().results.is_empty()); // Find Widget is on-demand
+
+    // 3. Navigate Find Widget: finds "BRA" at offset 6
+    editor.cursor.offset = 0;
+    let find_res1 = editor.next_find_result();
+    assert_eq!(find_res1, Some(6));
+    assert_eq!(editor.cursor.offset, 6);
+    // Search state is untouched (still pointing to initial result 0)
+    assert_eq!(editor.search_state().current_result(), Some(0));
+    assert_eq!(editor.search_state().results, vec![0, 12, 26]);
+
+    // 4. Navigate SearchPanel: advances to next search result at offset 12
+    let search_res1 = editor.next_search_result();
+    assert_eq!(search_res1, Some(12));
+    assert_eq!(editor.cursor.offset, 12);
+    assert_eq!(editor.search_state().current_result(), Some(12));
+    // Find state is untouched
+    assert_eq!(editor.find_state().query, "42 52 41");
+    assert_eq!(editor.find_state().mode, SearchMode::Hex);
+
+    // 5. Navigate SearchPanel again: advances to offset 26
+    let search_res2 = editor.next_search_result();
+    assert_eq!(search_res2, Some(26));
+    assert_eq!(editor.cursor.offset, 26);
+    assert_eq!(editor.search_state().current_result(), Some(26));
+
+    // 6. Navigate Find Widget again: wraps around to match at 6
+    let find_res2 = editor.next_find_result();
+    assert_eq!(find_res2, Some(6));
+    assert_eq!(editor.cursor.offset, 6);
+    // SearchPanel current_result is still 26
+    assert_eq!(editor.search_state().current_result(), Some(26));
+
+    // 7. Clear Find state: only find_state is cleared
+    editor.find_state_mut().clear();
+    assert!(editor.find_state().query.is_empty());
+    // SearchPanel state remains completely intact
+    assert_eq!(editor.search_state().query, "ALPHA");
+    assert_eq!(editor.search_state().results, vec![0, 12, 26]);
+    assert_eq!(editor.search_state().current_result(), Some(26));
+
+    // 8. Re-populate Find state and clear SearchPanel: only search_state is cleared
+    editor.find_state_mut().set_query_and_mode("DELTA".to_string(), SearchMode::Text);
+    editor.search_state_mut().clear();
+    assert!(editor.search_state().query.is_empty());
+    assert!(editor.search_state().results.is_empty());
+    assert_eq!(editor.find_state().query, "DELTA");
+    let find_delta = editor.next_find_result();
+    assert_eq!(find_delta, Some(32));
+    assert_eq!(editor.cursor.offset, 32);
+}
+
+#[test]
 fn test_search_with_encoding() {
     use crate::core::encoding::Encoding;
     use crate::core::search::SearchMode;
