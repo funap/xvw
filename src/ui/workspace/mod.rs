@@ -434,7 +434,7 @@ impl Workspace {
         cx.subscribe_in(
             &struct_tree,
             window,
-            |this, _, event: &crate::ui::panels::struct_tree_view::StructTreeViewEvent, _window, cx| match event {
+            |this, _, event: &crate::ui::panels::struct_tree_view::StructTreeViewEvent, window, cx| match event {
                 crate::ui::panels::struct_tree_view::StructTreeViewEvent::NavigateTo { offset, size } => {
                     if let Some(editor_view) = this.effective_editor_view(cx) {
                         editor_view.update(cx, |view, cx| {
@@ -442,6 +442,9 @@ impl Workspace {
                             view.scroll_to_range_if_needed(*offset..offset.saturating_add(len), cx);
                         });
                     }
+                }
+                crate::ui::panels::struct_tree_view::StructTreeViewEvent::FocusEditor => {
+                    this.restore_editor_focus(window, cx);
                 }
             },
         )

@@ -33,8 +33,10 @@ pub const MAX_STRING_RESULTS: usize = 10_000;
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("escape", FocusTable, Some("StringsPanel")),
-        KeyBinding::new("enter", ConfirmSelect, Some("StringsPanel")),
+        KeyBinding::new("escape", DismissTable, Some("StringsPanel")),
+        KeyBinding::new("escape", DismissTable, Some("StringsPanel > DataTable")),
+        KeyBinding::new("enter", ConfirmSelect, Some("StringsPanel > DataTable")),
+        KeyBinding::new("down", FocusTable, Some("StringsPanel > Input")),
     ]);
 }
 
@@ -67,6 +69,7 @@ pub struct StringsTableDelegate {
     sort_column: Option<(usize, ColumnSort)>,
     editor: Option<Entity<Editor>>,
     selected_index: Option<usize>,
+    focus_handle: FocusHandle,
 }
 
 impl StringsTableDelegate {
@@ -173,7 +176,8 @@ impl TableDelegate for StringsTableDelegate {
         let offset_value = format!("0x{:08X}", address_map.offset_to_address(item.offset));
         let text_value = item.text.clone();
 
-        menu.menu_with_icon("Copy Address", IconName::Hash, Box::new(CopyAddress { value: offset_value }))
+        menu.action_context(self.focus_handle.clone())
+            .menu_with_icon("Copy Address", IconName::Hash, Box::new(CopyAddress { value: offset_value }))
             .menu_with_icon("Copy Value", IconName::Binary, Box::new(CopyValue { value: text_value }))
     }
 
@@ -259,6 +263,7 @@ impl StringsPanel {
             sort_column: None,
             editor: None,
             selected_index: None,
+            focus_handle: focus_handle.clone(),
         };
         let table_state = cx.new(|cx| {
             TableState::new(delegate, window, cx)
@@ -622,11 +627,8 @@ impl StringsPanel {
         if !visible_indices.is_empty() {
             let focus_handle = self.table_state.read(cx).focus_handle(cx);
             focus_handle.focus(window, cx);
-        } else {
-            cx.emit(StringsPanelEvent::FocusEditor);
-            window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
+            cx.notify();
         }
-        cx.notify();
     }
 
     fn confirm_select(&mut self, _: &ConfirmSelect, window: &mut Window, cx: &mut Context<Self>) {
@@ -808,6 +810,12 @@ impl Render for StringsPanel {
                 .flex_1()
                 .overflow_hidden()
                 .child(DataTable::new(&self.table_state).bordered(false))
+                .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.dismiss_table(&DismissTable, window, cx);
+                        cx.stop_propagation();
+                    }
+                }))
                 .into_any_element()
         };
 
@@ -817,6 +825,9 @@ impl Render for StringsPanel {
             .on_action(cx.listener(Self::focus_table))
             .on_action(cx.listener(Self::confirm_select))
             .on_action(cx.listener(Self::dismiss_table))
+            .on_action(cx.listener(|this, _: &gpui_kit::base::actions::Cancel, window, cx| {
+                this.dismiss_table(&DismissTable, window, cx);
+            }))
             .on_action(cx.listener(Self::copy_address))
             .on_action(cx.listener(Self::copy_value))
             .on_action(cx.listener(Self::clear_results))
@@ -963,5 +974,19 @@ mod tests {
                 ratio
             );
         }
+    }
+
+    #[test]
+    fn test_strings_panel_event_focus_editor() {
+        let event = super::StringsPanelEvent::FocusEditor;
+        assert_eq!(event, super::StringsPanelEvent::FocusEditor);
+
+        let parent_ctx = gpui_kit::KeyContext::try_from("StringsPanel").unwrap();
+        let child_ctx = gpui_kit::KeyContext::try_from("DataTable").unwrap();
+        let contexts = vec![parent_ctx, child_ctx];
+
+        let pred_desc = gpui_kit::KeyBindingContextPredicate::parse("StringsPanel > DataTable").unwrap();
+        assert!(pred_desc.eval(&contexts));
+        assert_eq!(pred_desc.depth_of(&contexts), Some(2));
     }
 }

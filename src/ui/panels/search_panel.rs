@@ -50,8 +50,10 @@ pub const MAX_SEARCH_RESULTS: usize = 10_000;
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("escape", FocusTable, Some("SearchPanel")),
-        KeyBinding::new("enter", ConfirmSelect, Some("SearchPanel")),
+        KeyBinding::new("escape", DismissTable, Some("SearchPanel")),
+        KeyBinding::new("escape", DismissTable, Some("SearchPanel > DataTable")),
+        KeyBinding::new("enter", ConfirmSelect, Some("SearchPanel > DataTable")),
+        KeyBinding::new("down", FocusTable, Some("SearchPanel > Input")),
     ]);
 }
 
@@ -71,6 +73,7 @@ pub struct SearchTableDelegate {
     match_len: usize,
     editor: Option<Entity<Editor>>,
     selected_index: Option<usize>,
+    focus_handle: FocusHandle,
 }
 
 impl TableDelegate for SearchTableDelegate {
@@ -144,7 +147,8 @@ impl TableDelegate for SearchTableDelegate {
         let buffer_data = buffer.as_ref().map(|b| b.data());
         let (preview_hex, preview_text) = format_row_previews(buffer_data, offset, match_len, encoding);
 
-        menu.menu_with_icon("Copy Address", IconName::Hash, Box::new(CopyAddress { value: offset_value }))
+        menu.action_context(self.focus_handle.clone())
+            .menu_with_icon("Copy Address", IconName::Hash, Box::new(CopyAddress { value: offset_value }))
             .menu_with_icon("Copy Hex Value", IconName::Binary, Box::new(CopyValue { value: preview_hex }))
             .menu_with_icon("Copy Text", IconName::TextInitial, Box::new(CopyText { value: preview_text }))
     }
@@ -224,6 +228,7 @@ impl SearchPanel {
             match_len: 0,
             editor: None,
             selected_index: None,
+            focus_handle: focus_handle.clone(),
         };
         let table_state = cx.new(|cx| {
             TableState::new(delegate, window, cx)
@@ -456,9 +461,6 @@ impl SearchPanel {
         if !self.results.is_empty() {
             let focus_handle = self.table_state.read(cx).focus_handle(cx);
             focus_handle.focus(window, cx);
-        } else {
-            cx.emit(SearchPanelEvent::FocusEditor);
-            window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
         }
     }
 
@@ -744,6 +746,12 @@ impl Render for SearchPanel {
                 .overflow_hidden()
                 .children(truncation_notice)
                 .child(DataTable::new(&self.table_state).bordered(false))
+                .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.dismiss_table(&DismissTable, window, cx);
+                        cx.stop_propagation();
+                    }
+                }))
                 .into_any_element()
         };
 
@@ -753,6 +761,9 @@ impl Render for SearchPanel {
             .on_action(cx.listener(Self::focus_table))
             .on_action(cx.listener(Self::confirm_select))
             .on_action(cx.listener(Self::dismiss_table))
+            .on_action(cx.listener(|this, _: &gpui_kit::base::actions::Cancel, window, cx| {
+                this.dismiss_table(&DismissTable, window, cx);
+            }))
             .on_action(cx.listener(Self::clear_results_action))
             .on_action(cx.listener(Self::copy_address))
             .on_action(cx.listener(Self::copy_value))
@@ -811,5 +822,32 @@ mod tests {
         assert_eq!(page_up_idx(4), 0);
         assert_eq!(page_down_idx(5), 15);
         assert_eq!(page_down_idx(20), 24);
+    }
+
+    #[test]
+    fn test_search_panel_event_focus_editor() {
+        let event = super::SearchPanelEvent::FocusEditor;
+        assert_eq!(event, super::SearchPanelEvent::FocusEditor);
+
+        let parent_ctx = gpui_kit::KeyContext::try_from("SearchPanel").unwrap();
+        let child_ctx = gpui_kit::KeyContext::try_from("DataTable").unwrap();
+        let contexts = vec![parent_ctx, child_ctx];
+
+        let pred_and = gpui_kit::KeyBindingContextPredicate::parse("SearchPanel && DataTable").unwrap();
+        assert!(!pred_and.eval(&contexts), "SearchPanel && DataTable should NOT match across separate elements!");
+
+        let pred_desc = gpui_kit::KeyBindingContextPredicate::parse("SearchPanel > DataTable").unwrap();
+        assert!(
+            pred_desc.eval(&contexts),
+            "SearchPanel > DataTable MUST match when DataTable is child of SearchPanel!"
+        );
+        assert_eq!(
+            pred_desc.depth_of(&contexts),
+            Some(2),
+            "Depth of SearchPanel > DataTable should be 2 (the DataTable depth)"
+        );
+
+        let table_only = gpui_kit::KeyBindingContextPredicate::parse("DataTable").unwrap();
+        assert_eq!(table_only.depth_of(&contexts), Some(2));
     }
 }

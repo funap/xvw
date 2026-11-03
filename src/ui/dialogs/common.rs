@@ -1,5 +1,5 @@
 use gpui_kit::component::kbd::Kbd;
-use gpui_kit::component::{h_flex, theme::Theme, v_flex};
+use gpui_kit::component::{h_flex, theme::Theme};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -8,31 +8,6 @@ pub const PALETTE_WIDTH: f32 = 580.0;
 
 /// Standard fixed height in pixels for the scrollable results list in top-level palettes.
 pub const PALETTE_LIST_HEIGHT: f32 = 320.0;
-
-/// Creates a standardized top-level palette shell container (width, background, border, shadow, rounded corners).
-#[allow(dead_code)]
-pub fn palette_modal_container(theme: &Theme) -> Div {
-    v_flex()
-        .w(px(PALETTE_WIDTH))
-        .bg(theme.background)
-        .border_1()
-        .border_color(theme.border)
-        .rounded_lg()
-        .shadow_xl()
-        .overflow_hidden()
-}
-
-/// Creates a standardized palette results list container with fixed height and scrolling.
-#[allow(dead_code)]
-pub fn palette_list_container(scroll_handle: &ScrollHandle, id: impl Into<ElementId>) -> Stateful<Div> {
-    v_flex()
-        .id(id)
-        .track_scroll(scroll_handle)
-        .h(px(PALETTE_LIST_HEIGHT))
-        .overflow_y_scroll()
-        .p_1p5()
-        .gap_0p5()
-}
 
 /// Creates a standardized empty message centered in the fixed-height palette list area.
 pub fn render_palette_empty_message(message: &str, theme: &Theme) -> AnyElement {

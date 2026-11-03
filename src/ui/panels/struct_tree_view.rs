@@ -197,7 +197,8 @@ fn resolve_field_at_path<'a>(parse_result: &'a Option<std::sync::Arc<ParseResult
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("escape", Dismiss, Some("StructTreeView && !Input")),
+        KeyBinding::new("escape", Dismiss, Some("StructTreeView")),
+        KeyBinding::new("escape", Dismiss, Some("StructTreeView > DataTable")),
         KeyBinding::new("up", MoveUp, Some("StructTreeView && !Input")),
         KeyBinding::new("down", MoveDown, Some("StructTreeView && !Input")),
         KeyBinding::new("k", MoveUp, Some("StructTreeView && !Input")),
@@ -221,12 +222,12 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("l", Expand, Some("StructTreeView && !Input")),
         KeyBinding::new("h", Collapse, Some("StructTreeView && !Input")),
         // When DataTable has focus within StructTreeView, override navigation for tree actions
-        KeyBinding::new("space", ToggleExpand, Some("StructTreeView && Table")),
-        KeyBinding::new("enter", ToggleExpand, Some("StructTreeView && Table")),
-        KeyBinding::new("right", Expand, Some("StructTreeView && Table")),
-        KeyBinding::new("left", Collapse, Some("StructTreeView && Table")),
-        KeyBinding::new("l", Expand, Some("StructTreeView && Table")),
-        KeyBinding::new("h", Collapse, Some("StructTreeView && Table")),
+        KeyBinding::new("space", ToggleExpand, Some("StructTreeView > DataTable")),
+        KeyBinding::new("enter", ToggleExpand, Some("StructTreeView > DataTable")),
+        KeyBinding::new("right", Expand, Some("StructTreeView > DataTable")),
+        KeyBinding::new("left", Collapse, Some("StructTreeView > DataTable")),
+        KeyBinding::new("l", Expand, Some("StructTreeView > DataTable")),
+        KeyBinding::new("h", Collapse, Some("StructTreeView > DataTable")),
     ]);
 }
 
@@ -250,9 +251,10 @@ enum StructureExportStatus {
     Error(String),
 }
 
-#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StructTreeViewEvent {
     NavigateTo { offset: usize, size: usize },
+    FocusEditor,
 }
 
 pub struct StructTreeTableDelegate {
@@ -400,7 +402,10 @@ impl TableDelegate for StructTreeTableDelegate {
             .menu_with_icon(
                 format!("Go to Offset ({})", offset_hex),
                 IconName::ChevronRight,
-                Box::new(crate::actions::GoToBeginning),
+                Box::new(crate::actions::NavigateToOffset {
+                    target: offset_hex.clone(),
+                    target_file: None,
+                }),
             )
             .separator()
             .menu_with_icon(
@@ -1385,6 +1390,7 @@ impl StructTreeView {
     }
 
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(StructTreeViewEvent::FocusEditor);
         window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
@@ -1625,6 +1631,9 @@ impl Render for StructTreeView {
             .on_action(cx.listener(Self::expand))
             .on_action(cx.listener(Self::collapse))
             .on_action(cx.listener(Self::dismiss))
+            .on_action(cx.listener(|this, _: &gpui_kit::base::actions::Cancel, window, cx| {
+                this.dismiss(&Dismiss, window, cx);
+            }))
             .on_action(cx.listener(Self::on_action_expand_all))
             .on_action(cx.listener(Self::on_action_collapse_all))
             .on_action(cx.listener(Self::on_action_toggle_structure_address_column))
@@ -1816,7 +1825,16 @@ impl Render for StructTreeView {
                     .into_any_element()
                 }
             } else {
-                DataTable::new(&self.table_state).bordered(false).into_any_element()
+                div()
+                    .size_full()
+                    .child(DataTable::new(&self.table_state).bordered(false))
+                    .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        if event.keystroke.key == "escape" {
+                            this.dismiss(&Dismiss, window, cx);
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .into_any_element()
             }))
     }
 }
@@ -2106,5 +2124,33 @@ mod tests {
         assert_eq!(flattened[1].path, vec![0, 0]);
         assert_eq!(flattened[1].depth, 1);
         assert!(!flattened[1].has_children);
+    }
+
+    #[test]
+    fn test_go_to_offset_action_target_format() {
+        let field_offset = 0x12ABusize;
+        let offset_hex = format!("0x{:08X}", field_offset);
+        assert_eq!(offset_hex, "0x000012AB");
+
+        let action = crate::actions::NavigateToOffset {
+            target: offset_hex,
+            target_file: None,
+        };
+        assert_eq!(action.target, "0x000012AB");
+        assert!(action.target_file.is_none());
+    }
+
+    #[test]
+    fn test_struct_tree_view_event_focus_editor() {
+        let event = super::StructTreeViewEvent::FocusEditor;
+        assert_eq!(event, super::StructTreeViewEvent::FocusEditor);
+
+        let parent_ctx = gpui_kit::KeyContext::try_from("StructTreeView").unwrap();
+        let child_ctx = gpui_kit::KeyContext::try_from("DataTable").unwrap();
+        let contexts = vec![parent_ctx, child_ctx];
+
+        let pred_desc = gpui_kit::KeyBindingContextPredicate::parse("StructTreeView > DataTable").unwrap();
+        assert!(pred_desc.eval(&contexts));
+        assert_eq!(pred_desc.depth_of(&contexts), Some(2));
     }
 }
