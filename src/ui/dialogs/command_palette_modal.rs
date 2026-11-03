@@ -33,9 +33,6 @@ pub enum CommandPaletteEvent {
     Cancel,
 }
 
-/// Maximum number of candidate items to display at once to prevent layout stalls.
-pub const MAX_PALETTE_RESULTS: usize = 80;
-
 /// Pure helper that filters and ranks commands by query using fuzzy matching.
 pub fn filter_commands(commands: &[PaletteCommand], query: &str, state: &MenuEditorState) -> Vec<CommandPaletteItem> {
     let trimmed = query.trim();
@@ -44,7 +41,6 @@ pub fn filter_commands(commands: &[PaletteCommand], query: &str, state: &MenuEdi
         return commands
             .iter()
             .enumerate()
-            .take(MAX_PALETTE_RESULTS)
             .map(|(idx, cmd)| {
                 let is_executable = cmd.is_executable(state);
                 CommandPaletteItem {
@@ -98,7 +94,7 @@ pub fn filter_commands(commands: &[PaletteCommand], query: &str, state: &MenuEdi
     // Sort descending by score; on tie, preserve command declaration order
     scored.sort_by(|(s_a, idx_a, _), (s_b, idx_b, _)| s_b.cmp(s_a).then_with(|| idx_a.cmp(idx_b)));
 
-    scored.into_iter().take(MAX_PALETTE_RESULTS).map(|(_, _, item)| item).collect()
+    scored.into_iter().map(|(_, _, item)| item).collect()
 }
 
 pub struct CommandPaletteModal {
