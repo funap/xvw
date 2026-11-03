@@ -12,7 +12,7 @@ categories = ["development-tools", "gui"]
 
 [dependencies]
 dirs = "7.0.0"
-gpui-kit = { version = "0.8.1", features = ["tree-sitter-markdown"] }
+gpui-kit = { version = "0.9.0", features = ["tree-sitter-markdown"] }
 rust-embed = "8.13.0"
 anyhow = "1.0.104"
 tokio = { version = "1.54.1", features = ["full"] }
@@ -27,7 +27,7 @@ memmap2 = "0.9.12"
 flate2 = "1.1.10"
 image = "0.25.10"
 sha2 = "0.11.1"
-encoding_rs = "0.8.42"
+encoding_rs = "0.8.44"
 getrandom = "0.4.3"
 lsp-types = "0.97.0"
 
