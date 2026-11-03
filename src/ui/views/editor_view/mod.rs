@@ -509,8 +509,8 @@ impl EditorView {
                         Some(scan_start..scan_end),
                     );
 
-                    let search_panel_color = Hsla { a: 0.35, ..theme.warning };
-                    let search_panel_active_color = theme.warning;
+                    let search_panel_color = theme.warning;
+                    let search_panel_active_color = theme.warning_active;
                     let current_result = editor.search_state.current_result();
                     let selection_range = editor.selection_range();
 
@@ -576,14 +576,7 @@ impl EditorView {
         };
 
         // 4. Merge highlights: Find Widget highlights take precedence over SearchPanel highlights where they overlap
-        if find_highlights.is_empty() {
-            highlights.extend(search_highlights);
-        } else {
-            let find_mask: Vec<Range<usize>> = find_highlights.iter().map(|(r, _)| r.clone()).collect();
-            let effective_search_highlights = subtract_ranges(search_highlights, &find_mask);
-            highlights.extend(effective_search_highlights);
-            highlights.extend(find_highlights);
-        }
+        highlights.extend(compose_search_highlights(search_highlights, find_highlights));
 
         self.hex_view.update(cx, |view, cx| {
             view.set_highlights(highlights, cx);
@@ -598,22 +591,17 @@ impl EditorView {
     fn perform_search_next(&mut self, cx: &mut Context<Self>) {
         let is_search_visible = self.is_search_visible;
         let (next_offset, pattern_len) = self.editor.update(cx, |editor: &mut Editor, cx| {
-            if is_search_visible {
+            let res = if is_search_visible || editor.search_state.query.is_empty() {
                 let pattern_len = editor.find_pattern().map(|p| p.len()).unwrap_or(1);
                 let offset = editor.next_find_result();
-                cx.notify();
-                (offset, pattern_len)
-            } else if !editor.search_state.query.is_empty() {
-                let pattern_len = editor.search_pattern().map(|p| p.len()).unwrap_or(1);
-                let offset = editor.next_search_result();
-                cx.notify();
                 (offset, pattern_len)
             } else {
-                let pattern_len = editor.find_pattern().map(|p| p.len()).unwrap_or(1);
-                let offset = editor.next_find_result();
-                cx.notify();
+                let pattern_len = editor.search_pattern().map(|p| p.len()).unwrap_or(1);
+                let offset = editor.next_search_result();
                 (offset, pattern_len)
-            }
+            };
+            cx.notify();
+            res
         });
         if let Some(offset) = next_offset {
             self.hex_view.update(cx, |view, cx| {
@@ -632,22 +620,17 @@ impl EditorView {
     fn perform_search_prev(&mut self, cx: &mut Context<Self>) {
         let is_search_visible = self.is_search_visible;
         let (prev_offset, pattern_len) = self.editor.update(cx, |editor: &mut Editor, cx| {
-            if is_search_visible {
+            let res = if is_search_visible || editor.search_state.query.is_empty() {
                 let pattern_len = editor.find_pattern().map(|p| p.len()).unwrap_or(1);
                 let offset = editor.prev_find_result();
-                cx.notify();
-                (offset, pattern_len)
-            } else if !editor.search_state.query.is_empty() {
-                let pattern_len = editor.search_pattern().map(|p| p.len()).unwrap_or(1);
-                let offset = editor.prev_search_result();
-                cx.notify();
                 (offset, pattern_len)
             } else {
-                let pattern_len = editor.find_pattern().map(|p| p.len()).unwrap_or(1);
-                let offset = editor.prev_find_result();
-                cx.notify();
+                let pattern_len = editor.search_pattern().map(|p| p.len()).unwrap_or(1);
+                let offset = editor.prev_search_result();
                 (offset, pattern_len)
-            }
+            };
+            cx.notify();
+            res
         });
         if let Some(offset) = prev_offset {
             self.hex_view.update(cx, |view, cx| {
@@ -1211,6 +1194,16 @@ impl crate::ui::pane::WorkspaceTab for Entity<EditorView> {
     }
 }
 
+/// Composes search panel highlights and find widget highlights, giving precedence
+/// to find widget highlights where they overlap.
+pub fn compose_search_highlights(search_panel_highlights: Vec<(Range<usize>, Hsla)>, find_highlights: Vec<(Range<usize>, Hsla)>) -> Vec<(Range<usize>, Hsla)> {
+    let find_mask: Vec<Range<usize>> = find_highlights.iter().map(|(r, _)| r.clone()).collect();
+    let effective_search_highlights = subtract_ranges(search_panel_highlights, &find_mask);
+    let mut combined = effective_search_highlights;
+    combined.extend(find_highlights);
+    combined
+}
+
 /// Subtracts a slice of mask ranges from a vector of highlighted ranges, preserving
 /// non-overlapping portions with their original colors.
 pub fn subtract_ranges(source_ranges: Vec<(Range<usize>, Hsla)>, mask_ranges: &[Range<usize>]) -> Vec<(Range<usize>, Hsla)> {
@@ -1356,5 +1349,25 @@ mod tests {
         let source = vec![(10..20, color)];
         let result = subtract_ranges(source, &[5..25]);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_compose_search_highlights_precedence() {
+        let search_color = Hsla {
+            h: 0.1,
+            s: 0.5,
+            l: 0.5,
+            a: 0.5,
+        };
+        let find_color = Hsla {
+            h: 0.2,
+            s: 0.8,
+            l: 0.5,
+            a: 1.0,
+        };
+        let search = vec![(10..30, search_color)];
+        let find = vec![(15..25, find_color)];
+        let composed = compose_search_highlights(search, find.clone());
+        assert_eq!(composed, vec![(10..15, search_color), (25..30, search_color), (15..25, find_color)]);
     }
 }

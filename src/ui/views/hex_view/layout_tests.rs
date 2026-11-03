@@ -846,34 +846,26 @@ fn merge_search_and_find_highlights_for_test(
     search_highlights: Vec<(std::ops::Range<usize>, Hsla)>,
     find_highlights: Vec<(std::ops::Range<usize>, Hsla)>,
 ) -> Vec<(std::ops::Range<usize>, Hsla)> {
-    if find_highlights.is_empty() {
-        search_highlights
-    } else {
-        let find_mask: Vec<std::ops::Range<usize>> = find_highlights.iter().map(|(r, _)| r.clone()).collect();
-        let mut result = crate::ui::views::editor_view::subtract_ranges(search_highlights, &find_mask);
-        result.extend(find_highlights);
-        result
-    }
+    crate::ui::views::editor_view::compose_search_highlights(search_highlights, find_highlights)
 }
 
 fn check_dual_search_highlight_resolution_and_precedence() {
-    let warning_base = hsla(0.12, 0.9, 0.5, 1.0);
-    let search_muted = Hsla { a: 0.35, ..warning_base };
-    let find_prominent = warning_base;
+    let search_panel_color = hsla(0.55, 0.7, 0.4, 1.0);
+    let find_prominent = hsla(0.12, 0.9, 0.5, 1.0);
     let find_active_cursor = hsla(0.12, 0.9, 0.7, 1.0);
 
     // Scenario 1: Partial overlap - Find Widget match is inside SearchPanel match
-    // SearchPanel matches 10..30 with muted backdrop.
+    // SearchPanel matches 10..30.
     // Find Widget matches 16..24 with prominent highlight.
-    let search_hl = vec![(10..30, search_muted)];
+    let search_hl = vec![(10..30, search_panel_color)];
     let find_hl = vec![(16..24, find_prominent)];
     let merged = merge_search_and_find_highlights_for_test(search_hl, find_hl);
 
-    // Verify non-overlapping SearchPanel ranges retain muted highlight
-    assert_eq!(highlight_color_for_range(10, 11, &merged), Some(search_muted));
-    assert_eq!(highlight_color_for_range(15, 16, &merged), Some(search_muted));
-    assert_eq!(highlight_color_for_range(24, 25, &merged), Some(search_muted));
-    assert_eq!(highlight_color_for_range(29, 30, &merged), Some(search_muted));
+    // Verify non-overlapping SearchPanel ranges retain search panel highlight
+    assert_eq!(highlight_color_for_range(10, 11, &merged), Some(search_panel_color));
+    assert_eq!(highlight_color_for_range(15, 16, &merged), Some(search_panel_color));
+    assert_eq!(highlight_color_for_range(24, 25, &merged), Some(search_panel_color));
+    assert_eq!(highlight_color_for_range(29, 30, &merged), Some(search_panel_color));
 
     // Verify overlapping range is overridden by prominent Find Widget highlight
     assert_eq!(highlight_color_for_range(16, 17, &merged), Some(find_prominent));
@@ -887,25 +879,25 @@ fn check_dual_search_highlight_resolution_and_precedence() {
     // Scenario 2: Active match under cursor in Find Widget overriding SearchPanel
     // SearchPanel matches 0..10 and 40..50.
     // Find Widget has normal match at 5..15 and active cursor match at 42..48.
-    let search_hl2 = vec![(0..10, search_muted), (40..50, search_muted)];
+    let search_hl2 = vec![(0..10, search_panel_color), (40..50, search_panel_color)];
     let find_hl2 = vec![(5..15, find_prominent), (42..48, find_active_cursor)];
     let merged2 = merge_search_and_find_highlights_for_test(search_hl2, find_hl2);
 
-    // 0..5 retains muted SearchPanel highlight
-    assert_eq!(highlight_color_for_range(2, 3, &merged2), Some(search_muted));
+    // 0..5 retains SearchPanel highlight
+    assert_eq!(highlight_color_for_range(2, 3, &merged2), Some(search_panel_color));
     // 5..15 overrides with prominent find highlight
     assert_eq!(highlight_color_for_range(5, 6, &merged2), Some(find_prominent));
     assert_eq!(highlight_color_for_range(8, 9, &merged2), Some(find_prominent));
     assert_eq!(highlight_color_for_range(12, 13, &merged2), Some(find_prominent));
-    // 40..42 retains muted SearchPanel highlight
-    assert_eq!(highlight_color_for_range(41, 42, &merged2), Some(search_muted));
+    // 40..42 retains SearchPanel highlight
+    assert_eq!(highlight_color_for_range(41, 42, &merged2), Some(search_panel_color));
     // 42..48 overrides with active cursor find highlight
     assert_eq!(highlight_color_for_range(44, 45, &merged2), Some(find_active_cursor));
-    // 48..50 retains muted SearchPanel highlight
-    assert_eq!(highlight_color_for_range(49, 50, &merged2), Some(search_muted));
+    // 48..50 retains SearchPanel highlight
+    assert_eq!(highlight_color_for_range(49, 50, &merged2), Some(search_panel_color));
 
     // Scenario 3: Complete overlap - Find Widget completely encompasses SearchPanel match
-    let search_hl3 = vec![(10..20, search_muted)];
+    let search_hl3 = vec![(10..20, search_panel_color)];
     let find_hl3 = vec![(8..22, find_prominent)];
     let merged3 = merge_search_and_find_highlights_for_test(search_hl3, find_hl3);
     assert_eq!(merged3.len(), 1);
@@ -913,10 +905,10 @@ fn check_dual_search_highlight_resolution_and_precedence() {
     assert_eq!(highlight_color_for_range(15, 16, &merged3), Some(find_prominent));
 
     // Scenario 4: Disjoint matches (no overlap) - both retain their respective highlights
-    let search_hl4 = vec![(0..8, search_muted)];
+    let search_hl4 = vec![(0..8, search_panel_color)];
     let find_hl4 = vec![(12..20, find_prominent)];
     let merged4 = merge_search_and_find_highlights_for_test(search_hl4, find_hl4);
-    assert_eq!(highlight_color_for_range(4, 5, &merged4), Some(search_muted));
+    assert_eq!(highlight_color_for_range(4, 5, &merged4), Some(search_panel_color));
     assert_eq!(highlight_color_for_range(10, 11, &merged4), None);
     assert_eq!(highlight_color_for_range(16, 17, &merged4), Some(find_prominent));
 }
@@ -932,9 +924,8 @@ fn check_search_visibility_lifecycle() {
     let search_panel_query = "123";
     let find_widget_query = "DEF 123";
 
-    let warning_base = hsla(0.12, 0.9, 0.5, 1.0);
-    let search_muted = Hsla { a: 0.35, ..warning_base };
-    let find_prominent = warning_base;
+    let search_panel_color = hsla(0.55, 0.7, 0.4, 1.0);
+    let find_prominent = hsla(0.12, 0.9, 0.5, 1.0);
 
     // Helper that models EditorView::update_highlights generation logic
     let generate_highlights = |is_search_visible: bool| -> (HighlightList, HighlightList) {
@@ -943,7 +934,7 @@ fn check_search_visibility_lifecycle() {
         let search_matches = find_occurrences_segmented(buffer_data, &pattern_search, SearchLimit::Unlimited, &segments, None);
         let search_hl: Vec<_> = search_matches
             .into_iter()
-            .map(|offset| (offset..offset + pattern_search.len(), search_muted))
+            .map(|offset| (offset..offset + pattern_search.len(), search_panel_color))
             .collect();
 
         // 2. Find Widget matches (emitted ONLY if is_search_visible is true)
@@ -967,8 +958,8 @@ fn check_search_visibility_lifecycle() {
     assert_eq!(find_hl1.len(), 1); // "DEF 123" at 8..15
 
     let merged1 = merge_search_and_find_highlights_for_test(search_hl1, find_hl1);
-    // Byte 5 ("123" at 4..7) has no overlap with find (8..15) -> retains search_muted
-    assert_eq!(highlight_color_for_range(5, 6, &merged1), Some(search_muted));
+    // Byte 5 ("123" at 4..7) has no overlap with find (8..15) -> retains search_panel_color
+    assert_eq!(highlight_color_for_range(5, 6, &merged1), Some(search_panel_color));
     // Byte 10 ("DEF" at 8..11) is part of find -> find_prominent
     assert_eq!(highlight_color_for_range(10, 11, &merged1), Some(find_prominent));
     // Byte 13 ("123" at 12..15) overlaps find (8..15) -> Find Widget overrides SearchPanel
@@ -982,11 +973,11 @@ fn check_search_visibility_lifecycle() {
 
     let merged2 = merge_search_and_find_highlights_for_test(search_hl2, find_hl2);
     // SearchPanel highlights remain active in HexView
-    assert_eq!(highlight_color_for_range(5, 6, &merged2), Some(search_muted));
+    assert_eq!(highlight_color_for_range(5, 6, &merged2), Some(search_panel_color));
     // Byte 10 (DEF 123) is no longer highlighted because Find Widget is dismissed
     assert_eq!(highlight_color_for_range(10, 11, &merged2), None);
-    // Byte 13 (second "123") has reverted to SearchPanel's muted highlight
-    assert_eq!(highlight_color_for_range(13, 14, &merged2), Some(search_muted));
+    // Byte 13 (second "123") has reverted to SearchPanel's highlight
+    assert_eq!(highlight_color_for_range(13, 14, &merged2), Some(search_panel_color));
 
     // State 3: Search bar is re-opened (`is_search_visible == true`)
     let (search_hl3, find_hl3) = generate_highlights(true);

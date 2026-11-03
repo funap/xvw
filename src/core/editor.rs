@@ -447,10 +447,12 @@ impl Editor {
         &mut self.search_state
     }
 
+    /// Returns the search state for the editor's find bar.
     pub fn find_state(&self) -> &SearchState {
         &self.find_state
     }
 
+    /// Returns a mutable reference to the search state for the editor's find bar.
     pub fn find_state_mut(&mut self) -> &mut SearchState {
         &mut self.find_state
     }
@@ -881,10 +883,13 @@ impl Editor {
         self.search_state.search_pattern(self.options.encoding)
     }
 
+    /// Returns the search pattern for the find bar query, or `None` if the query is empty or invalid.
     pub fn find_pattern(&self) -> Option<Vec<PatternByte>> {
         self.find_state.search_pattern(self.options.encoding)
     }
 
+    /// Finds and navigates to the next occurrence matching the find bar query,
+    /// updating the cursor offset and unfolding hidden ranges if needed.
     pub fn next_find_result(&mut self) -> Option<usize> {
         let pattern = self.find_pattern()?;
         let doc = self.document.read().ok()?;
@@ -897,6 +902,8 @@ impl Editor {
         Some(next_offset)
     }
 
+    /// Finds and navigates to the previous occurrence matching the find bar query,
+    /// updating the cursor offset and unfolding hidden ranges if needed.
     pub fn prev_find_result(&mut self) -> Option<usize> {
         let pattern = self.find_pattern()?;
         let doc = self.document.read().ok()?;
