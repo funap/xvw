@@ -8,7 +8,9 @@ use gpui_kit::*;
 use crate::actions::{PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev};
 use crate::core::fuzzy_matcher::FuzzyMatcher;
 use crate::ui::components::EventInterceptionExt;
-use crate::ui::dialogs::common::{palette_list_container, palette_modal_container, render_highlighted_text, render_palette_empty_message};
+use crate::ui::dialogs::common::{
+    palette_list_container, palette_modal_container, render_highlighted_text, render_palette_empty_message, render_palette_footer_hints, render_shortcut_badge,
+};
 use crate::ui::icon::IconName;
 use crate::ui::menus::{MenuEditorState, PaletteCommand};
 
@@ -219,18 +221,7 @@ impl Render for CommandPaletteModal {
                     true,
                 );
 
-                let shortcut_badge = item.shortcut.as_ref().map(|sc| {
-                    div()
-                        .px_1p5()
-                        .py_0p5()
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(theme.border)
-                        .bg(theme.secondary)
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(sc.clone())
-                });
+                let shortcut_badge = item.shortcut.as_ref().map(|sc| render_shortcut_badge(sc));
 
                 let status_badge = if !is_executable {
                     Some(div().text_xs().text_color(theme.muted_foreground).child("unavailable"))
@@ -326,7 +317,7 @@ impl Render for CommandPaletteModal {
                     .rounded_b_lg()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(h_flex().items_center().gap_3().child("↑↓ Navigate").child("↵ Select").child("Esc Dismiss"))
+                    .child(render_palette_footer_hints())
                     .child(format!("{} commands", self.filtered_items.len())),
             )
     }

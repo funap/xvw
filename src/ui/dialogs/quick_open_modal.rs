@@ -365,7 +365,7 @@ pub fn format_relative_time(time: SystemTime) -> String {
         "recently".to_string()
     }
 }
-pub use super::common::{palette_list_container, palette_modal_container, render_highlighted_text, render_palette_empty_message};
+pub use super::common::{palette_list_container, palette_modal_container, render_highlighted_text, render_palette_empty_message, render_palette_footer_hints};
 
 pub struct QuickOpenModal {
     focus_handle: FocusHandle,
@@ -788,9 +788,7 @@ impl Render for QuickOpenModal {
                         h_flex()
                             .items_center()
                             .gap_3()
-                            .child("↑↓ Navigate")
-                            .child("↵ Select")
-                            .child("Esc Dismiss")
+                            .child(render_palette_footer_hints())
                             .when(self.is_loading, |el| {
                                 el.child(
                                     h_flex()
