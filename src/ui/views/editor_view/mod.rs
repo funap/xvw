@@ -169,8 +169,9 @@ impl EditorView {
         // Subscribe to HexView scroll events to update highlights when scrolling
         cx.subscribe(&hex_view, |this, _, event: &crate::ui::views::hex_view::HexViewEvent, cx| {
             if let crate::ui::views::hex_view::HexViewEvent::Scrolled(_) = event {
-                let has_search =
-                    (this.is_search_visible && !this.search_bar.read(cx).query(cx).is_empty()) || !this.editor.read(cx).search_state.query.is_empty();
+                let has_search = (this.is_search_visible
+                    && (!this.search_bar.read(cx).query(cx).is_empty() || !this.editor.read(cx).find_state.query.is_empty()))
+                    || !this.editor.read(cx).search_state.query.is_empty();
                 if has_search {
                     this.update_highlights(cx);
                 }
@@ -208,16 +209,17 @@ impl EditorView {
         });
 
         let _editor_subscription = cx.observe(&editor, |this, editor, cx| {
-            let (bm_ver, cur, has_editor_search, pending_reparse) = {
+            let (bm_ver, cur, has_editor_search, has_find_search, pending_reparse) = {
                 let ed = editor.read(cx);
                 (
                     ed.bookmarks().version(),
                     ed.cursor.offset,
                     !ed.search_state.query.is_empty(),
+                    !ed.find_state.query.is_empty(),
                     ed.pending_structure_reparse(),
                 )
             };
-            let has_search = (this.is_search_visible && !this.search_bar.read(cx).query(cx).is_empty()) || has_editor_search;
+            let has_search = (this.is_search_visible && (!this.search_bar.read(cx).query(cx).is_empty() || has_find_search)) || has_editor_search;
 
             if bm_ver != this.last_bookmark_version || (has_search && Some(cur) != this.last_cursor_offset) {
                 this.last_bookmark_version = bm_ver;
@@ -237,7 +239,7 @@ impl EditorView {
             if this.is_search_visible {
                 let query = search_bar.read(cx).query(cx);
                 let mode = search_bar.read(cx).mode();
-                if query != this.editor.read(cx).search_state.query {
+                if query != this.editor.read(cx).find_state.query {
                     this.perform_incremental_search(&query, mode, cx);
                 }
             }
@@ -392,6 +394,7 @@ impl EditorView {
             self.hex_view.read(cx).focus_handle(cx).focus(window, cx);
         }
         self.update_top_overlay_state(cx);
+        self.update_highlights(cx);
         cx.notify();
     }
 
@@ -416,7 +419,7 @@ impl EditorView {
     fn perform_incremental_search(&mut self, query: &str, mode: SearchMode, cx: &mut Context<Self>) {
         if query.is_empty() {
             self.editor.update(cx, |editor: &mut Editor, cx| {
-                editor.search_state_mut().clear();
+                editor.find_state_mut().clear();
                 cx.notify();
             });
             self.update_highlights(cx);
@@ -424,7 +427,7 @@ impl EditorView {
         }
 
         self.editor.update(cx, |editor: &mut Editor, cx| {
-            editor.search_state_mut().set_query_and_mode(query.to_string(), mode);
+            editor.find_state_mut().set_query_and_mode(query.to_string(), mode);
             cx.notify();
         });
 
@@ -504,8 +507,8 @@ impl EditorView {
 
     fn perform_search_next(&mut self, cx: &mut Context<Self>) {
         let (next_offset, pattern_len) = self.editor.update(cx, |editor: &mut Editor, cx| {
-            let pattern_len = editor.search_pattern().map(|p| p.len()).unwrap_or(1);
-            let offset = editor.next_search_result();
+            let pattern_len = editor.find_pattern().map(|p| p.len()).unwrap_or(1);
+            let offset = editor.next_find_result();
             cx.notify();
             (offset, pattern_len)
         });
@@ -525,8 +528,8 @@ impl EditorView {
 
     fn perform_search_prev(&mut self, cx: &mut Context<Self>) {
         let (prev_offset, pattern_len) = self.editor.update(cx, |editor: &mut Editor, cx| {
-            let pattern_len = editor.search_pattern().map(|p| p.len()).unwrap_or(1);
-            let offset = editor.prev_search_result();
+            let pattern_len = editor.find_pattern().map(|p| p.len()).unwrap_or(1);
+            let offset = editor.prev_find_result();
             cx.notify();
             (offset, pattern_len)
         });
