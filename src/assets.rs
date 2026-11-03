@@ -1,4 +1,3 @@
-use anyhow::anyhow;
 use gpui_kit::{AssetSource, Result, SharedString};
 use rust_embed::RustEmbed;
 use std::borrow::Cow;
@@ -16,12 +15,41 @@ impl AssetSource for Assets {
             return Ok(None);
         }
 
-        Self::get(path)
-            .map(|f| Some(f.data))
-            .ok_or_else(|| anyhow!("could not find asset at path \"{path}\""))
+        if let Some(f) = Self::get(path) {
+            return Ok(Some(f.data));
+        }
+
+        gpui_kit::assets::Assets.load(path)
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        Ok(Self::iter().filter_map(|p| p.starts_with(path).then(|| p.into())).collect())
+        let mut paths: Vec<SharedString> = Self::iter().filter_map(|p| p.starts_with(path).then(|| p.into())).collect();
+        if let Ok(component_paths) = gpui_kit::assets::Assets.list(path) {
+            paths.extend(component_paths);
+            paths.sort();
+            paths.dedup();
+        }
+        Ok(paths)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_assets_load_sort_icons() {
+        let assets = Assets;
+        let asc = assets.load("icons/sort-ascending.svg").expect("load asc").expect("asc exists");
+        assert!(!asc.is_empty());
+        assert!(std::str::from_utf8(&asc).unwrap().contains("<svg"));
+
+        let desc = assets.load("icons/sort-descending.svg").expect("load desc").expect("desc exists");
+        assert!(!desc.is_empty());
+        assert!(std::str::from_utf8(&desc).unwrap().contains("<svg"));
+
+        let default_sort = assets.load("icons/chevrons-up-down.svg").expect("load chevrons").expect("chevrons exist");
+        assert!(!default_sort.is_empty());
+        assert!(std::str::from_utf8(&default_sort).unwrap().contains("<svg"));
     }
 }

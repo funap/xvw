@@ -2,13 +2,14 @@ use crate::core::editor::Editor;
 use crate::core::format::{format_size_friendly, format_with_commas};
 use crate::core::radix::DisplayRadix;
 use crate::core::structure::{
-    ParseResult, ParsedField, StructureYamlIncludeOffsets, StructureYamlShaThreshold, YamlExportOptions, format_parse_result_as_text,
+    FieldValue, ParseResult, ParsedField, StructureYamlIncludeOffsets, StructureYamlShaThreshold, YamlExportOptions, format_parse_result_as_text,
     format_parse_result_as_yaml_with_options,
 };
 use crate::ui::appearance::Appearance;
-use crate::ui::components::data_table::{TableColumn, VirtualTable, VirtualTableState};
 use crate::ui::icon::IconName;
-use gpui_kit::component::menu::ContextMenuExt as _;
+use crate::ui::views::hex_view::paint::DescriptionPalette;
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu};
+use gpui_kit::component::table::{Column, DataTable, TableDelegate, TableEvent, TableState};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, button::ButtonVariants as _, h_flex, toolbar::Toolbar, v_flex,
 };
@@ -16,7 +17,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 actions!(
@@ -46,11 +47,11 @@ const CONTEXT: &str = "StructTreeView";
 const TREE_INDICATOR_WIDTH: f32 = 12.0;
 const TREE_INDENT_WIDTH: f32 = 14.0;
 const COLUMN_GAP: f32 = 4.0;
-const STRUCTURE_ROW_HEIGHT: f32 = 28.0;
 const FIELD_COLUMN_WIDTH: f32 = 150.0;
 const ADDRESS_COLUMN_WIDTH: f32 = 78.0;
 const TYPE_COLUMN_WIDTH: f32 = 108.0;
 const SIZE_COLUMN_WIDTH: f32 = 58.0;
+const VALUE_COLUMN_WIDTH: f32 = 180.0;
 const AUTOFIT_HORIZONTAL_PADDING: f32 = 16.0;
 const AUTOFIT_MIN_WIDTH: f32 = 52.0;
 const AUTOFIT_MAX_WIDTH: f32 = 360.0;
@@ -58,23 +59,55 @@ const AUTOFIT_CHAR_WIDTH: f32 = 7.2;
 const AUTOFIT_WIDE_CHAR_WIDTH: f32 = 13.0;
 const AUTOFIT_MAX_TEXT_CHARS: usize = 128;
 
-fn default_structure_columns() -> Vec<TableColumn> {
-    vec![
-        TableColumn::new("field", "Field", px(FIELD_COLUMN_WIDTH)).min_width(px(60.0)).resizable(true),
-        TableColumn::new("address", "Address", px(ADDRESS_COLUMN_WIDTH))
-            .min_width(px(50.0))
-            .resizable(true)
-            .visible(true),
-        TableColumn::new("type", "Type", px(TYPE_COLUMN_WIDTH))
-            .min_width(px(50.0))
-            .resizable(true)
-            .visible(true),
-        TableColumn::new("size", "Size", px(SIZE_COLUMN_WIDTH))
-            .min_width(px(40.0))
-            .resizable(true)
-            .visible(true),
-        TableColumn::new("value", "Value", px(180.0)).min_width(px(60.0)).resizable(true),
-    ]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StructColumn {
+    Field,
+    Address,
+    Type,
+    Size,
+    Value,
+}
+
+impl StructColumn {
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::Field => "field",
+            Self::Address => "address",
+            Self::Type => "type",
+            Self::Size => "size",
+            Self::Value => "value",
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Field => "Field",
+            Self::Address => "Address",
+            Self::Type => "Type",
+            Self::Size => "Size",
+            Self::Value => "Value",
+        }
+    }
+
+    pub fn default_width(&self) -> Pixels {
+        match self {
+            Self::Field => px(FIELD_COLUMN_WIDTH),
+            Self::Address => px(ADDRESS_COLUMN_WIDTH),
+            Self::Type => px(TYPE_COLUMN_WIDTH),
+            Self::Size => px(SIZE_COLUMN_WIDTH),
+            Self::Value => px(VALUE_COLUMN_WIDTH),
+        }
+    }
+
+    pub fn min_width(&self) -> Pixels {
+        match self {
+            Self::Field => px(60.0),
+            Self::Address => px(50.0),
+            Self::Type => px(50.0),
+            Self::Size => px(40.0),
+            Self::Value => px(60.0),
+        }
+    }
 }
 
 fn path_from_string_file_name(path: &str) -> String {
@@ -104,9 +137,68 @@ fn default_yaml_file_name(definition_id: &str) -> String {
     name
 }
 
+fn estimated_text_width(text: &str) -> f32 {
+    text.chars()
+        .take(AUTOFIT_MAX_TEXT_CHARS)
+        .map(|character| if character.is_ascii() { AUTOFIT_CHAR_WIDTH } else { AUTOFIT_WIDE_CHAR_WIDTH })
+        .sum()
+}
+
+fn value_text(parsed_field: &ParsedField, radix: DisplayRadix) -> String {
+    if parsed_field.is_struct() {
+        format!(
+            "{} child{}",
+            parsed_field.children.len(),
+            if parsed_field.children.len() == 1 { "" } else { "ren" }
+        )
+    } else if let Some(label) = &parsed_field.enum_label {
+        format!("{} ({})", parsed_field.value.format_with_radix(radix), label)
+    } else {
+        parsed_field.value.format_with_radix(radix)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum StructValueStyle {
+    StructSummary(usize),
+    Enum { value: String, label: String },
+    Number(String),
+    String(String),
+    Bytes(String),
+}
+
+pub(crate) fn categorize_field_value(parsed_field: &ParsedField, radix: DisplayRadix) -> StructValueStyle {
+    if parsed_field.is_struct() {
+        StructValueStyle::StructSummary(parsed_field.children.len())
+    } else if let Some(label) = &parsed_field.enum_label {
+        StructValueStyle::Enum {
+            value: parsed_field.value.format_with_radix(radix),
+            label: label.clone(),
+        }
+    } else {
+        let val_str = parsed_field.value.format_with_radix(radix);
+        match &parsed_field.value {
+            FieldValue::String(_) => StructValueStyle::String(val_str),
+            FieldValue::Bytes(_) => StructValueStyle::Bytes(val_str),
+            _ => StructValueStyle::Number(val_str),
+        }
+    }
+}
+
+fn resolve_field_at_path<'a>(parse_result: &'a Option<std::sync::Arc<ParseResult>>, path: &[usize]) -> Option<&'a ParsedField> {
+    let res = parse_result.as_ref()?;
+    let (&first, rest) = path.split_first()?;
+    let mut target_field = res.fields.get(first)?;
+    for &idx in rest {
+        target_field = target_field.children.get(idx)?;
+    }
+    Some(target_field)
+}
+
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("escape", Dismiss, Some("StructTreeView && !Input")),
+        KeyBinding::new("escape", Dismiss, Some("StructTreeView")),
+        KeyBinding::new("escape", Dismiss, Some("StructTreeView > DataTable")),
         KeyBinding::new("up", MoveUp, Some("StructTreeView && !Input")),
         KeyBinding::new("down", MoveDown, Some("StructTreeView && !Input")),
         KeyBinding::new("k", MoveUp, Some("StructTreeView && !Input")),
@@ -129,41 +221,14 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("left", Collapse, Some("StructTreeView && !Input")),
         KeyBinding::new("l", Expand, Some("StructTreeView && !Input")),
         KeyBinding::new("h", Collapse, Some("StructTreeView && !Input")),
+        // When DataTable has focus within StructTreeView, override navigation for tree actions
+        KeyBinding::new("space", ToggleExpand, Some("StructTreeView > DataTable")),
+        KeyBinding::new("enter", ToggleExpand, Some("StructTreeView > DataTable")),
+        KeyBinding::new("right", Expand, Some("StructTreeView > DataTable")),
+        KeyBinding::new("left", Collapse, Some("StructTreeView > DataTable")),
+        KeyBinding::new("l", Expand, Some("StructTreeView > DataTable")),
+        KeyBinding::new("h", Collapse, Some("StructTreeView > DataTable")),
     ]);
-}
-
-#[allow(dead_code)]
-pub enum StructTreeViewEvent {
-    NavigateTo { offset: usize, size: usize },
-}
-
-pub struct StructTreeView {
-    pub parse_result: Option<std::sync::Arc<ParseResult>>,
-    pub flattened_fields: Vec<FlattenedField>,
-    pub expanded_paths: HashSet<Vec<usize>>,
-    pub editor: Option<Entity<Editor>>,
-    pub table_state: VirtualTableState,
-    pub focus_handle: FocusHandle,
-    pub selected_index: Option<usize>,
-    pub recent_definition_paths: Vec<PathBuf>,
-    last_container_width: Pixels,
-    value_radix: DisplayRadix,
-    last_parse_id: Option<(String, usize, usize, usize, usize, bool)>,
-    last_selection_cursor: Option<usize>,
-    last_selection_scan_len: usize,
-    export_status: StructureExportStatus,
-    export_request_id: u64,
-    _editor_subscription: Option<Subscription>,
-}
-
-#[derive(Clone, Default)]
-enum StructureExportStatus {
-    #[default]
-    Idle,
-    Copying,
-    Exporting,
-    Success(String),
-    Error(String),
 }
 
 #[derive(Clone)]
@@ -176,12 +241,394 @@ pub struct FlattenedField {
     pub is_collapsed: bool,
 }
 
+#[derive(Clone, Default)]
+enum StructureExportStatus {
+    #[default]
+    Idle,
+    Copying,
+    Exporting,
+    Success(String),
+    Error(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StructTreeViewEvent {
+    NavigateTo { offset: usize, size: usize },
+    FocusEditor,
+}
+
+pub struct StructTreeTableDelegate {
+    panel: WeakEntity<StructTreeView>,
+    flattened_fields: Vec<FlattenedField>,
+    parse_result: Option<std::sync::Arc<ParseResult>>,
+    value_radix: DisplayRadix,
+    selected_index: Option<usize>,
+    visible_columns: Vec<StructColumn>,
+    column_widths: HashMap<StructColumn, Pixels>,
+    focus_handle: FocusHandle,
+}
+
+impl StructTreeTableDelegate {
+    fn field_at_path<'a>(&'a self, path: &[usize]) -> Option<&'a ParsedField> {
+        resolve_field_at_path(&self.parse_result, path)
+    }
+}
+
+impl TableDelegate for StructTreeTableDelegate {
+    fn columns_count(&self, _cx: &App) -> usize {
+        self.visible_columns.len()
+    }
+
+    fn rows_count(&self, _cx: &App) -> usize {
+        self.flattened_fields.len()
+    }
+
+    fn column(&self, col_ix: usize, _cx: &App) -> Column {
+        let Some(col) = self.visible_columns.get(col_ix) else {
+            return Column::default();
+        };
+
+        let width = self.column_widths.get(col).copied().unwrap_or_else(|| col.default_width());
+        Column::new(col.key(), col.name()).width(width).min_width(col.min_width()).resizable(true)
+    }
+
+    fn fit_column(&mut self, col_ix: usize, _window: &mut Window, _cx: &mut Context<TableState<Self>>) -> Option<Pixels> {
+        let col = self.visible_columns.get(col_ix)?;
+        let mut max_width = estimated_text_width(col.name());
+        if *col == StructColumn::Field {
+            max_width += TREE_INDICATOR_WIDTH + COLUMN_GAP;
+        }
+
+        for field in self.flattened_fields.iter().take(128) {
+            let Some(parsed_field) = self.field_at_path(&field.path) else {
+                continue;
+            };
+
+            let text = match col {
+                StructColumn::Field => parsed_field.id.clone(),
+                StructColumn::Address => format!("0x{:X}", parsed_field.offset),
+                StructColumn::Type => {
+                    if parsed_field.field_type.is_empty() {
+                        if field.has_children { "struct".to_string() } else { "value".to_string() }
+                    } else {
+                        parsed_field.field_type.clone()
+                    }
+                }
+                StructColumn::Size => format!("{} B", format_with_commas(field.size)),
+                StructColumn::Value => value_text(parsed_field, self.value_radix),
+            };
+            let mut text_width = estimated_text_width(&text);
+            if *col == StructColumn::Field {
+                text_width += field.depth as f32 * TREE_INDENT_WIDTH + TREE_INDICATOR_WIDTH + COLUMN_GAP;
+            }
+            max_width = max_width.max(text_width);
+        }
+
+        let width = (max_width + AUTOFIT_HORIZONTAL_PADDING).clamp(AUTOFIT_MIN_WIDTH, AUTOFIT_MAX_WIDTH);
+        self.column_widths.insert(*col, px(width));
+        Some(px(width))
+    }
+
+    fn render_th(&mut self, col_ix: usize, _window: &mut Window, _cx: &mut Context<TableState<Self>>) -> impl IntoElement {
+        let col = self.visible_columns.get(col_ix);
+        let name = col.map(|c| c.name()).unwrap_or_default();
+        let is_address_visible = self.visible_columns.contains(&StructColumn::Address);
+        let is_type_visible = self.visible_columns.contains(&StructColumn::Type);
+        let is_size_visible = self.visible_columns.contains(&StructColumn::Size);
+        let is_value_visible = self.visible_columns.contains(&StructColumn::Value);
+        let value_radix = self.value_radix;
+        let context_focus = self.focus_handle.clone();
+
+        let header_content = if col == Some(&StructColumn::Field) {
+            h_flex()
+                .size_full()
+                .items_center()
+                .gap_1()
+                .child(div().flex_shrink_0().w(px(TREE_INDICATOR_WIDTH)).h(px(TREE_INDICATOR_WIDTH)))
+                .child(div().flex_1().min_w_0().truncate().whitespace_nowrap().child(name))
+                .into_any_element()
+        } else {
+            div().size_full().child(name).into_any_element()
+        };
+
+        div().size_full().child(header_content).context_menu(move |menu, window, cx| {
+            menu.action_context(context_focus.clone())
+                .label("Visible columns")
+                .separator()
+                .menu_with_check("Address", is_address_visible, Box::new(crate::actions::ToggleStructureAddressColumn))
+                .menu_with_check("Type", is_type_visible, Box::new(crate::actions::ToggleStructureTypeColumn))
+                .menu_with_check("Size", is_size_visible, Box::new(crate::actions::ToggleStructureSizeColumn))
+                .menu_with_check("Value", is_value_visible, Box::new(crate::actions::ToggleStructureValueColumn))
+                .separator()
+                .submenu("Value format", window, cx, move |menu, _window, _cx| {
+                    menu.menu_with_check(
+                        "Hexadecimal (16)",
+                        value_radix == DisplayRadix::Hexadecimal,
+                        Box::new(crate::actions::SetRadixHex),
+                    )
+                    .menu_with_check("Decimal (10)", value_radix == DisplayRadix::Decimal, Box::new(crate::actions::SetRadixDec))
+                    .menu_with_check("Octal (8)", value_radix == DisplayRadix::Octal, Box::new(crate::actions::SetRadixOct))
+                    .menu_with_check("Binary (2)", value_radix == DisplayRadix::Binary, Box::new(crate::actions::SetRadixBin))
+                })
+        })
+    }
+
+    fn context_menu(&mut self, row_ix: usize, menu: PopupMenu, window: &mut Window, cx: &mut Context<TableState<Self>>) -> PopupMenu {
+        let Some(field) = self.flattened_fields.get(row_ix) else {
+            return menu;
+        };
+        let Some(parsed_field) = self.field_at_path(&field.path) else {
+            return menu;
+        };
+        let field_id = parsed_field.id.clone();
+        let field_offset = parsed_field.offset;
+        let field_value = value_text(parsed_field, self.value_radix);
+        let value_radix = self.value_radix;
+        let offset_hex = format!("0x{:08X}", field_offset);
+        let context_focus = self.focus_handle.clone();
+
+        let value_format_submenu = PopupMenu::build(window, cx, move |menu, _window, _cx| {
+            menu.menu_with_check(
+                "Hexadecimal (16)",
+                value_radix == DisplayRadix::Hexadecimal,
+                Box::new(crate::actions::SetRadixHex),
+            )
+            .menu_with_check("Decimal (10)", value_radix == DisplayRadix::Decimal, Box::new(crate::actions::SetRadixDec))
+            .menu_with_check("Octal (8)", value_radix == DisplayRadix::Octal, Box::new(crate::actions::SetRadixOct))
+            .menu_with_check("Binary (2)", value_radix == DisplayRadix::Binary, Box::new(crate::actions::SetRadixBin))
+        });
+
+        menu.action_context(context_focus)
+            .menu_with_icon(
+                format!("Go to Offset ({})", offset_hex),
+                IconName::ChevronRight,
+                Box::new(crate::actions::NavigateToOffset {
+                    target: offset_hex.clone(),
+                    target_file: None,
+                }),
+            )
+            .separator()
+            .menu_with_icon(
+                format!("Copy Value ({})", field_value),
+                IconName::Copy,
+                Box::new(CopyFieldValue { value: field_value }),
+            )
+            .menu_with_icon(
+                format!("Copy Field Name ({})", field_id),
+                IconName::Copy,
+                Box::new(CopyFieldName { name: field_id }),
+            )
+            .menu_with_icon(
+                format!("Copy Offset ({})", offset_hex),
+                IconName::Hash,
+                Box::new(CopyFieldOffset { offset: offset_hex }),
+            )
+            .separator()
+            .item(gpui_kit::component::menu::PopupMenuItem::submenu("Value format", value_format_submenu))
+            .separator()
+            .menu_with_icon("Copy Structure Analysis", IconName::Copy, Box::new(crate::actions::CopyStructureResult))
+            .menu_with_icon(
+                "Export Structure as YAML",
+                IconName::HardDriveDownload,
+                Box::new(crate::actions::ExportStructureYaml),
+            )
+            .separator()
+            .menu_with_icon("Expand All", IconName::ChevronDown, Box::new(crate::actions::ExpandAllStructure))
+            .menu_with_icon("Collapse All", IconName::ChevronUp, Box::new(crate::actions::CollapseAllStructure))
+    }
+
+    fn render_td(&mut self, row_ix: usize, col_ix: usize, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
+        let Some(field) = self.flattened_fields.get(row_ix) else {
+            return div().into_any_element();
+        };
+        let Some(parsed_field) = self.field_at_path(&field.path) else {
+            return div().into_any_element();
+        };
+        let Some(col) = self.visible_columns.get(col_ix) else {
+            return div().into_any_element();
+        };
+
+        let theme = cx.theme();
+        let palette = DescriptionPalette::from_theme(theme);
+        let font_family = cx.global::<Appearance>().font_family.clone();
+        let is_selected = self.selected_index == Some(row_ix);
+
+        match col {
+            StructColumn::Field => {
+                let id = SharedString::from(parsed_field.id.clone());
+                let chevron_symbol = if field.has_children {
+                    if field.is_collapsed { "▶" } else { "▼" }
+                } else {
+                    " "
+                };
+                let has_children = field.has_children;
+                let depth = field.depth;
+                let panel = self.panel.clone();
+
+                h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .w(px(TREE_INDENT_WIDTH * depth as f32 + TREE_INDICATOR_WIDTH))
+                            .h(px(TREE_INDICATOR_WIDTH))
+                            .items_center()
+                            .justify_end()
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .w(px(TREE_INDICATOR_WIDTH))
+                                    .h(px(TREE_INDICATOR_WIDTH))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .when(has_children, |this| {
+                                        this.cursor_pointer().on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
+                                            cx.stop_propagation();
+                                            if let Some(panel) = panel.upgrade() {
+                                                cx.defer(move |cx| {
+                                                    panel.update(cx, |this, cx| {
+                                                        this.toggle_collapse_at(row_ix, cx);
+                                                    });
+                                                });
+                                            }
+                                        })
+                                    })
+                                    .child(chevron_symbol),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .whitespace_nowrap()
+                            .text_sm()
+                            .font_medium()
+                            .text_color(palette.field_id)
+                            .child(id),
+                    )
+                    .into_any_element()
+            }
+            StructColumn::Address => {
+                let field_offset = parsed_field.offset;
+                div()
+                    .text_xs()
+                    .font_family(font_family)
+                    .text_color(if is_selected { theme.accent_foreground } else { theme.muted_foreground })
+                    .truncate()
+                    .whitespace_nowrap()
+                    .child(format!("0x{:X}", field_offset))
+                    .into_any_element()
+            }
+            StructColumn::Type => {
+                let type_name = if parsed_field.field_type.is_empty() {
+                    if field.has_children { "struct" } else { "value" }
+                } else {
+                    parsed_field.field_type.as_str()
+                };
+                let type_label = SharedString::from(type_name.to_string());
+                div()
+                    .text_xs()
+                    .font_family(font_family)
+                    .text_color(palette.type_name)
+                    .truncate()
+                    .whitespace_nowrap()
+                    .child(type_label)
+                    .into_any_element()
+            }
+            StructColumn::Size => div()
+                .text_xs()
+                .font_family(font_family)
+                .text_color(palette.number_value)
+                .truncate()
+                .whitespace_nowrap()
+                .child(format!("{} B", format_with_commas(field.size)))
+                .into_any_element(),
+            StructColumn::Value => match categorize_field_value(parsed_field, self.value_radix) {
+                StructValueStyle::StructSummary(count) => {
+                    let text = format!("{} child{}", count, if count == 1 { "" } else { "ren" });
+                    div()
+                        .text_xs()
+                        .font_family(font_family)
+                        .text_color(theme.muted_foreground)
+                        .truncate()
+                        .whitespace_nowrap()
+                        .child(text)
+                        .into_any_element()
+                }
+                StructValueStyle::Enum { value, label } => h_flex()
+                    .items_center()
+                    .text_xs()
+                    .font_family(font_family)
+                    .truncate()
+                    .whitespace_nowrap()
+                    .min_w_0()
+                    .child(div().text_color(palette.number_value).child(value))
+                    .child(div().text_color(palette.punctuation).child(" ("))
+                    .child(div().text_color(palette.enum_label).child(label))
+                    .child(div().text_color(palette.punctuation).child(")"))
+                    .into_any_element(),
+                StructValueStyle::Number(val_str) => div()
+                    .text_xs()
+                    .font_family(font_family)
+                    .text_color(palette.number_value)
+                    .truncate()
+                    .whitespace_nowrap()
+                    .child(val_str)
+                    .into_any_element(),
+                StructValueStyle::String(val_str) => div()
+                    .text_xs()
+                    .font_family(font_family)
+                    .text_color(palette.string_value)
+                    .truncate()
+                    .whitespace_nowrap()
+                    .child(val_str)
+                    .into_any_element(),
+                StructValueStyle::Bytes(val_str) => div()
+                    .text_xs()
+                    .font_family(font_family)
+                    .text_color(palette.bytes_value)
+                    .truncate()
+                    .whitespace_nowrap()
+                    .child(val_str)
+                    .into_any_element(),
+            },
+        }
+    }
+}
+
+pub struct StructTreeView {
+    pub parse_result: Option<std::sync::Arc<ParseResult>>,
+    pub flattened_fields: Vec<FlattenedField>,
+    pub expanded_paths: HashSet<Vec<usize>>,
+    pub editor: Option<Entity<Editor>>,
+    pub table_state: Entity<TableState<StructTreeTableDelegate>>,
+    pub focus_handle: FocusHandle,
+    pub selected_index: Option<usize>,
+    pub recent_definition_paths: Vec<PathBuf>,
+    visible_columns: Vec<StructColumn>,
+    column_widths: HashMap<StructColumn, Pixels>,
+    value_radix: DisplayRadix,
+    last_parse_id: Option<(String, usize, usize, usize, usize, bool)>,
+    last_selection_cursor: Option<usize>,
+    last_selection_scan_len: usize,
+    export_status: StructureExportStatus,
+    export_request_id: u64,
+    _table_subscription: Option<Subscription>,
+    _editor_subscription: Option<Subscription>,
+}
+
 impl EventEmitter<StructTreeViewEvent> for StructTreeView {}
 
 impl StructTreeView {
     pub fn new(
         parse_result: Option<std::sync::Arc<crate::core::structure::types::ParseResult>>,
         editor: Option<Entity<Editor>>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let expanded_paths = HashSet::new();
@@ -189,9 +636,57 @@ impl StructTreeView {
         if let Some(ref res) = parse_result {
             Self::flatten_fields(res.fields.iter(), 0, &[], &expanded_paths, &mut flattened, 0);
         }
-        let table_focus_handle = cx.focus_handle();
-        let table_state = VirtualTableState::new("struct-tree-table", default_structure_columns(), table_focus_handle);
         let focus_handle = cx.focus_handle();
+        let visible_columns = vec![
+            StructColumn::Field,
+            StructColumn::Address,
+            StructColumn::Type,
+            StructColumn::Size,
+            StructColumn::Value,
+        ];
+        let delegate = StructTreeTableDelegate {
+            panel: cx.entity().downgrade(),
+            flattened_fields: flattened.clone(),
+            parse_result: parse_result.clone(),
+            value_radix: DisplayRadix::Decimal,
+            selected_index: None,
+            visible_columns: visible_columns.clone(),
+            column_widths: HashMap::new(),
+            focus_handle: focus_handle.clone(),
+        };
+        let table_state = cx.new(|cx| {
+            TableState::new(delegate, window, cx)
+                .row_selectable(true)
+                .col_selectable(false)
+                .col_resizable(true)
+                .col_movable(false)
+        });
+
+        let table_subscription = cx.subscribe_in(&table_state, window, |this, _, event: &TableEvent, _window, cx| match event {
+            TableEvent::SelectRow(row_ix) => {
+                let row_ix = *row_ix;
+                if this.selected_index != Some(row_ix) {
+                    this.select_item(row_ix, cx);
+                }
+            }
+            TableEvent::DoubleClickedRow(row_ix) => {
+                let row_ix = *row_ix;
+                this.select_item(row_ix, cx);
+                if let Some(field) = this.flattened_fields.get(row_ix)
+                    && field.has_children
+                {
+                    this.toggle_collapse_at(row_ix, cx);
+                }
+            }
+            TableEvent::ColumnWidthsChanged(widths) => {
+                for (ix, &width) in widths.iter().enumerate() {
+                    if let Some(&col) = this.visible_columns.get(ix) {
+                        this.column_widths.insert(col, width);
+                    }
+                }
+            }
+            _ => {}
+        });
 
         let mut this = Self {
             parse_result,
@@ -202,13 +697,15 @@ impl StructTreeView {
             focus_handle,
             selected_index: None,
             recent_definition_paths: Vec::new(),
-            last_container_width: px(300.0),
+            visible_columns,
+            column_widths: HashMap::new(),
             value_radix: DisplayRadix::Decimal,
             last_parse_id: None,
             last_selection_cursor: None,
             last_selection_scan_len: 0,
             export_status: StructureExportStatus::default(),
             export_request_id: 0,
+            _table_subscription: Some(table_subscription),
             _editor_subscription: None,
         };
 
@@ -300,6 +797,7 @@ impl StructTreeView {
                         previous_field_count,
                     );
                 }
+                self.sync_table_state(cx);
                 cx.notify();
             } else {
                 self.set_parse_result(parse_res, cx);
@@ -378,10 +876,25 @@ impl StructTreeView {
             && self.selected_index != Some(idx)
         {
             self.selected_index = Some(idx);
-            self.table_state.scroll_to_row(idx, ScrollStrategy::Top);
+            let table_state = self.table_state.clone();
+            cx.defer(move |cx| {
+                table_state.update(cx, |table, cx| {
+                    table.delegate_mut().selected_index = Some(idx);
+                    if table.selected_row() != Some(idx) {
+                        table.set_selected_row(idx, cx);
+                    }
+                });
+            });
             cx.notify();
-        } else if best_match.is_none() {
+        } else if best_match.is_none() && self.selected_index.is_some() {
             self.selected_index = None;
+            let table_state = self.table_state.clone();
+            cx.defer(move |cx| {
+                table_state.update(cx, |table, cx| {
+                    table.delegate_mut().selected_index = None;
+                    table.clear_selection(cx);
+                });
+            });
         }
     }
 
@@ -392,11 +905,6 @@ impl StructTreeView {
         self.export_status = StructureExportStatus::default();
         self.export_request_id = self.export_request_id.wrapping_add(1);
 
-        // Replacing a completed parse can release a very large tree and a
-        // large flattened panel cache. Keep the UI thread responsible only
-        // for the cheap state swap; the old snapshot and panel caches are
-        // owned by this detached background task until they are fully
-        // released.
         if old_parse_result.is_some() || !old_flattened_fields.is_empty() || !old_expanded_paths.is_empty() {
             cx.background_executor()
                 .spawn(async move {
@@ -408,7 +916,7 @@ impl StructTreeView {
         self.selected_index = None;
         self.last_selection_cursor = None;
         self.last_selection_scan_len = 0;
-        self.table_state.scroll_to_row(0, ScrollStrategy::Top);
+        self.sync_table_state(cx);
         cx.notify();
     }
 
@@ -606,67 +1114,49 @@ impl StructTreeView {
     ) where
         I: IntoIterator<Item = &'a ParsedField>,
     {
-        struct Frame<'a, I> {
-            root: Option<I>,
-            children: Option<std::slice::Iter<'a, ParsedField>>,
+        struct Frame<I> {
+            iter: I,
             depth: usize,
             parent_path: Vec<usize>,
-            index_offset: usize,
             next_index: usize,
         }
 
-        let mut frames = vec![Frame {
-            root: Some(fields.into_iter()),
-            children: None,
+        let mut stack: Vec<Frame<std::vec::IntoIter<&'a ParsedField>>> = vec![Frame {
+            iter: fields.into_iter().collect::<Vec<_>>().into_iter(),
             depth,
             parent_path: parent_path.to_vec(),
-            index_offset,
-            next_index: 0,
+            next_index: index_offset,
         }];
 
-        while !frames.is_empty() {
-            let Some((relative_idx, field, frame_depth, frame_index_offset, parent_path)) = ({
-                let frame = frames.last_mut().expect("flattening stack must not be empty");
-                let next = if let Some(root) = frame.root.as_mut() {
-                    root.next().map(|field| (frame.next_index, field))
-                } else if let Some(children) = frame.children.as_mut() {
-                    children.next().map(|field| (frame.next_index, field))
-                } else {
-                    None
-                };
-
-                next.map(|(relative_idx, field)| {
-                    frame.next_index += 1;
-                    (relative_idx, field, frame.depth, frame.index_offset, frame.parent_path.clone())
-                })
-            }) else {
-                frames.pop();
+        while let Some(frame) = stack.last_mut() {
+            let Some(field) = frame.iter.next() else {
+                stack.pop();
                 continue;
             };
 
-            let idx = relative_idx + frame_index_offset;
-            let mut current_path = parent_path;
-            current_path.push(idx);
+            let mut current_path = frame.parent_path.clone();
+            current_path.push(frame.next_index);
+            frame.next_index += 1;
 
             let has_children = !field.children.is_empty();
-            let is_expanded = expanded_paths.contains(&current_path);
+            let is_collapsed = !expanded_paths.contains(&current_path);
 
             results.push(FlattenedField {
                 path: current_path.clone(),
                 offset: field.offset,
                 size: field.size,
-                depth: frame_depth,
+                depth: frame.depth,
                 has_children,
-                is_collapsed: !is_expanded,
+                is_collapsed,
             });
 
-            if has_children && is_expanded {
-                frames.push(Frame {
-                    root: None,
-                    children: Some(field.children.iter()),
-                    depth: frame_depth + 1,
+            if has_children && !is_collapsed {
+                let next_depth = frame.depth + 1;
+                let children: Vec<&'a ParsedField> = field.children.iter().collect();
+                stack.push(Frame {
+                    iter: children.into_iter(),
+                    depth: next_depth,
                     parent_path: current_path,
-                    index_offset: 0,
                     next_index: 0,
                 });
             }
@@ -674,13 +1164,7 @@ impl StructTreeView {
     }
 
     pub fn field_at_path<'a>(&'a self, path: &[usize]) -> Option<&'a ParsedField> {
-        let res = self.parse_result.as_ref()?;
-        let (&first, rest) = path.split_first()?;
-        let mut target_field = res.fields.get(first)?;
-        for &idx in rest {
-            target_field = target_field.children.get(idx)?;
-        }
-        Some(target_field)
+        resolve_field_at_path(&self.parse_result, path)
     }
 
     #[allow(dead_code)]
@@ -702,7 +1186,15 @@ impl StructTreeView {
         }
 
         self.selected_index = Some(idx);
-        self.table_state.scroll_to_row(idx, ScrollStrategy::Top);
+        let table_state = self.table_state.clone();
+        cx.defer(move |cx| {
+            table_state.update(cx, |table, cx| {
+                table.delegate_mut().selected_index = Some(idx);
+                if table.selected_row() != Some(idx) {
+                    table.set_selected_row(idx, cx);
+                }
+            });
+        });
 
         let item = &self.flattened_fields[idx];
         let offset = if item.size == 0 && item.has_children {
@@ -769,6 +1261,7 @@ impl StructTreeView {
                 self.selected_index = Some(self.flattened_fields.len() - 1);
             }
 
+            self.sync_table_state(cx);
             cx.notify();
         }
     }
@@ -791,9 +1284,9 @@ impl StructTreeView {
             return;
         }
 
-        let max_idx = self.flattened_fields.len() - 1;
+        let last_idx = self.flattened_fields.len().saturating_sub(1);
         let next_idx = match self.selected_index {
-            Some(idx) => (idx + 1).min(max_idx),
+            Some(idx) => (idx + 1).min(last_idx),
             None => 0,
         };
 
@@ -873,6 +1366,7 @@ impl StructTreeView {
         self.expanded_paths.clear();
         self.rebuild_flattened();
         self.selected_index = self.selected_index.map(|idx| idx.min(self.flattened_fields.len().saturating_sub(1)));
+        self.sync_table_state(cx);
         cx.notify();
     }
 
@@ -891,10 +1385,12 @@ impl StructTreeView {
             collect_branches(res.fields.iter(), Vec::new(), &mut self.expanded_paths);
         }
         self.rebuild_flattened();
+        self.sync_table_state(cx);
         cx.notify();
     }
 
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(StructTreeViewEvent::FocusEditor);
         window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
@@ -906,28 +1402,43 @@ impl StructTreeView {
         self.collapse_all(cx);
     }
 
-    fn on_action_toggle_structure_address_column(&mut self, _: &crate::actions::ToggleStructureAddressColumn, _window: &mut Window, cx: &mut Context<Self>) {
-        let visible = self.table_state.column(1).map(|c| c.visible).unwrap_or(true);
-        self.table_state.set_column_visible(1, !visible);
+    fn toggle_column(&mut self, col: StructColumn, cx: &mut Context<Self>) {
+        if let Some(pos) = self.visible_columns.iter().position(|&c| c == col) {
+            self.visible_columns.remove(pos);
+        } else {
+            let all = [
+                StructColumn::Field,
+                StructColumn::Address,
+                StructColumn::Type,
+                StructColumn::Size,
+                StructColumn::Value,
+            ];
+            let mut new_cols = Vec::new();
+            for c in all {
+                if self.visible_columns.contains(&c) || c == col {
+                    new_cols.push(c);
+                }
+            }
+            self.visible_columns = new_cols;
+        }
+        self.sync_table_state(cx);
         cx.notify();
+    }
+
+    fn on_action_toggle_structure_address_column(&mut self, _: &crate::actions::ToggleStructureAddressColumn, _window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_column(StructColumn::Address, cx);
     }
 
     fn on_action_toggle_structure_type_column(&mut self, _: &crate::actions::ToggleStructureTypeColumn, _window: &mut Window, cx: &mut Context<Self>) {
-        let visible = self.table_state.column(2).map(|c| c.visible).unwrap_or(false);
-        self.table_state.set_column_visible(2, !visible);
-        cx.notify();
+        self.toggle_column(StructColumn::Type, cx);
     }
 
     fn on_action_toggle_structure_size_column(&mut self, _: &crate::actions::ToggleStructureSizeColumn, _window: &mut Window, cx: &mut Context<Self>) {
-        let visible = self.table_state.column(3).map(|c| c.visible).unwrap_or(false);
-        self.table_state.set_column_visible(3, !visible);
-        cx.notify();
+        self.toggle_column(StructColumn::Size, cx);
     }
 
     fn on_action_toggle_structure_value_column(&mut self, _: &crate::actions::ToggleStructureValueColumn, _window: &mut Window, cx: &mut Context<Self>) {
-        let visible = self.table_state.column(4).map(|c| c.visible).unwrap_or(true);
-        self.table_state.set_column_visible(4, !visible);
-        cx.notify();
+        self.toggle_column(StructColumn::Value, cx);
     }
 
     fn set_value_radix(&mut self, radix: DisplayRadix, cx: &mut Context<Self>) {
@@ -936,6 +1447,7 @@ impl StructTreeView {
         }
 
         self.value_radix = radix;
+        self.sync_table_state(cx);
         cx.notify();
     }
 
@@ -955,222 +1467,43 @@ impl StructTreeView {
         self.set_value_radix(DisplayRadix::Binary, cx);
     }
 
-    fn estimated_text_width(text: &str) -> f32 {
-        text.chars()
-            .take(AUTOFIT_MAX_TEXT_CHARS)
-            .map(|character| if character.is_ascii() { AUTOFIT_CHAR_WIDTH } else { AUTOFIT_WIDE_CHAR_WIDTH })
-            .sum()
-    }
+    fn sync_table_state(&mut self, cx: &mut Context<Self>) {
+        let flattened_fields = self.flattened_fields.clone();
+        let parse_result = self.parse_result.clone();
+        let value_radix = self.value_radix;
+        let selected_index = self.selected_index;
+        let visible_columns = self.visible_columns.clone();
+        let column_widths = self.column_widths.clone();
+        let table_state = self.table_state.clone();
 
-    fn value_text(parsed_field: &ParsedField, radix: DisplayRadix) -> String {
-        if parsed_field.is_struct() {
-            format!(
-                "{} child{}",
-                parsed_field.children.len(),
-                if parsed_field.children.len() == 1 { "" } else { "ren" }
-            )
-        } else if let Some(label) = &parsed_field.enum_label {
-            format!("{} ({})", parsed_field.value.format_with_radix(radix), label)
-        } else {
-            parsed_field.value.format_with_radix(radix)
-        }
-    }
-
-    fn auto_fit_column(&mut self, col_ix: usize, cx: &mut Context<Self>) {
-        self.table_state.end_resize();
-        let col = self.table_state.column(col_ix);
-        let header = col.map(|c| c.name.to_string()).unwrap_or_default();
-        let mut max_width = Self::estimated_text_width(&header);
-        if col_ix == 0 {
-            max_width += TREE_INDICATOR_WIDTH + COLUMN_GAP;
-        }
-
-        for field in self.flattened_fields.iter().take(128) {
-            let Some(parsed_field) = self.field_at_path(&field.path) else {
-                continue;
-            };
-
-            let text = match col_ix {
-                0 => parsed_field.id.clone(),
-                1 => format!("0x{:X}", parsed_field.offset),
-                2 => {
-                    if parsed_field.field_type.is_empty() {
-                        if field.has_children { "struct".to_string() } else { "value".to_string() }
-                    } else {
-                        parsed_field.field_type.clone()
+        cx.defer(move |cx| {
+            table_state.update(cx, |table, cx| {
+                let delegate = table.delegate_mut();
+                delegate.flattened_fields = flattened_fields;
+                delegate.parse_result = parse_result;
+                delegate.value_radix = value_radix;
+                delegate.selected_index = selected_index;
+                delegate.visible_columns = visible_columns;
+                delegate.column_widths = column_widths;
+                table.refresh(cx);
+                if let Some(idx) = selected_index {
+                    if table.selected_row() != Some(idx) {
+                        table.set_selected_row(idx, cx);
                     }
+                } else {
+                    table.clear_selection(cx);
                 }
-                3 => format!("{} B", format_with_commas(field.size)),
-                4 => Self::value_text(parsed_field, self.value_radix),
-                _ => String::new(),
-            };
-            let mut text_width = Self::estimated_text_width(&text);
-            if col_ix == 0 {
-                text_width += field.depth as f32 * TREE_INDENT_WIDTH + TREE_INDICATOR_WIDTH + COLUMN_GAP;
-            }
-            max_width = max_width.max(text_width);
-        }
-
-        let width = (max_width + AUTOFIT_HORIZONTAL_PADDING).clamp(AUTOFIT_MIN_WIDTH, AUTOFIT_MAX_WIDTH);
-        self.table_state.set_column_width(col_ix, px(width));
-        cx.notify();
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn render_list_item(
-        ix: usize,
-        field: &FlattenedField,
-        parsed_field: &ParsedField,
-        is_selected: bool,
-        is_focused: bool,
-        visible_cols: &[(usize, Pixels)],
-        total_visible_width: Pixels,
-        scroll_offset_x: Pixels,
-        value_radix: DisplayRadix,
-        view: Entity<Self>,
-        focus_handle: &FocusHandle,
-        window: &mut Window,
-        cx: &App,
-    ) -> AnyElement {
-        let theme = cx.theme();
-        let font_family = cx.global::<Appearance>().font_family.clone();
-        let bg_color = if is_selected {
-            if is_focused { theme.selection } else { theme.muted }
-        } else {
-            hsla(0.0, 0.0, 0.0, 0.0)
-        };
-        let hover_color = if is_selected { theme.selection } else { theme.table_hover };
-
-        let focus_handle_left = focus_handle.clone();
-        let focus_handle_right = focus_handle.clone();
-        let id = SharedString::from(parsed_field.id.clone());
-        let type_name = if parsed_field.field_type.is_empty() {
-            if field.has_children { "struct" } else { "value" }
-        } else {
-            parsed_field.field_type.as_str()
-        };
-        let type_label = SharedString::from(type_name.to_string());
-        let value = SharedString::from(Self::value_text(parsed_field, value_radix));
-        let chevron_symbol = if field.has_children {
-            if field.is_collapsed { "▶" } else { "▼" }
-        } else {
-            " "
-        };
-
-        let field_offset = parsed_field.offset;
-
-        h_flex()
-            .id(ix)
-            .items_center()
-            .w_full()
-            .h(px(STRUCTURE_ROW_HEIGHT))
-            .flex_shrink_0()
-            .overflow_hidden()
-            .bg(bg_color)
-            .hover(|style| style.bg(hover_color))
-            .on_mouse_down(
-                MouseButton::Left,
-                window.listener_for(&view, move |this, _event: &MouseDownEvent, window, cx| {
-                    focus_handle_left.focus(window, cx);
-                    this.select_item(ix, cx);
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                window.listener_for(&view, move |this, _event: &MouseDownEvent, window, cx| {
-                    focus_handle_right.focus(window, cx);
-                    this.select_item(ix, cx);
-                }),
-            )
-            .child(
-                h_flex()
-                    .w(total_visible_width)
-                    .h_full()
-                    .ml(-scroll_offset_x)
-                    .children(visible_cols.iter().enumerate().map(|(vis_ix, &(col_ix, width))| {
-                        let is_first = vis_ix == 0;
-                        let cell_content = match col_ix {
-                            0 => h_flex()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    h_flex()
-                                        .flex_shrink_0()
-                                        .w(px(TREE_INDENT_WIDTH * field.depth as f32 + TREE_INDICATOR_WIDTH))
-                                        .h(px(TREE_INDICATOR_WIDTH))
-                                        .items_center()
-                                        .justify_end()
-                                        .child(
-                                            div()
-                                                .flex_shrink_0()
-                                                .w(px(TREE_INDICATOR_WIDTH))
-                                                .h(px(TREE_INDICATOR_WIDTH))
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .text_xs()
-                                                .text_color(theme.muted_foreground)
-                                                .cursor_pointer()
-                                                .child(chevron_symbol)
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    window.listener_for(&view, move |this, _event: &MouseDownEvent, _window, cx| {
-                                                        this.toggle_collapse_at(ix, cx);
-                                                    }),
-                                                ),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .whitespace_nowrap()
-                                        .text_sm()
-                                        .font_medium()
-                                        .text_color(theme.foreground)
-                                        .child(id.clone()),
-                                )
-                                .into_any_element(),
-                            1 => div()
-                                .text_xs()
-                                .font_family(font_family.clone())
-                                .text_color(if is_selected { theme.accent_foreground } else { theme.muted_foreground })
-                                .child(format!("0x{:X}", field_offset))
-                                .into_any_element(),
-                            2 => div()
-                                .rounded_sm()
-                                .bg(theme.secondary)
-                                .text_xs()
-                                .font_family(font_family.clone())
-                                .text_color(theme.accent_foreground)
-                                .child(type_label.clone())
-                                .into_any_element(),
-                            3 => div()
-                                .text_xs()
-                                .font_family(font_family.clone())
-                                .text_color(if is_selected { theme.accent_foreground } else { theme.muted_foreground })
-                                .child(format!("{} B", format_with_commas(field.size)))
-                                .into_any_element(),
-                            4 => div().text_xs().text_color(theme.muted_foreground).child(value.clone()).into_any_element(),
-                            _ => div().into_any_element(),
-                        };
-                        VirtualTable::render_data_cell(col_ix, width, is_first, theme.table_row_border, cell_content)
-                    })),
-            )
-            .into_any_element()
+            });
+        });
     }
 }
 
 impl Render for StructTreeView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let table_overlay = VirtualTable::render_table_overlay(&self.table_state, cx, |this| &mut this.table_state);
-
-        let view = cx.entity().clone();
         let is_parsing = self.editor.as_ref().is_some_and(|ed| ed.read(cx).structure.is_parsing());
         let is_empty = self.flattened_fields.is_empty() && self.parse_result.as_ref().is_none_or(|result| result.fields.is_empty());
         let show_parsing_placeholder = is_parsing && self.flattened_fields.is_empty();
-        let is_table_focused = self.table_state.focus_handle.as_ref().is_some_and(|h| h.is_focused(window));
+        let is_table_focused = self.table_state.read(cx).focus_handle(cx).is_focused(window);
         let is_focused = self.focus_handle.is_focused(window) || is_table_focused;
         let theme = cx.theme();
         let has_active_editor = self.editor.is_some();
@@ -1288,30 +1621,6 @@ impl Render for StructTreeView {
             .id("struct-tree-view")
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                if this.table_state.resizing_column.is_some() {
-                    this.table_state.update_resize(event.position.x);
-                    cx.notify();
-                }
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                    if this.table_state.resizing_column.is_some() {
-                        this.table_state.end_resize();
-                        cx.notify();
-                    }
-                }),
-            )
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                    if this.table_state.resizing_column.is_some() {
-                        this.table_state.end_resize();
-                        cx.notify();
-                    }
-                }),
-            )
             .on_action(cx.listener(Self::move_up))
             .on_action(cx.listener(Self::move_down))
             .on_action(cx.listener(Self::move_top))
@@ -1322,6 +1631,9 @@ impl Render for StructTreeView {
             .on_action(cx.listener(Self::expand))
             .on_action(cx.listener(Self::collapse))
             .on_action(cx.listener(Self::dismiss))
+            .on_action(cx.listener(|this, _: &gpui_kit::base::actions::Cancel, window, cx| {
+                this.dismiss(&Dismiss, window, cx);
+            }))
             .on_action(cx.listener(Self::on_action_expand_all))
             .on_action(cx.listener(Self::on_action_collapse_all))
             .on_action(cx.listener(Self::on_action_toggle_structure_address_column))
@@ -1513,216 +1825,15 @@ impl Render for StructTreeView {
                     .into_any_element()
                 }
             } else {
-                let focus_handle = self.focus_handle.clone();
-                let value_radix = self.value_radix;
-                let total_visible_width = self.table_state.total_visible_width();
-                let scroll_offset_x = self.table_state.scroll_offset_x;
-                let is_address_visible = self.table_state.column(1).map(|c| c.visible).unwrap_or(true);
-                let is_type_visible = self.table_state.column(2).map(|c| c.visible).unwrap_or(false);
-                let is_size_visible = self.table_state.column(3).map(|c| c.visible).unwrap_or(false);
-                let is_value_visible = self.table_state.column(4).map(|c| c.visible).unwrap_or(true);
-
-                let column_header = VirtualTable::render_header_row(
-                    &self.table_state,
-                    "structure-column-header",
-                    theme,
-                    cx,
-                    Some(|col_ix, col: &TableColumn| {
-                        if col_ix == 0 {
-                            Some(
-                                h_flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(div().flex_shrink_0().w(px(TREE_INDICATOR_WIDTH)).h(px(TREE_INDICATOR_WIDTH)))
-                                    .child(div().flex_1().min_w_0().truncate().whitespace_nowrap().child(col.name.clone()))
-                                    .into_any_element(),
-                            )
-                        } else {
-                            None
-                        }
-                    }),
-                    Self::auto_fit_column,
-                    None::<fn(&mut Self, usize, &mut Context<Self>)>,
-                    |this| &mut this.table_state,
-                )
-                .context_menu({
-                    let context_focus = self.focus_handle.clone();
-                    let value_radix = self.value_radix;
-                    move |menu, window, cx| {
-                        menu.action_context(context_focus.clone())
-                            .label("Visible columns")
-                            .separator()
-                            .menu_with_check("Address", is_address_visible, Box::new(crate::actions::ToggleStructureAddressColumn))
-                            .menu_with_check("Type", is_type_visible, Box::new(crate::actions::ToggleStructureTypeColumn))
-                            .menu_with_check("Size", is_size_visible, Box::new(crate::actions::ToggleStructureSizeColumn))
-                            .menu_with_check("Value", is_value_visible, Box::new(crate::actions::ToggleStructureValueColumn))
-                            .separator()
-                            .submenu("Value format", window, cx, move |menu, _window, _cx| {
-                                menu.menu_with_check(
-                                    "Hexadecimal (16)",
-                                    value_radix == DisplayRadix::Hexadecimal,
-                                    Box::new(crate::actions::SetRadixHex),
-                                )
-                                .menu_with_check("Decimal (10)", value_radix == DisplayRadix::Decimal, Box::new(crate::actions::SetRadixDec))
-                                .menu_with_check("Octal (8)", value_radix == DisplayRadix::Octal, Box::new(crate::actions::SetRadixOct))
-                                .menu_with_check(
-                                    "Binary (2)",
-                                    value_radix == DisplayRadix::Binary,
-                                    Box::new(crate::actions::SetRadixBin),
-                                )
-                            })
-                    }
-                });
-
-                let context_view = view.clone();
-                let context_focus = focus_handle.clone();
-                let visible_cols: Vec<(usize, Pixels)> = self.table_state.visible_columns().map(|(ix, col)| (ix, col.width)).collect();
-
-                let tree_list = uniform_list("struct-tree-list", self.flattened_fields.len(), move |range, window, cx| {
-                    let this = view.read(cx);
-                    range
-                        .map(|ix| {
-                            if let Some(field) = this.flattened_fields.get(ix) {
-                                let is_selected = this.selected_index == Some(ix);
-                                if let Some(parsed_field) = this.field_at_path(&field.path) {
-                                    Self::render_list_item(
-                                        ix,
-                                        field,
-                                        parsed_field,
-                                        is_selected,
-                                        is_focused,
-                                        &visible_cols,
-                                        total_visible_width,
-                                        scroll_offset_x,
-                                        value_radix,
-                                        view.clone(),
-                                        &focus_handle,
-                                        window,
-                                        cx,
-                                    )
-                                } else {
-                                    div().into_any_element()
-                                }
-                            } else {
-                                div().into_any_element()
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .track_scroll(&self.table_state.vertical_scroll_handle)
-                .size_full();
-
-                let horizontal_scrollbar = VirtualTable::render_horizontal_scrollbar(&self.table_state, self.last_container_width, theme);
-                let vertical_scrollbar = VirtualTable::render_vertical_scrollbar(&self.table_state, theme);
-
-                v_flex()
-                    .id("struct-table-container")
+                div()
                     .size_full()
-                    .overflow_hidden()
-                    .relative()
-                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                        if this.table_state.resizing_column.is_some() {
-                            this.table_state.update_resize(event.position.x);
-                            cx.notify();
+                    .child(DataTable::new(&self.table_state).bordered(false))
+                    .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        if event.keystroke.key == "escape" {
+                            this.dismiss(&Dismiss, window, cx);
+                            cx.stop_propagation();
                         }
                     }))
-                    .on_mouse_up(
-                        MouseButton::Left,
-                        cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                            if this.table_state.resizing_column.is_some() {
-                                this.table_state.end_resize();
-                                cx.notify();
-                            }
-                        }),
-                    )
-                    .on_mouse_up_out(
-                        MouseButton::Left,
-                        cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                            if this.table_state.resizing_column.is_some() {
-                                this.table_state.end_resize();
-                                cx.notify();
-                            }
-                        }),
-                    )
-                    .child(table_overlay)
-                    .child(column_header)
-                    .child(
-                        div()
-                            .id("struct-results-container")
-                            .flex_1()
-                            .overflow_hidden()
-                            .relative()
-                            .child(tree_list)
-                            .child(vertical_scrollbar)
-                            .children(horizontal_scrollbar),
-                    )
-                    .context_menu(move |menu, window, cx| {
-                        let selected_field = {
-                            let this = context_view.read(cx);
-                            this.selected_index.and_then(|ix| {
-                                let field = this.flattened_fields.get(ix)?;
-                                let parsed_field = this.field_at_path(&field.path)?;
-                                Some((
-                                    parsed_field.id.clone(),
-                                    parsed_field.offset,
-                                    Self::value_text(parsed_field, this.value_radix),
-                                    this.value_radix,
-                                ))
-                            })
-                        };
-                        let Some((field_id, field_offset, field_value, value_radix)) = selected_field else {
-                            return menu;
-                        };
-
-                        let offset_hex = format!("0x{:08X}", field_offset);
-                        menu.action_context(context_focus.clone())
-                            .menu_with_icon(
-                                format!("Go to Offset ({})", offset_hex),
-                                IconName::ChevronRight,
-                                Box::new(crate::actions::GoToBeginning),
-                            )
-                            .separator()
-                            .menu_with_icon(
-                                format!("Copy Value ({})", field_value),
-                                IconName::Copy,
-                                Box::new(CopyFieldValue { value: field_value }),
-                            )
-                            .menu_with_icon(
-                                format!("Copy Field Name ({})", field_id),
-                                IconName::Copy,
-                                Box::new(CopyFieldName { name: field_id }),
-                            )
-                            .menu_with_icon(
-                                format!("Copy Offset ({})", offset_hex),
-                                IconName::Hash,
-                                Box::new(CopyFieldOffset { offset: offset_hex }),
-                            )
-                            .separator()
-                            .submenu("Value format", window, cx, move |menu, _window, _cx| {
-                                menu.menu_with_check(
-                                    "Hexadecimal (16)",
-                                    value_radix == DisplayRadix::Hexadecimal,
-                                    Box::new(crate::actions::SetRadixHex),
-                                )
-                                .menu_with_check("Decimal (10)", value_radix == DisplayRadix::Decimal, Box::new(crate::actions::SetRadixDec))
-                                .menu_with_check("Octal (8)", value_radix == DisplayRadix::Octal, Box::new(crate::actions::SetRadixOct))
-                                .menu_with_check(
-                                    "Binary (2)",
-                                    value_radix == DisplayRadix::Binary,
-                                    Box::new(crate::actions::SetRadixBin),
-                                )
-                            })
-                            .separator()
-                            .menu_with_icon("Copy Structure Analysis", IconName::Copy, Box::new(crate::actions::CopyStructureResult))
-                            .menu_with_icon(
-                                "Export Structure as YAML",
-                                IconName::HardDriveDownload,
-                                Box::new(crate::actions::ExportStructureYaml),
-                            )
-                            .separator()
-                            .menu_with_icon("Expand All", IconName::ChevronDown, Box::new(crate::actions::ExpandAllStructure))
-                            .menu_with_icon("Collapse All", IconName::ChevronUp, Box::new(crate::actions::CollapseAllStructure))
-                    })
                     .into_any_element()
             }))
     }
@@ -1731,5 +1842,315 @@ impl Render for StructTreeView {
 impl Focusable for StructTreeView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AUTOFIT_CHAR_WIDTH, AUTOFIT_WIDE_CHAR_WIDTH, StructColumn, StructTreeView, StructValueStyle, categorize_field_value, default_yaml_file_name,
+        estimated_text_width, resolve_field_at_path, value_text,
+    };
+    use crate::core::color::RgbaColor;
+    use crate::core::radix::DisplayRadix;
+    use crate::core::structure::types::FieldValue;
+    use crate::core::structure::{ParseResult, ParsedField};
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_struct_column_properties() {
+        assert_eq!(StructColumn::Field.key(), "field");
+        assert_eq!(StructColumn::Field.name(), "Field");
+        assert_eq!(StructColumn::Address.key(), "address");
+        assert_eq!(StructColumn::Address.name(), "Address");
+        assert_eq!(StructColumn::Type.key(), "type");
+        assert_eq!(StructColumn::Type.name(), "Type");
+        assert_eq!(StructColumn::Size.key(), "size");
+        assert_eq!(StructColumn::Size.name(), "Size");
+        assert_eq!(StructColumn::Value.key(), "value");
+        assert_eq!(StructColumn::Value.name(), "Value");
+    }
+
+    #[test]
+    fn test_estimated_text_width() {
+        let ascii_width = estimated_text_width("abc");
+        assert!((ascii_width - (3.0 * AUTOFIT_CHAR_WIDTH)).abs() < 0.001);
+
+        let wide_width = estimated_text_width("あ");
+        assert!((wide_width - AUTOFIT_WIDE_CHAR_WIDTH).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_value_text_formatting() {
+        let field_int = ParsedField {
+            id: "magic".to_string(),
+            field_type: "u4".to_string(),
+            offset: 0,
+            size: 4,
+            value: FieldValue::U32(255),
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: None,
+            is_instance: false,
+            children: Vec::new(),
+        };
+
+        assert_eq!(value_text(&field_int, DisplayRadix::Decimal), "255");
+        assert_eq!(value_text(&field_int, DisplayRadix::Hexadecimal), "0xFF");
+        assert_eq!(value_text(&field_int, DisplayRadix::Octal), "0o377");
+        assert_eq!(value_text(&field_int, DisplayRadix::Binary), "0b11111111");
+
+        let field_with_enum = ParsedField {
+            id: "kind".to_string(),
+            field_type: "u1".to_string(),
+            offset: 4,
+            size: 1,
+            value: FieldValue::U8(1),
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: Some("HEADER".to_string()),
+            is_instance: false,
+            children: Vec::new(),
+        };
+
+        assert_eq!(value_text(&field_with_enum, DisplayRadix::Decimal), "1 (HEADER)");
+
+        let field_struct = ParsedField {
+            id: "header".to_string(),
+            field_type: String::new(),
+            offset: 0,
+            size: 5,
+            value: FieldValue::Struct,
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: None,
+            is_instance: false,
+            children: vec![field_int, field_with_enum],
+        };
+
+        assert_eq!(value_text(&field_struct, DisplayRadix::Decimal), "2 children");
+    }
+
+    #[test]
+    fn test_categorize_field_value() {
+        let field_int = ParsedField {
+            id: "magic".to_string(),
+            field_type: "u4".to_string(),
+            offset: 0,
+            size: 4,
+            value: FieldValue::U32(255),
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: None,
+            is_instance: false,
+            children: Vec::new(),
+        };
+        assert_eq!(
+            categorize_field_value(&field_int, DisplayRadix::Hexadecimal),
+            StructValueStyle::Number("0xFF".to_string())
+        );
+
+        let field_str = ParsedField {
+            id: "tag".to_string(),
+            field_type: "str".to_string(),
+            offset: 0,
+            size: 4,
+            value: FieldValue::String("PNG".to_string()),
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: None,
+            is_instance: false,
+            children: Vec::new(),
+        };
+        assert_eq!(
+            categorize_field_value(&field_str, DisplayRadix::Decimal),
+            StructValueStyle::String("\"PNG\"".to_string())
+        );
+
+        let field_bytes = ParsedField {
+            id: "buf".to_string(),
+            field_type: "bytes".to_string(),
+            offset: 0,
+            size: 4,
+            value: FieldValue::Bytes(vec![0; 4]),
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: None,
+            is_instance: false,
+            children: Vec::new(),
+        };
+        assert_eq!(
+            categorize_field_value(&field_bytes, DisplayRadix::Decimal),
+            StructValueStyle::Bytes("[4 bytes]".to_string())
+        );
+
+        let field_enum = ParsedField {
+            id: "kind".to_string(),
+            field_type: "u1".to_string(),
+            offset: 4,
+            size: 1,
+            value: FieldValue::U8(1),
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: Some("HEADER".to_string()),
+            is_instance: false,
+            children: Vec::new(),
+        };
+        assert_eq!(
+            categorize_field_value(&field_enum, DisplayRadix::Decimal),
+            StructValueStyle::Enum {
+                value: "1".to_string(),
+                label: "HEADER".to_string(),
+            }
+        );
+
+        let field_struct = ParsedField {
+            id: "root".to_string(),
+            field_type: String::new(),
+            offset: 0,
+            size: 5,
+            value: FieldValue::Struct,
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: None,
+            is_instance: false,
+            children: vec![field_int, field_enum],
+        };
+        assert_eq!(categorize_field_value(&field_struct, DisplayRadix::Decimal), StructValueStyle::StructSummary(2));
+    }
+
+    #[test]
+    fn test_default_yaml_file_name() {
+        assert_eq!(default_yaml_file_name("png"), "png.yaml");
+        assert_eq!(default_yaml_file_name("zip.yaml"), "zip.yaml");
+        assert_eq!(default_yaml_file_name("bad/name"), "bad_name.yaml");
+        assert_eq!(default_yaml_file_name(""), "structure.yaml");
+    }
+
+    #[test]
+    fn test_resolve_field_at_path() {
+        let field_a = ParsedField {
+            id: "a".to_string(),
+            field_type: "u1".to_string(),
+            offset: 0,
+            size: 1,
+            value: FieldValue::U8(10),
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: None,
+            is_instance: false,
+            children: Vec::new(),
+        };
+        let field_b = ParsedField {
+            id: "b".to_string(),
+            field_type: "u1".to_string(),
+            offset: 1,
+            size: 1,
+            value: FieldValue::U8(20),
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: None,
+            is_instance: false,
+            children: Vec::new(),
+        };
+        let field_parent = ParsedField {
+            id: "parent".to_string(),
+            field_type: String::new(),
+            offset: 0,
+            size: 2,
+            value: FieldValue::Struct,
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: None,
+            is_instance: false,
+            children: vec![field_a, field_b],
+        };
+
+        let result = std::sync::Arc::new(ParseResult::new("test".to_string(), vec![field_parent], 2, Vec::new()));
+
+        let opt_res = Some(result);
+        assert_eq!(resolve_field_at_path(&opt_res, &[0]).map(|f| f.id.as_str()), Some("parent"));
+        assert_eq!(resolve_field_at_path(&opt_res, &[0, 0]).map(|f| f.id.as_str()), Some("a"));
+        assert_eq!(resolve_field_at_path(&opt_res, &[0, 1]).map(|f| f.id.as_str()), Some("b"));
+        assert!(resolve_field_at_path(&opt_res, &[0, 2]).is_none());
+        assert!(resolve_field_at_path(&opt_res, &[1]).is_none());
+        assert!(resolve_field_at_path(&opt_res, &[]).is_none());
+    }
+
+    #[test]
+    fn test_flatten_fields_hierarchy() {
+        let field_child = ParsedField {
+            id: "child".to_string(),
+            field_type: "u1".to_string(),
+            offset: 0,
+            size: 1,
+            value: FieldValue::U8(1),
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: None,
+            is_instance: false,
+            children: Vec::new(),
+        };
+        let field_parent = ParsedField {
+            id: "root".to_string(),
+            field_type: String::new(),
+            offset: 0,
+            size: 1,
+            value: FieldValue::Struct,
+            color: RgbaColor::default(),
+            description: None,
+            enum_label: None,
+            is_instance: false,
+            children: vec![field_child],
+        };
+
+        // When collapsed (not in expanded_paths)
+        let expanded = HashSet::new();
+        let mut flattened = Vec::new();
+        StructTreeView::flatten_fields(std::iter::once(&field_parent), 0, &[], &expanded, &mut flattened, 0);
+        assert_eq!(flattened.len(), 1);
+        assert!(flattened[0].has_children);
+        assert!(flattened[0].is_collapsed);
+        assert_eq!(flattened[0].depth, 0);
+
+        // When expanded
+        let mut expanded = HashSet::new();
+        expanded.insert(vec![0]);
+        let mut flattened = Vec::new();
+        StructTreeView::flatten_fields(std::iter::once(&field_parent), 0, &[], &expanded, &mut flattened, 0);
+        assert_eq!(flattened.len(), 2);
+        assert_eq!(flattened[0].path, vec![0]);
+        assert!(!flattened[0].is_collapsed);
+        assert_eq!(flattened[1].path, vec![0, 0]);
+        assert_eq!(flattened[1].depth, 1);
+        assert!(!flattened[1].has_children);
+    }
+
+    #[test]
+    fn test_go_to_offset_action_target_format() {
+        let field_offset = 0x12ABusize;
+        let offset_hex = format!("0x{:08X}", field_offset);
+        assert_eq!(offset_hex, "0x000012AB");
+
+        let action = crate::actions::NavigateToOffset {
+            target: offset_hex,
+            target_file: None,
+        };
+        assert_eq!(action.target, "0x000012AB");
+        assert!(action.target_file.is_none());
+    }
+
+    #[test]
+    fn test_struct_tree_view_event_focus_editor() {
+        let event = super::StructTreeViewEvent::FocusEditor;
+        assert_eq!(event, super::StructTreeViewEvent::FocusEditor);
+
+        let parent_ctx = gpui_kit::KeyContext::try_from("StructTreeView").unwrap();
+        let child_ctx = gpui_kit::KeyContext::try_from("DataTable").unwrap();
+        let contexts = vec![parent_ctx, child_ctx];
+
+        let pred_desc = gpui_kit::KeyBindingContextPredicate::parse("StructTreeView > DataTable").unwrap();
+        assert!(pred_desc.eval(&contexts));
+        assert_eq!(pred_desc.depth_of(&contexts), Some(2));
     }
 }

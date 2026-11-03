@@ -2,18 +2,19 @@ use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::strings::{DEFAULT_MIN_STRING_LENGTH, StringMatch, find_strings_segmented_limited};
 use crate::ui::appearance::Appearance;
-use crate::ui::components::data_table::{self as table, TableColumn, TableSortDirection, VirtualTable, VirtualTableState};
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{self, Input, InputState, NumberInput};
-use gpui_kit::component::menu::ContextMenuExt as _;
+use gpui_kit::component::menu::PopupMenu;
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableEvent, TableState};
 use gpui_kit::component::theme::Theme;
-use gpui_kit::component::{ActiveTheme as _, Disableable, Sizable, Size, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable, Sizable, Size, WindowExt as _, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use std::collections::HashMap;
 
-actions!(strings_panel, [FocusTable, ClearResults]);
+actions!(strings_panel, [FocusTable, ClearResults, ConfirmSelect, DismissTable]);
 
 #[derive(Clone, PartialEq, Action)]
 #[action(namespace = strings_panel, no_json)]
@@ -30,10 +31,13 @@ struct CopyValue {
 const CONTEXT: &str = "StringsPanel";
 pub const MAX_STRING_RESULTS: usize = 10_000;
 
-const STRINGS_ROW_HEIGHT: f32 = 24.0;
-
 pub fn init(cx: &mut App) {
-    cx.bind_keys([KeyBinding::new("escape", FocusTable, Some("StringsPanel"))]);
+    cx.bind_keys([
+        KeyBinding::new("escape", DismissTable, Some("StringsPanel")),
+        KeyBinding::new("escape", DismissTable, Some("StringsPanel > DataTable")),
+        KeyBinding::new("enter", ConfirmSelect, Some("StringsPanel > DataTable")),
+        KeyBinding::new("down", FocusTable, Some("StringsPanel > Input")),
+    ]);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,10 +62,175 @@ pub enum StringsPanelEvent {
     FocusEditor,
 }
 
+pub struct StringsTableDelegate {
+    panel: WeakEntity<StringsPanel>,
+    results: Vec<StringMatch>,
+    visible_indices: Vec<usize>,
+    sort_column: Option<(usize, ColumnSort)>,
+    editor: Option<Entity<Editor>>,
+    selected_index: Option<usize>,
+    focus_handle: FocusHandle,
+}
+
+impl StringsTableDelegate {
+    fn sort_indices(&mut self) {
+        let Some((col_ix, sort)) = self.sort_column else {
+            self.visible_indices.sort();
+            return;
+        };
+        if sort == ColumnSort::Default {
+            self.visible_indices.sort();
+            return;
+        }
+
+        self.visible_indices.sort_by(|left, right| {
+            let left_match = &self.results[*left];
+            let right_match = &self.results[*right];
+            let ordering = match col_ix {
+                0 => left_match.offset.cmp(&right_match.offset),
+                1 => left_match.byte_len.cmp(&right_match.byte_len),
+                2 => left_match.text.cmp(&right_match.text),
+                _ => std::cmp::Ordering::Equal,
+            };
+            let ordering = if sort == ColumnSort::Descending { ordering.reverse() } else { ordering };
+            ordering.then_with(|| left.cmp(right))
+        });
+    }
+}
+
+impl TableDelegate for StringsTableDelegate {
+    fn columns_count(&self, _cx: &App) -> usize {
+        3
+    }
+
+    fn rows_count(&self, _cx: &App) -> usize {
+        self.visible_indices.len()
+    }
+
+    fn column(&self, col_ix: usize, _cx: &App) -> Column {
+        let sort = match self.sort_column {
+            Some((ix, s)) if ix == col_ix => s,
+            _ => ColumnSort::Default,
+        };
+
+        match col_ix {
+            0 => Column::new("address", "Address").width(px(88.0)).min_width(px(50.0)).resizable(true).sort(sort),
+            1 => Column::new("size", "Size").width(px(58.0)).min_width(px(40.0)).resizable(true).sort(sort),
+            2 => Column::new("value", "Value").width(px(220.0)).min_width(px(80.0)).resizable(true).sort(sort),
+            _ => Column::default(),
+        }
+    }
+
+    fn perform_sort(&mut self, col_ix: usize, sort: ColumnSort, _window: &mut Window, cx: &mut Context<TableState<Self>>) {
+        let sort_col = if sort == ColumnSort::Default { None } else { Some((col_ix, sort)) };
+        self.sort_column = sort_col;
+        self.sort_indices();
+        if let Some(panel) = self.panel.upgrade() {
+            cx.defer(move |cx| {
+                panel.update(cx, |panel, cx| {
+                    panel.sort_column = sort_col;
+                    panel.sync_selection_to_filter(cx);
+                    cx.notify();
+                });
+            });
+        }
+    }
+
+    fn fit_column(&mut self, col_ix: usize, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> Option<Pixels> {
+        let address_map = self
+            .editor
+            .as_ref()
+            .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
+            .unwrap_or_default();
+
+        let max_len = self
+            .visible_indices
+            .iter()
+            .take(128)
+            .filter_map(|&index| {
+                self.results.get(index).map(|item| match col_ix {
+                    0 => format!("0x{:08X}", address_map.offset_to_address(item.offset)).chars().count(),
+                    1 => item.byte_len.to_string().chars().count(),
+                    2 => preview_text(&item.text).chars().count(),
+                    _ => 0,
+                })
+            })
+            .max()
+            .unwrap_or(0);
+
+        Some(px(max_len as f32 * 7.5 + 24.0))
+    }
+
+    fn context_menu(&mut self, row_ix: usize, menu: PopupMenu, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> PopupMenu {
+        let Some(&index) = self.visible_indices.get(row_ix) else {
+            return menu;
+        };
+        let Some(item) = self.results.get(index) else {
+            return menu;
+        };
+        let address_map = self
+            .editor
+            .as_ref()
+            .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
+            .unwrap_or_default();
+        let offset_value = format!("0x{:08X}", address_map.offset_to_address(item.offset));
+        let text_value = item.text.clone();
+
+        menu.action_context(self.focus_handle.clone())
+            .menu_with_icon("Copy Address", IconName::Hash, Box::new(CopyAddress { value: offset_value }))
+            .menu_with_icon("Copy Value", IconName::Binary, Box::new(CopyValue { value: text_value }))
+    }
+
+    fn render_td(&mut self, row_ix: usize, col_ix: usize, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
+        let Some(&index) = self.visible_indices.get(row_ix) else {
+            return div().into_any_element();
+        };
+        let Some(item) = self.results.get(index) else {
+            return div().into_any_element();
+        };
+
+        let theme = cx.theme();
+        let font_family = cx.global::<Appearance>().font_family.clone();
+        let address_map = self
+            .editor
+            .as_ref()
+            .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
+            .unwrap_or_default();
+
+        let offset_value = format!("0x{:08X}", address_map.offset_to_address(item.offset));
+        let preview = preview_text(&item.text);
+
+        let is_selected = self.selected_index == Some(index);
+        let colors = strings_row_colors(is_selected, false, theme);
+
+        match col_ix {
+            0 => div()
+                .text_xs()
+                .font_family(font_family)
+                .text_color(colors.address_color)
+                .child(offset_value)
+                .into_any_element(),
+            1 => div()
+                .text_xs()
+                .font_family(font_family)
+                .text_color(colors.size_color)
+                .child(item.byte_len.to_string())
+                .into_any_element(),
+            2 => div()
+                .text_xs()
+                .font_family(font_family)
+                .text_color(colors.value_color)
+                .child(preview)
+                .into_any_element(),
+            _ => div().into_any_element(),
+        }
+    }
+}
+
 pub struct StringsPanel {
     pub editor: Option<Entity<Editor>>,
     pub focus_handle: FocusHandle,
-    pub table_state: VirtualTableState,
+    pub table_state: Entity<TableState<StringsTableDelegate>>,
     pub min_length_input: Entity<InputState>,
     pub filter_input: Entity<InputState>,
     pub is_scanning: bool,
@@ -70,11 +239,12 @@ pub struct StringsPanel {
     pub selected_index: Option<usize>,
     pub has_scanned: bool,
     pub scan_task: Option<Task<()>>,
+    pub sort_column: Option<(usize, ColumnSort)>,
     scan_generation: usize,
     scan_signature: Option<ScanSignature>,
     scan_min_length: Option<usize>,
     cached_states: HashMap<EntityId, CachedStringsState>,
-    last_container_width: Pixels,
+    _table_subscription: Option<Subscription>,
     _input_subscription: Option<Subscription>,
     _filter_subscription: Option<Subscription>,
     _editor_subscription: Option<Subscription>,
@@ -82,22 +252,47 @@ pub struct StringsPanel {
 
 impl EventEmitter<StringsPanelEvent> for StringsPanel {}
 
-fn default_strings_columns() -> Vec<TableColumn> {
-    vec![
-        TableColumn::new("address", "Address", px(88.0))
-            .min_width(px(50.0))
-            .sortable(true)
-            .resizable(true),
-        TableColumn::new("size", "Size", px(58.0)).min_width(px(40.0)).sortable(true).resizable(true),
-        TableColumn::new("value", "Value", px(220.0)).min_width(px(80.0)).sortable(true).resizable(true),
-    ]
-}
-
 impl StringsPanel {
     pub fn new(editor: Option<Entity<Editor>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
-        let table_focus_handle = cx.focus_handle();
-        let table_state = VirtualTableState::new("strings-table", default_strings_columns(), table_focus_handle);
+        let view = cx.entity().downgrade();
+        let delegate = StringsTableDelegate {
+            panel: view,
+            results: Vec::new(),
+            visible_indices: Vec::new(),
+            sort_column: None,
+            editor: None,
+            selected_index: None,
+            focus_handle: focus_handle.clone(),
+        };
+        let table_state = cx.new(|cx| {
+            TableState::new(delegate, window, cx)
+                .row_selectable(true)
+                .col_selectable(false)
+                .col_resizable(true)
+                .col_movable(false)
+        });
+
+        let table_subscription = cx.subscribe_in(&table_state, window, |this, _, event: &TableEvent, window, cx| match event {
+            TableEvent::SelectRow(row_ix) => {
+                let visible_indices = this.sorted_indices(cx);
+                if let Some(&index) = visible_indices.get(*row_ix)
+                    && this.selected_index != Some(index)
+                {
+                    this.select_item(index, cx);
+                }
+            }
+            TableEvent::DoubleClickedRow(row_ix) => {
+                let visible_indices = this.sorted_indices(cx);
+                if let Some(&index) = visible_indices.get(*row_ix) {
+                    this.select_item(index, cx);
+                    cx.emit(StringsPanelEvent::FocusEditor);
+                    window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
+                }
+            }
+            _ => {}
+        });
+
         let min_length_input = cx.new(|cx| InputState::new(window, cx).step(1.0).min(1.0));
         min_length_input.update(cx, |input, cx| {
             input.set_value(DEFAULT_MIN_STRING_LENGTH.to_string(), window, cx);
@@ -108,6 +303,7 @@ impl StringsPanel {
         let input_subscription = cx.subscribe_in(&min_length_input, window, |this, _, event: &input::InputEvent, _window, cx| {
             if let input::InputEvent::Change = event {
                 this.invalidate_scan();
+                this.sync_selection_to_filter(cx);
                 cx.notify();
             }
         });
@@ -135,7 +331,8 @@ impl StringsPanel {
             scan_signature: None,
             scan_min_length: None,
             cached_states: HashMap::new(),
-            last_container_width: px(300.0),
+            sort_column: None,
+            _table_subscription: Some(table_subscription),
             _input_subscription: Some(input_subscription),
             _filter_subscription: Some(filter_subscription),
             _editor_subscription: None,
@@ -158,6 +355,7 @@ impl StringsPanel {
         self.invalidate_scan();
         self.editor = editor.clone();
         self.scan_signature = self.current_signature(cx);
+        self.sync_selection_to_filter(cx);
 
         if let Some(ed) = &editor {
             self._editor_subscription = Some(cx.observe(ed, |this, _, cx| {
@@ -223,6 +421,7 @@ impl StringsPanel {
         } else {
             self.invalidate_scan();
             self.scan_signature = signature;
+            self.sync_selection_to_filter(cx);
             cx.notify();
         }
     }
@@ -240,6 +439,7 @@ impl StringsPanel {
 
     pub fn trigger_scan(&mut self, cx: &mut Context<Self>) {
         self.invalidate_scan();
+        self.sync_selection_to_filter(cx);
         let generation = self.scan_generation;
         self.scan_signature = self.current_signature(cx);
 
@@ -280,10 +480,7 @@ impl StringsPanel {
                     this.is_truncated = is_truncated;
                     this.results = results;
                     this.has_scanned = true;
-                    this.selected_index = this.sorted_indices(cx).first().copied();
-                    if this.selected_index.is_some() {
-                        this.table_state.scroll_to_row(0, ScrollStrategy::Top);
-                    }
+                    this.sync_selection_to_filter(cx);
                     cx.notify();
                 });
             }
@@ -318,17 +515,12 @@ impl StringsPanel {
     fn sorted_indices(&self, cx: &App) -> Vec<usize> {
         let mut indices = self.filtered_indices(cx);
 
-        // Check which column is sorted
-        let sorted_col = self
-            .table_state
-            .columns
-            .iter()
-            .enumerate()
-            .find_map(|(ix, col)| col.sort_direction.map(|dir| (ix, dir)));
-
-        let Some((col_ix, direction)) = sorted_col else {
+        let Some((col_ix, sort)) = self.sort_column else {
             return indices;
         };
+        if sort == ColumnSort::Default {
+            return indices;
+        }
 
         indices.sort_by(|left, right| {
             let left_match = &self.results[*left];
@@ -339,40 +531,10 @@ impl StringsPanel {
                 2 => left_match.text.cmp(&right_match.text),
                 _ => std::cmp::Ordering::Equal,
             };
-            let ordering = if direction == TableSortDirection::Descending {
-                ordering.reverse()
-            } else {
-                ordering
-            };
+            let ordering = if sort == ColumnSort::Descending { ordering.reverse() } else { ordering };
             ordering.then_with(|| left.cmp(right))
         });
         indices
-    }
-
-    fn sort_by(&mut self, col_ix: usize, cx: &mut Context<Self>) {
-        self.table_state.toggle_column_sort(col_ix);
-        self.sync_selection_to_filter(cx);
-        cx.notify();
-    }
-
-    fn auto_fit_column(&mut self, col_ix: usize, cx: &mut Context<Self>) {
-        let visible_indices = self.sorted_indices(cx);
-        let address_map = self
-            .editor
-            .as_ref()
-            .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
-            .unwrap_or_default();
-        let texts = visible_indices.iter().take(128).filter_map(|&index| {
-            self.results.get(index).map(|item| match col_ix {
-                0 => format!("0x{:08X}", address_map.offset_to_address(item.offset)),
-                1 => item.byte_len.to_string(),
-                2 => preview_text(&item.text),
-                _ => String::new(),
-            })
-        });
-
-        self.table_state.auto_fit_column_with_texts(col_ix, texts);
-        cx.notify();
     }
 
     fn result_summary(&self) -> String {
@@ -394,11 +556,26 @@ impl StringsPanel {
             self.selected_index = visible_indices.first().copied();
         }
 
-        if let Some(index) = self.selected_index
-            && let Some(position) = visible_indices.iter().position(|&visible_index| visible_index == index)
-        {
-            self.table_state.scroll_to_row(position, ScrollStrategy::Top);
-        }
+        let row_ix = self.selected_index.and_then(|idx| visible_indices.iter().position(|&i| i == idx));
+        let results = self.results.clone();
+        let editor = self.editor.clone();
+        let sort_column = self.sort_column;
+        let selected_index = self.selected_index;
+
+        self.table_state.update(cx, |table, cx| {
+            let delegate = table.delegate_mut();
+            delegate.results = results;
+            delegate.visible_indices = visible_indices;
+            delegate.sort_column = sort_column;
+            delegate.editor = editor;
+            delegate.selected_index = selected_index;
+            table.refresh(cx);
+            if let Some(row_ix) = row_ix {
+                table.set_selected_row(row_ix, cx);
+            } else {
+                table.clear_selection(cx);
+            }
+        });
     }
 
     pub fn select_item(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -406,6 +583,20 @@ impl StringsPanel {
             self.selected_index = Some(index);
             let offset = item.offset;
             let len = item.byte_len;
+
+            let table_state = self.table_state.clone();
+            cx.defer(move |cx| {
+                table_state.update(cx, |table, cx| {
+                    table.delegate_mut().selected_index = Some(index);
+                    let row_ix = table.delegate().visible_indices.iter().position(|&i| i == index);
+                    if let Some(row_ix) = row_ix
+                        && table.selected_row() != Some(row_ix)
+                    {
+                        table.set_selected_row(row_ix, cx);
+                    }
+                });
+            });
+
             if let Some(ed) = &self.editor {
                 ed.update(cx, |editor, cx| {
                     if len > 0 {
@@ -421,136 +612,44 @@ impl StringsPanel {
         cx.notify();
     }
 
-    fn table_move_up(&mut self, _: &table::MoveUp, _: &mut Window, cx: &mut Context<Self>) {
+    fn copy_address(&mut self, action: &CopyAddress, window: &mut Window, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(action.value.clone()));
+        window.push_notification(Notification::info(format!("Copied address {}", action.value)), cx);
+    }
+
+    fn copy_value(&mut self, action: &CopyValue, window: &mut Window, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(action.value.clone()));
+        window.push_notification(Notification::info("Copied value"), cx);
+    }
+
+    fn focus_table(&mut self, _: &FocusTable, window: &mut Window, cx: &mut Context<Self>) {
         let visible_indices = self.sorted_indices(cx);
-        if visible_indices.is_empty() {
-            return;
-        }
-        let current_position = self
-            .selected_index
-            .and_then(|index| visible_indices.iter().position(|&visible_index| visible_index == index));
-        let new_position = match current_position {
-            Some(0) | None => visible_indices.len().saturating_sub(1),
-            Some(position) => position - 1,
-        };
-        self.table_state.scroll_to_row(new_position, ScrollStrategy::Top);
-        if let Some(&index) = visible_indices.get(new_position) {
-            self.select_item(index, cx);
+        if !visible_indices.is_empty() {
+            let focus_handle = self.table_state.read(cx).focus_handle(cx);
+            focus_handle.focus(window, cx);
+            cx.notify();
         }
     }
 
-    fn table_move_down(&mut self, _: &table::MoveDown, _: &mut Window, cx: &mut Context<Self>) {
-        let visible_indices = self.sorted_indices(cx);
-        if visible_indices.is_empty() {
-            return;
-        }
-        let current_position = self
-            .selected_index
-            .and_then(|index| visible_indices.iter().position(|&visible_index| visible_index == index));
-        let new_position = match current_position {
-            Some(position) if position + 1 < visible_indices.len() => position + 1,
-            _ => 0,
-        };
-        self.table_state.scroll_to_row(new_position, ScrollStrategy::Top);
-        if let Some(&index) = visible_indices.get(new_position) {
-            self.select_item(index, cx);
-        }
-    }
-
-    fn table_move_top(&mut self, _: &table::MoveTop, _: &mut Window, cx: &mut Context<Self>) {
-        let visible_indices = self.sorted_indices(cx);
-        if visible_indices.is_empty() {
-            return;
-        }
-        self.table_state.scroll_to_row(0, ScrollStrategy::Top);
-        if let Some(&index) = visible_indices.first() {
-            self.select_item(index, cx);
-        }
-    }
-
-    fn table_move_bottom(&mut self, _: &table::MoveBottom, _: &mut Window, cx: &mut Context<Self>) {
-        let visible_indices = self.sorted_indices(cx);
-        if visible_indices.is_empty() {
-            return;
-        }
-        let last_pos = visible_indices.len().saturating_sub(1);
-        self.table_state.scroll_to_row(last_pos, ScrollStrategy::Top);
-        if let Some(&index) = visible_indices.get(last_pos) {
-            self.select_item(index, cx);
-        }
-    }
-
-    fn table_page_up(&mut self, _: &table::PageUp, _: &mut Window, cx: &mut Context<Self>) {
-        let visible_indices = self.sorted_indices(cx);
-        if visible_indices.is_empty() {
-            return;
-        }
-        let current_position = self
-            .selected_index
-            .and_then(|index| visible_indices.iter().position(|&visible_index| visible_index == index))
-            .unwrap_or(0);
-        let page_size = 10;
-        let new_position = current_position.saturating_sub(page_size);
-        self.table_state.scroll_to_row(new_position, ScrollStrategy::Top);
-        if let Some(&index) = visible_indices.get(new_position) {
-            self.select_item(index, cx);
-        }
-    }
-
-    fn table_page_down(&mut self, _: &table::PageDown, _: &mut Window, cx: &mut Context<Self>) {
-        let visible_indices = self.sorted_indices(cx);
-        if visible_indices.is_empty() {
-            return;
-        }
-        let current_position = self
-            .selected_index
-            .and_then(|index| visible_indices.iter().position(|&visible_index| visible_index == index))
-            .unwrap_or(0);
-        let page_size = 10;
-        let last_pos = visible_indices.len().saturating_sub(1);
-        let new_position = (current_position + page_size).min(last_pos);
-        self.table_state.scroll_to_row(new_position, ScrollStrategy::Top);
-        if let Some(&index) = visible_indices.get(new_position) {
-            self.select_item(index, cx);
-        }
-    }
-
-    fn table_select_current(&mut self, _: &table::SelectCurrent, _: &mut Window, cx: &mut Context<Self>) {
+    fn confirm_select(&mut self, _: &ConfirmSelect, window: &mut Window, cx: &mut Context<Self>) {
         let visible_indices = self.sorted_indices(cx);
         if let Some(index) = self.selected_index.filter(|index| visible_indices.contains(index)) {
             self.select_item(index, cx);
         } else if let Some(&index) = visible_indices.first() {
             self.select_item(index, cx);
         }
-    }
-
-    fn table_dismiss(&mut self, _: &table::Dismiss, window: &mut Window, cx: &mut Context<Self>) {
         cx.emit(StringsPanelEvent::FocusEditor);
         window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
-    fn copy_address(&mut self, action: &CopyAddress, _: &mut Window, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(ClipboardItem::new_string(action.value.clone()));
-    }
-
-    fn copy_value(&mut self, action: &CopyValue, _: &mut Window, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(ClipboardItem::new_string(action.value.clone()));
-    }
-
-    fn focus_table(&mut self, _: &FocusTable, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.results.is_empty()
-            && let Some(handle) = &self.table_state.focus_handle
-        {
-            handle.focus(window, cx);
-        } else {
-            cx.emit(StringsPanelEvent::FocusEditor);
-            window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
-        }
-        cx.notify();
+    fn dismiss_table(&mut self, _: &DismissTable, window: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(StringsPanelEvent::FocusEditor);
+        window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
     fn clear_results(&mut self, _: &ClearResults, _: &mut Window, cx: &mut Context<Self>) {
         self.invalidate_scan();
+        self.sync_selection_to_filter(cx);
         cx.notify();
     }
 }
@@ -600,17 +699,13 @@ pub(crate) fn strings_row_colors(is_selected: bool, is_table_focused: bool, them
 
 impl Render for StringsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let table_overlay = VirtualTable::render_table_overlay(&self.table_state, cx, |this| &mut this.table_state);
-
         let theme = cx.theme();
-        let font_family = cx.global::<Appearance>().font_family.clone();
         let is_input_focused =
             self.min_length_input.read(cx).focus_handle(cx).is_focused(window) || self.filter_input.read(cx).focus_handle(cx).is_focused(window);
-        let is_table_focused = self.table_state.focus_handle.as_ref().is_some_and(|h| h.is_focused(window));
+        let is_table_focused = self.table_state.read(cx).focus_handle(cx).is_focused(window);
         let is_focused = self.focus_handle.is_focused(window) || is_input_focused || is_table_focused;
         let has_editor = self.editor.is_some();
         let minimum_length_is_valid = self.minimum_length(cx).is_some();
-        let visible_indices = self.sorted_indices(cx);
 
         let actions = Button::new("clear-strings")
             .ghost()
@@ -620,6 +715,7 @@ impl Render for StringsPanel {
             .disabled(!self.has_scanned && !self.is_scanning)
             .on_click(cx.listener(|this, _, _window, cx| {
                 this.invalidate_scan();
+                this.sync_selection_to_filter(cx);
                 cx.notify();
             }));
         let header = crate::ui::panels::panel_header("STRINGS", is_focused, theme, None, Some(actions.into_any_element()));
@@ -710,212 +806,16 @@ impl Render for StringsPanel {
                 .child(message)
                 .into_any_element()
         } else {
-            let total_visible_width = self.table_state.total_visible_width();
-            let scroll_offset_x = self.table_state.scroll_offset_x;
-            let visible_cols = self.table_state.visible_columns().map(|(ix, col)| (ix, col.width)).collect::<Vec<_>>();
-
-            let header_row = VirtualTable::render_header_row(
-                &self.table_state,
-                "strings-column-header",
-                theme,
-                cx,
-                None::<fn(usize, &TableColumn) -> Option<AnyElement>>,
-                Self::auto_fit_column,
-                Some(Self::sort_by),
-                |this| &mut this.table_state,
-            );
-
-            let row_count = visible_indices.len();
-            let view = cx.entity().clone();
-            let list_view = view.clone();
-            let context_focus_handle = self.focus_handle.clone();
-
-            let list = uniform_list("strings-virtual-table", row_count, move |visible_range, window, cx| {
-                let this = list_view.read(cx);
-                let theme = cx.theme();
-                let address_map = this
-                    .editor
-                    .as_ref()
-                    .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
-                    .unwrap_or_default();
-
-                visible_range
-                    .map(|row_ix| {
-                        if let Some(&index) = visible_indices.get(row_ix)
-                            && let Some(item) = this.results.get(index)
-                        {
-                            let is_selected = this.selected_index == Some(index);
-                            let colors = strings_row_colors(is_selected, is_table_focused, theme);
-
-                            let preview = preview_text(&item.text);
-                            let offset = item.offset;
-                            let byte_len = item.byte_len;
-                            let offset_value = format!("0x{:08X}", address_map.offset_to_address(offset));
-
-                            h_flex()
-                                .id(("strings-result-item", index))
-                                .w_full()
-                                .h(px(STRINGS_ROW_HEIGHT))
-                                .flex_shrink_0()
-                                .overflow_hidden()
-                                .border_b_1()
-                                .border_color(colors.border_color)
-                                .bg(colors.bg_color)
-                                .cursor_pointer()
-                                .hover(move |style| style.bg(colors.hover_bg))
-                                .on_click(window.listener_for(&list_view, move |this, _, window, cx| {
-                                    if let Some(handle) = &this.table_state.focus_handle {
-                                        handle.focus(window, cx);
-                                    }
-                                    this.select_item(index, cx);
-                                }))
-                                .on_mouse_down(
-                                    MouseButton::Right,
-                                    window.listener_for(&list_view, move |this, _, window, cx| {
-                                        if let Some(handle) = &this.table_state.focus_handle {
-                                            handle.focus(window, cx);
-                                        }
-                                        this.select_item(index, cx);
-                                    }),
-                                )
-                                .child(
-                                    h_flex()
-                                        .w(total_visible_width)
-                                        .h_full()
-                                        .ml(-scroll_offset_x)
-                                        .children(visible_cols.iter().enumerate().map(|(vis_ix, &(col_ix, width))| {
-                                            let is_first = vis_ix == 0;
-                                            let cell_content = match col_ix {
-                                                0 => div()
-                                                    .text_xs()
-                                                    .font_family(font_family.clone())
-                                                    .text_color(colors.address_color)
-                                                    .child(offset_value.clone())
-                                                    .into_any_element(),
-                                                1 => div()
-                                                    .text_xs()
-                                                    .font_family(font_family.clone())
-                                                    .text_color(colors.size_color)
-                                                    .child(byte_len.to_string())
-                                                    .into_any_element(),
-                                                2 => div()
-                                                    .text_xs()
-                                                    .font_family(font_family.clone())
-                                                    .text_color(colors.value_color)
-                                                    .child(preview.clone())
-                                                    .into_any_element(),
-                                                _ => div().into_any_element(),
-                                            };
-                                            VirtualTable::render_data_cell(col_ix, width, is_first, theme.table_row_border, cell_content)
-                                        })),
-                                )
-                                .into_any_element()
-                        } else {
-                            div().into_any_element()
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .track_scroll(&self.table_state.vertical_scroll_handle)
-            .size_full();
-
-            let horizontal_scrollbar = VirtualTable::render_horizontal_scrollbar(&self.table_state, self.last_container_width, theme);
-            let vertical_scrollbar = VirtualTable::render_vertical_scrollbar(&self.table_state, theme);
-            let context_view = view.clone();
-
-            let table_focus_handle = self.table_state.focus_handle.clone();
-            let mut table_container = v_flex()
-                .id(self.table_state.id.clone())
-                .key_context(table::CONTEXT)
+            div()
                 .flex_1()
                 .overflow_hidden()
-                .relative();
-
-            if let Some(focus_handle) = &table_focus_handle {
-                table_container = table_container.track_focus(focus_handle).on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
-                        if let Some(handle) = &this.table_state.focus_handle {
-                            handle.focus(window, cx);
-                        }
-                    }),
-                );
-            }
-
-            table_container = table_container
-                .on_action(cx.listener(Self::table_move_up))
-                .on_action(cx.listener(Self::table_move_down))
-                .on_action(cx.listener(Self::table_move_top))
-                .on_action(cx.listener(Self::table_move_bottom))
-                .on_action(cx.listener(Self::table_page_up))
-                .on_action(cx.listener(Self::table_page_down))
-                .on_action(cx.listener(Self::table_select_current))
-                .on_action(cx.listener(Self::table_dismiss));
-
-            table_container
-                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                    if this.table_state.resizing_column.is_some() {
-                        if event.pressed_button != Some(MouseButton::Left) {
-                            this.table_state.end_resize();
-                            cx.notify();
-                        } else {
-                            this.table_state.update_resize(event.position.x);
-                            cx.notify();
-                        }
+                .child(DataTable::new(&self.table_state).bordered(false))
+                .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.dismiss_table(&DismissTable, window, cx);
+                        cx.stop_propagation();
                     }
                 }))
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                        if this.table_state.resizing_column.is_some() {
-                            this.table_state.end_resize();
-                            cx.notify();
-                        }
-                    }),
-                )
-                .on_mouse_up_out(
-                    MouseButton::Left,
-                    cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                        if this.table_state.resizing_column.is_some() {
-                            this.table_state.end_resize();
-                            cx.notify();
-                        }
-                    }),
-                )
-                .child(table_overlay)
-                .child(header_row)
-                .child(
-                    div()
-                        .id("strings-results-container")
-                        .flex_1()
-                        .overflow_hidden()
-                        .relative()
-                        .child(list)
-                        .child(vertical_scrollbar)
-                        .children(horizontal_scrollbar),
-                )
-                .context_menu(move |menu, _window, cx| {
-                    let selected_info = {
-                        let this = context_view.read(cx);
-                        this.selected_index.and_then(|idx| {
-                            let item = this.results.get(idx)?;
-                            let address_map = this
-                                .editor
-                                .as_ref()
-                                .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
-                                .unwrap_or_default();
-                            let offset_value = format!("0x{:08X}", address_map.offset_to_address(item.offset));
-                            let value = item.text.clone();
-                            Some((offset_value, value))
-                        })
-                    };
-                    let Some((menu_offset, value)) = selected_info else {
-                        return menu;
-                    };
-                    menu.action_context(context_focus_handle.clone())
-                        .menu_with_icon("Copy Address", IconName::Hash, Box::new(CopyAddress { value: menu_offset }))
-                        .menu_with_icon("Copy Value", IconName::TextInitial, Box::new(CopyValue { value }))
-                })
                 .into_any_element()
         };
 
@@ -923,13 +823,17 @@ impl Render for StringsPanel {
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::focus_table))
+            .on_action(cx.listener(Self::confirm_select))
+            .on_action(cx.listener(Self::dismiss_table))
+            .on_action(cx.listener(|this, _: &gpui_kit::base::actions::Cancel, window, cx| {
+                this.dismiss_table(&DismissTable, window, cx);
+            }))
             .on_action(cx.listener(Self::copy_address))
             .on_action(cx.listener(Self::copy_value))
             .on_action(cx.listener(Self::clear_results))
             .child(header)
             .child(scan_controls)
-            .child(result_summary)
-            .child(filter_controls)
+            .when(self.has_scanned || self.is_scanning, |this| this.child(result_summary).child(filter_controls))
             .child(body)
     }
 }
@@ -1031,11 +935,12 @@ mod tests {
     fn test_strings_address_contrast_across_all_embedded_themes() {
         use super::strings_row_colors;
         use crate::assets::Assets;
-        use crate::theme::EmbeddedThemes;
+        use crate::theme::{load_themes_from_assets, theme_names};
         use gpui_kit::{Hsla, Rgba};
 
-        let embedded = EmbeddedThemes::load_from_assets(&Assets);
-        assert!(!embedded.theme_names().is_empty());
+        let registry = load_themes_from_assets(&Assets);
+        let names = theme_names(registry.themes());
+        assert!(!names.is_empty());
 
         fn channel_to_linear(c: f32) -> f32 {
             if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
@@ -1053,10 +958,10 @@ mod tests {
             (lighter + 0.05) / (darker + 0.05)
         }
 
-        for name in embedded.theme_names() {
-            let config = embedded.get(&name).unwrap();
+        for name in names {
+            let config = registry.themes().get(&name).unwrap();
             let mut theme = super::Theme::default();
-            theme.apply_config(&config);
+            theme.apply_config(config);
 
             let colors = strings_row_colors(false, false, &theme);
             let ratio = contrast_ratio(colors.address_color, colors.bg_color);
@@ -1069,5 +974,19 @@ mod tests {
                 ratio
             );
         }
+    }
+
+    #[test]
+    fn test_strings_panel_event_focus_editor() {
+        let event = super::StringsPanelEvent::FocusEditor;
+        assert_eq!(event, super::StringsPanelEvent::FocusEditor);
+
+        let parent_ctx = gpui_kit::KeyContext::try_from("StringsPanel").unwrap();
+        let child_ctx = gpui_kit::KeyContext::try_from("DataTable").unwrap();
+        let contexts = vec![parent_ctx, child_ctx];
+
+        let pred_desc = gpui_kit::KeyBindingContextPredicate::parse("StringsPanel > DataTable").unwrap();
+        assert!(pred_desc.eval(&contexts));
+        assert_eq!(pred_desc.depth_of(&contexts), Some(2));
     }
 }

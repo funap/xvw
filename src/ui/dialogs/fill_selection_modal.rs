@@ -1,8 +1,9 @@
 use std::ops::Range;
 
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::input::{self, Input, InputState};
-use gpui_kit::component::{ActiveTheme as _, Disableable, Icon, Sizable, Size, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable, Icon, Sizable, Size, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -12,20 +13,7 @@ use crate::core::radix::ByteOrder;
 use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 
-#[derive(Clone, PartialEq, Action)]
-pub struct ConfirmFill;
-
-#[derive(Clone, PartialEq, Action)]
-pub struct CancelFill;
-
-const CONTEXT: &str = "FillSelectionModal";
-
-pub fn init(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("enter", ConfirmFill, Some(CONTEXT)),
-        KeyBinding::new("escape", CancelFill, Some(CONTEXT)),
-    ]);
-}
+pub fn init(_cx: &mut App) {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FillTab {
@@ -43,45 +31,35 @@ pub enum PatternFormat {
     Text,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum FillSelectionModalEvent {
-    Fill(FillPattern),
-    Cancel,
-}
-
 pub struct FillSelectionModal {
-    focus_handle: FocusHandle,
-    range: Range<usize>,
-    active_tab: FillTab,
+    pub focus_handle: FocusHandle,
+    pub range: Range<usize>,
+    pub active_tab: FillTab,
 
     // Single Byte
-    byte_input: Entity<InputState>,
-    parsed_byte: Result<u8, String>,
+    pub byte_input: Entity<InputState>,
+    pub parsed_byte: Result<u8, String>,
 
     // Pattern
-    pattern_format: PatternFormat,
-    pattern_input: Entity<InputState>,
-    parsed_pattern: Result<Vec<u8>, String>,
+    pub pattern_format: PatternFormat,
+    pub pattern_input: Entity<InputState>,
+    pub parsed_pattern: Result<Vec<u8>, String>,
 
     // Sequential
-    seq_width: SequentialWidth,
-    seq_order: ByteOrder,
-    seq_start_input: Entity<InputState>,
-    seq_step_input: Entity<InputState>,
-    parsed_seq_start: Result<u64, String>,
-    parsed_seq_step: Result<u64, String>,
+    pub seq_width: SequentialWidth,
+    pub seq_order: ByteOrder,
+    pub seq_start_input: Entity<InputState>,
+    pub seq_step_input: Entity<InputState>,
+    pub parsed_seq_start: Result<u64, String>,
+    pub parsed_seq_step: Result<u64, String>,
 
     // Random
-    random_mode: RandomMode,
-    random_preview_sample: Vec<u8>,
+    pub random_mode: RandomMode,
+    pub random_preview_sample: Vec<u8>,
 }
-
-impl EventEmitter<FillSelectionModalEvent> for FillSelectionModal {}
 
 impl FillSelectionModal {
     pub fn new(range: Range<usize>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let focus_handle = cx.focus_handle();
-
         // 1. Single byte input
         let byte_input = cx.new(|cx| InputState::new(window, cx).placeholder("0x00, 0xFF, 0x90, 255, ' '..."));
         byte_input.update(cx, |input, cx| {
@@ -103,6 +81,8 @@ impl FillSelectionModal {
         seq_step_input.update(cx, |input, cx| {
             input.set_value("1", window, cx);
         });
+
+        let focus_handle = cx.focus_handle();
 
         let this = Self {
             focus_handle,
@@ -253,93 +233,26 @@ impl FillSelectionModal {
         }
     }
 
-    pub fn submit(&mut self, cx: &mut Context<Self>) {
+    pub fn current_fill_pattern(&self) -> Option<FillPattern> {
         if !self.is_current_valid() {
-            return;
+            return None;
         }
 
-        let pattern = match self.active_tab {
-            FillTab::SingleByte => {
-                let byte = match &self.parsed_byte {
-                    Ok(b) => *b,
-                    Err(_) => return,
-                };
-                FillPattern::SingleByte(byte)
-            }
-            FillTab::Pattern => {
-                let bytes = match &self.parsed_pattern {
-                    Ok(p) => p.clone(),
-                    Err(_) => return,
-                };
-                FillPattern::Pattern(bytes)
-            }
+        match self.active_tab {
+            FillTab::SingleByte => self.parsed_byte.as_ref().ok().map(|&b| FillPattern::SingleByte(b)),
+            FillTab::Pattern => self.parsed_pattern.as_ref().ok().map(|p| FillPattern::Pattern(p.clone())),
             FillTab::Sequential => {
-                let start = match &self.parsed_seq_start {
-                    Ok(s) => *s,
-                    Err(_) => return,
-                };
-                let step = match &self.parsed_seq_step {
-                    Ok(st) => *st,
-                    Err(_) => return,
-                };
-                FillPattern::Sequential {
+                let start = *self.parsed_seq_start.as_ref().ok()?;
+                let step = *self.parsed_seq_step.as_ref().ok()?;
+                Some(FillPattern::Sequential {
                     width: self.seq_width,
                     start,
                     step,
                     byte_order: self.seq_order,
-                }
+                })
             }
-            FillTab::Random => FillPattern::Random { mode: self.random_mode },
-        };
-
-        cx.emit(FillSelectionModalEvent::Fill(pattern));
-    }
-
-    pub fn cancel(&mut self, cx: &mut Context<Self>) {
-        cx.emit(FillSelectionModalEvent::Cancel);
-    }
-
-    fn render_header(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let range_len = self.range.len();
-        let range_str = format!(
-            "0x{:08X} .. 0x{:08X} ({} bytes / 0x{:X})",
-            self.range.start, self.range.end, range_len, range_len
-        );
-
-        h_flex()
-            .justify_between()
-            .items_center()
-            .px_4()
-            .py_3()
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(Icon::new(IconName::Replace).size_4().text_color(theme.primary))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).text_sm().child("Fill Selection"))
-                    .child(
-                        div()
-                            .text_xs()
-                            .px_2()
-                            .py_0p5()
-                            .rounded_md()
-                            .bg(theme.muted)
-                            .text_color(theme.muted_foreground)
-                            .child(range_str),
-                    ),
-            )
-            .child(
-                Button::new("close-fill-modal")
-                    .icon(IconName::Close)
-                    .ghost()
-                    .with_size(Size::XSmall)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.cancel(cx);
-                    })),
-            )
+            FillTab::Random => Some(FillPattern::Random { mode: self.random_mode }),
+        }
     }
 
     fn render_tab_buttons(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1031,31 +944,97 @@ impl FillSelectionModal {
             .child(div().text_xs().text_color(theme.muted_foreground).child(note))
             .into_any_element()
     }
+}
 
-    fn render_footer(&self, theme: &gpui_kit::component::Theme, is_valid: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let error_msg = self.current_error_message();
+impl Render for FillSelectionModal {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme().clone();
 
-        h_flex()
-            .justify_between()
-            .items_center()
-            .px_4()
-            .py_3()
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .child(div().text_xs().text_color(theme.danger).child(error_msg.unwrap_or_default()))
-            .child(
+        v_flex()
+            .gap_3()
+            .child(self.render_tab_buttons(&theme, cx))
+            .child(div().h(px(148.0)).child(match self.active_tab {
+                FillTab::SingleByte => self.render_single_byte_section(&theme, cx).into_any_element(),
+                FillTab::Pattern => self.render_pattern_section(&theme, cx).into_any_element(),
+                FillTab::Sequential => self.render_sequential_section(&theme, cx).into_any_element(),
+                FillTab::Random => self.render_random_section(&theme, cx).into_any_element(),
+            }))
+            .child(self.render_preview(&theme, cx))
+    }
+}
+
+/// Displays the Fill Selection dialog.
+pub fn open_fill_selection_dialog(range: Range<usize>, window: &mut Window, cx: &mut App, on_confirm: impl Fn(FillPattern, &mut Window, &mut App) + 'static) {
+    if window.has_active_dialog(cx) {
+        return;
+    }
+
+    let on_confirm = std::rc::Rc::new(on_confirm);
+    let view = cx.new(|cx| FillSelectionModal::new(range.clone(), window, cx));
+
+    // Focus byte input initially
+    view.update(cx, |v, cx| {
+        v.byte_input.update(cx, |input, cx| {
+            input.focus(window, cx);
+        });
+    });
+
+    let on_confirm_for_click = on_confirm.clone();
+    let on_confirm_for_ok = on_confirm.clone();
+    let view_for_dialog = view.clone();
+    let view_for_content = view.clone();
+    let view_for_ok = view.clone();
+
+    let range_len = range.len();
+    let range_str = format!("0x{:08X} .. 0x{:08X} ({} bytes / 0x{:X})", range.start, range.end, range_len, range_len);
+
+    window.open_dialog(cx, move |dialog, _window, cx| {
+        let theme = cx.theme();
+        let is_valid = view_for_dialog.read(cx).is_current_valid();
+        let error_msg = view_for_dialog.read(cx).current_error_message();
+
+        let on_confirm_btn = on_confirm_for_click.clone();
+        let view_btn = view_for_dialog.clone();
+
+        dialog
+            .w(px(520.0))
+            .title(
                 h_flex()
                     .gap_2()
                     .items_center()
+                    .child(Icon::new(IconName::Replace).size(px(18.0)).text_color(theme.primary))
+                    .child(div().font_weight(FontWeight::SEMIBOLD).text_sm().child("Fill Selection"))
+                    .child(
+                        div()
+                            .text_xs()
+                            .px_2()
+                            .py_0p5()
+                            .rounded_md()
+                            .bg(theme.muted)
+                            .text_color(theme.muted_foreground)
+                            .child(range_str.clone()),
+                    ),
+            )
+            .content({
+                let view = view_for_content.clone();
+                move |content, _window, _cx| content.child(view.clone())
+            })
+            .footer(
+                DialogFooter::new()
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().text_xs().text_color(theme.danger).child(error_msg.unwrap_or_default())),
+                    )
                     .child(
                         Button::new("cancel-btn")
                             .label("Cancel")
                             .ghost()
                             .with_size(Size::Small)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.cancel(cx);
-                            })),
+                            .on_click(|_, window, cx| {
+                                window.close_dialog(cx);
+                            }),
                     )
                     .child(
                         Button::new("fill-btn")
@@ -1063,57 +1042,38 @@ impl FillSelectionModal {
                             .primary()
                             .with_size(Size::Small)
                             .disabled(!is_valid)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.submit(cx);
-                            })),
+                            .on_click(move |_, window, cx| {
+                                let pattern = match view_btn.read(cx).current_fill_pattern() {
+                                    Some(p) => p,
+                                    None => return,
+                                };
+                                window.close_dialog(cx);
+                                on_confirm_btn(pattern, window, cx);
+                            }),
                     ),
             )
-    }
+            .on_ok({
+                let on_confirm_ok = on_confirm_for_ok.clone();
+                let view_ok = view_for_ok.clone();
+                move |_, window, cx| {
+                    if let Some(pattern) = view_ok.read(cx).current_fill_pattern() {
+                        on_confirm_ok(pattern, window, cx);
+                        true
+                    } else {
+                        false
+                    }
+                }
+            })
+    });
 }
 
-impl Render for FillSelectionModal {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let is_valid = self.is_current_valid();
-
-        v_flex()
-            .id("fill-selection-modal")
-            .key_context(CONTEXT)
-            .track_focus(&self.focus_handle)
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
-            .on_scroll_wheel(|_, _, cx| {
-                cx.stop_propagation();
-            })
-            .on_action(cx.listener(|this, _: &ConfirmFill, _, cx| {
-                this.submit(cx);
-            }))
-            .on_action(cx.listener(|this, _: &CancelFill, _, cx| {
-                this.cancel(cx);
-            }))
-            .w(px(520.0))
-            .bg(theme.background)
-            .border_1()
-            .border_color(theme.border)
-            .rounded_lg()
-            .shadow_xl()
-            .overflow_hidden()
-            .child(self.render_header(&theme, cx))
-            .child(
-                v_flex()
-                    .p_4()
-                    .gap_3()
-                    .child(self.render_tab_buttons(&theme, cx))
-                    .child(div().h(px(148.0)).child(match self.active_tab {
-                        FillTab::SingleByte => self.render_single_byte_section(&theme, cx).into_any_element(),
-                        FillTab::Pattern => self.render_pattern_section(&theme, cx).into_any_element(),
-                        FillTab::Sequential => self.render_sequential_section(&theme, cx).into_any_element(),
-                        FillTab::Random => self.render_random_section(&theme, cx).into_any_element(),
-                    }))
-                    .child(self.render_preview(&theme, cx)),
-            )
-            .child(self.render_footer(&theme, is_valid, cx))
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_fill_selection_format_range_str() {
+        let range = 0..16;
+        let range_len = range.len();
+        let range_str = format!("0x{:08X} .. 0x{:08X} ({} bytes / 0x{:X})", range.start, range.end, range_len, range_len);
+        assert_eq!(range_str, "0x00000000 .. 0x00000010 (16 bytes / 0x10)");
     }
 }

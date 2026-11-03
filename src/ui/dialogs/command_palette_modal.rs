@@ -1,27 +1,18 @@
 use std::sync::Arc;
 
-use gpui_kit::component::input::{self, Input, InputState};
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable, Size, h_flex};
+use gpui_kit::component::command::{Command, CommandItem, CommandState};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use crate::actions::{PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev};
 use crate::core::fuzzy_matcher::FuzzyMatcher;
-use crate::ui::dialogs::common::{palette_list_container, palette_modal_container, render_highlighted_text, render_palette_empty_message};
-use crate::ui::icon::IconName;
+use crate::ui::dialogs::common::{
+    PALETTE_LIST_HEIGHT, PALETTE_WIDTH, render_highlighted_text, render_palette_empty_message, render_palette_footer_hints, render_shortcut_badge,
+};
 use crate::ui::menus::{MenuEditorState, PaletteCommand};
 
-const CONTEXT: &str = "CommandPaletteModal";
-
 /// Registers keybindings for the command palette modal context.
-pub fn init(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("down", PaletteSelectNext, Some(CONTEXT)),
-        KeyBinding::new("up", PaletteSelectPrev, Some(CONTEXT)),
-        KeyBinding::new("enter", PaletteConfirm, Some(CONTEXT)),
-        KeyBinding::new("escape", PaletteCancel, Some(CONTEXT)),
-    ]);
-}
+pub fn init(_cx: &mut App) {}
 
 /// Filtered and scored item ready for display in the command palette.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,9 +33,6 @@ pub enum CommandPaletteEvent {
     Cancel,
 }
 
-/// Maximum number of candidate items to display at once to prevent layout stalls.
-pub const MAX_PALETTE_RESULTS: usize = 80;
-
 /// Pure helper that filters and ranks commands by query using fuzzy matching.
 pub fn filter_commands(commands: &[PaletteCommand], query: &str, state: &MenuEditorState) -> Vec<CommandPaletteItem> {
     let trimmed = query.trim();
@@ -53,7 +41,6 @@ pub fn filter_commands(commands: &[PaletteCommand], query: &str, state: &MenuEdi
         return commands
             .iter()
             .enumerate()
-            .take(MAX_PALETTE_RESULTS)
             .map(|(idx, cmd)| {
                 let is_executable = cmd.is_executable(state);
                 CommandPaletteItem {
@@ -107,82 +94,50 @@ pub fn filter_commands(commands: &[PaletteCommand], query: &str, state: &MenuEdi
     // Sort descending by score; on tie, preserve command declaration order
     scored.sort_by(|(s_a, idx_a, _), (s_b, idx_b, _)| s_b.cmp(s_a).then_with(|| idx_a.cmp(idx_b)));
 
-    scored.into_iter().take(MAX_PALETTE_RESULTS).map(|(_, _, item)| item).collect()
+    scored.into_iter().map(|(_, _, item)| item).collect()
 }
 
 pub struct CommandPaletteModal {
-    focus_handle: FocusHandle,
-    query_input: Entity<InputState>,
-    scroll_handle: ScrollHandle,
+    pub command_state: Entity<CommandState>,
     all_commands: Vec<PaletteCommand>,
     filtered_items: Vec<CommandPaletteItem>,
-    selected_index: usize,
     editor_state: MenuEditorState,
+    query: String,
 }
 
 impl EventEmitter<CommandPaletteEvent> for CommandPaletteModal {}
 
 impl CommandPaletteModal {
     pub fn new(commands: Vec<PaletteCommand>, editor_state: MenuEditorState, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let focus_handle = cx.focus_handle();
-        let query_input = cx.new(|cx| InputState::new(window, cx).placeholder("Type a command to run..."));
-
+        let command_state = cx.new(|cx| CommandState::new(window, cx));
         let filtered_items = filter_commands(&commands, "", &editor_state);
 
-        cx.subscribe(&query_input, |this, input, event: &input::InputEvent, cx| match event {
-            input::InputEvent::Change => {
-                let val = input.read(cx).value().to_string();
-                this.update_query(&val, cx);
-            }
-            input::InputEvent::PressEnter { .. } => {
-                this.confirm(cx);
-            }
-            _ => {}
-        })
-        .detach();
-
         Self {
-            focus_handle,
-            query_input,
-            scroll_handle: ScrollHandle::new(),
+            command_state,
             all_commands: commands,
             filtered_items,
-            selected_index: 0,
             editor_state,
+            query: String::new(),
         }
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
-        self.query_input.update(cx, |input, cx| {
-            input.focus(window, cx);
+        self.command_state.update(cx, |state, cx| {
+            state.focus(window, cx);
         });
     }
 
     pub fn update_query(&mut self, query: &str, cx: &mut Context<Self>) {
+        if self.query == query {
+            return;
+        }
+        self.query = query.to_string();
         self.filtered_items = filter_commands(&self.all_commands, query, &self.editor_state);
-        self.selected_index = 0;
-        self.scroll_handle.scroll_to_item(0);
         cx.notify();
     }
 
-    pub fn select_next(&mut self, cx: &mut Context<Self>) {
-        if !self.filtered_items.is_empty() {
-            self.selected_index = (self.selected_index + 1).min(self.filtered_items.len() - 1);
-            self.scroll_handle.scroll_to_item(self.selected_index);
-            cx.notify();
-        }
-    }
-
-    pub fn select_prev(&mut self, cx: &mut Context<Self>) {
-        if !self.filtered_items.is_empty() {
-            self.selected_index = self.selected_index.saturating_sub(1);
-            self.scroll_handle.scroll_to_item(self.selected_index);
-            cx.notify();
-        }
-    }
-
-    pub fn confirm(&mut self, cx: &mut Context<Self>) {
-        if let Some(item) = self.filtered_items.get(self.selected_index)
+    pub fn confirm_index(&mut self, row_ix: usize, cx: &mut Context<Self>) {
+        if let Some(item) = self.filtered_items.get(row_ix)
             && let Some(cmd) = self.all_commands.get(item.command_index)
             && item.is_executable
         {
@@ -197,142 +152,116 @@ impl CommandPaletteModal {
 
 impl Render for CommandPaletteModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = cx.entity().clone();
         let theme = cx.theme().clone();
 
-        let mut list_children = Vec::new();
-
-        if self.filtered_items.is_empty() {
-            list_children.push(render_palette_empty_message("No matching commands found", &theme));
-        } else {
-            for (idx, item) in self.filtered_items.iter().enumerate() {
-                let is_selected = idx == self.selected_index;
+        let items: Vec<CommandItem> = self
+            .filtered_items
+            .iter()
+            .map(|item| {
                 let is_executable = item.is_executable;
+                let title = item.title.clone();
+                let title_matches = item.title_matches.clone();
+                let category = item.category.clone();
+                let shortcut = item.shortcut.clone();
+                let theme_clone = theme.clone();
 
-                let title_color = if is_executable { theme.foreground } else { theme.muted_foreground };
+                CommandItem::new()
+                    .label(item.title.clone())
+                    .disabled(!is_executable)
+                    .child(move |_window, _cx| {
+                        let title_color = if is_executable {
+                            theme_clone.foreground
+                        } else {
+                            theme_clone.muted_foreground
+                        };
+                        let title_element = render_highlighted_text(
+                            &title,
+                            &title_matches,
+                            title_color,
+                            if is_executable { theme_clone.primary } else { theme_clone.muted_foreground },
+                            true,
+                        );
 
-                let title_element = render_highlighted_text(
-                    &item.title,
-                    &item.title_matches,
-                    title_color,
-                    if is_executable { theme.primary } else { theme.muted_foreground },
-                    true,
-                );
-
-                let shortcut_badge = item.shortcut.as_ref().map(|sc| {
-                    div()
-                        .px_1p5()
-                        .py_0p5()
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(theme.border)
-                        .bg(theme.secondary)
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(sc.clone())
-                });
-
-                let status_badge = if !is_executable {
-                    Some(div().text_xs().text_color(theme.muted_foreground).child("unavailable"))
-                } else {
-                    None
-                };
-
-                let element = h_flex()
-                    .id(SharedString::from(format!("cmd-palette-item-{idx}")))
-                    .items_center()
-                    .justify_between()
-                    .px_3()
-                    .py_1p5()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .when(is_selected, |el| el.bg(theme.list_active))
-                    .when(!is_selected && is_executable, |el| el.hover(|s| s.bg(theme.list_hover)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.selected_index = idx;
-                        this.confirm(cx);
-                    }))
-                    .child(
                         h_flex()
                             .items_center()
-                            .gap_2()
-                            .overflow_hidden()
+                            .justify_between()
+                            .w_full()
                             .child(
-                                div()
-                                    .text_xs()
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(theme.secondary)
-                                    .text_color(theme.primary)
-                                    .child(item.category.clone()),
+                                h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .overflow_hidden()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .px_1p5()
+                                            .py_0p5()
+                                            .rounded_sm()
+                                            .bg(theme_clone.secondary)
+                                            .text_color(theme_clone.primary)
+                                            .child(category.clone()),
+                                    )
+                                    .child(div().text_sm().child(title_element)),
                             )
-                            .child(div().text_sm().child(title_element)),
-                    )
-                    .child(
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .when_some(shortcut.as_ref(), |el, sc| el.child(render_shortcut_badge(sc)))
+                                    .when(!is_executable, |el| {
+                                        el.child(div().text_xs().text_color(theme_clone.muted_foreground).child("unavailable"))
+                                    }),
+                            )
+                    })
+            })
+            .collect();
+
+        let count = self.filtered_items.len();
+        let footer_theme = theme.clone();
+        let view_for_query = view.clone();
+        let view_for_confirm = view.clone();
+        let view_for_cancel = view;
+
+        div()
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation();
+            })
+            .child(
+                Command::new(&self.command_state)
+                    .w(px(PALETTE_WIDTH))
+                    .max_h(px(PALETTE_LIST_HEIGHT))
+                    .searchable(true)
+                    .filterable(false)
+                    .placeholder("Type a command to run...")
+                    .items(items)
+                    .empty(move |_state, _window, cx| render_palette_empty_message("No matching commands found", cx.theme()))
+                    .footer(move |_state, _window, _cx| {
                         h_flex()
                             .items_center()
-                            .gap_2()
-                            .when_some(shortcut_badge, |el, sc| el.child(sc))
-                            .when_some(status_badge, |el, st| el.child(st)),
-                    );
-
-                list_children.push(element.into_any_element());
-            }
-        }
-
-        palette_modal_container(&theme)
-            .id("command-palette-modal")
-            .key_context(CONTEXT)
-            .track_focus(&self.focus_handle)
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
-            .on_scroll_wheel(|_, _, cx| {
-                cx.stop_propagation();
-            })
-            .on_action(cx.listener(|this, _: &PaletteSelectNext, _, cx| {
-                this.select_next(cx);
-            }))
-            .on_action(cx.listener(|this, _: &PaletteSelectPrev, _, cx| {
-                this.select_prev(cx);
-            }))
-            .on_action(cx.listener(|this, _: &PaletteConfirm, _, cx| {
-                this.confirm(cx);
-            }))
-            .on_action(cx.listener(|this, _: &PaletteCancel, _, cx| {
-                this.cancel(cx);
-            }))
-            .child(
-                h_flex()
-                    .items_center()
-                    .p_3()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .bg(theme.tab_bar)
-                    .rounded_t_lg()
-                    .child(
-                        Input::new(&self.query_input)
-                            .cleanable(true)
-                            .prefix(Icon::new(IconName::Search).size(px(16.0)))
-                            .with_size(Size::Small),
-                    ),
-            )
-            .child(palette_list_container(&self.scroll_handle, "command-palette-list").children(list_children))
-            .child(
-                h_flex()
-                    .items_center()
-                    .justify_between()
-                    .px_3()
-                    .py_1p5()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .bg(theme.muted)
-                    .rounded_b_lg()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(h_flex().items_center().gap_3().child("↑↓ Navigate").child("↵ Select").child("Esc Dismiss"))
-                    .child(format!("{} commands", self.filtered_items.len())),
+                            .justify_between()
+                            .w_full()
+                            .text_xs()
+                            .text_color(footer_theme.muted_foreground)
+                            .child(render_palette_footer_hints())
+                            .child(format!("{} commands", count))
+                    })
+                    .on_query(move |query, _window, cx| {
+                        view_for_query.update(cx, |this, cx| {
+                            this.update_query(query, cx);
+                        });
+                    })
+                    .on_confirm(move |index_path, _window, cx| {
+                        view_for_confirm.update(cx, |this, cx| {
+                            this.confirm_index(index_path.row, cx);
+                        });
+                    })
+                    .on_cancel(move |_window, cx| {
+                        view_for_cancel.update(cx, |this, cx| {
+                            this.cancel(cx);
+                        });
+                    }),
             )
     }
 }

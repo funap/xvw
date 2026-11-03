@@ -45,7 +45,7 @@ impl LeftPanel {
     pub fn new(file_tree: Entity<FileTreeView>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search_panel = cx.new(|cx| SearchPanel::new(None, window, cx));
         let strings_panel = cx.new(|cx| StringsPanel::new(None, window, cx));
-        let struct_tree = cx.new(|cx| StructTreeView::new(None, None, cx));
+        let struct_tree = cx.new(|cx| StructTreeView::new(None, None, window, cx));
         let data_inspector = cx.new(|cx| DataInspector::new(None, window, cx));
         let visual_map = cx.new(|cx| VisualMapPanel::new(None, cx));
         let checksum_panel = cx.new(|cx| {

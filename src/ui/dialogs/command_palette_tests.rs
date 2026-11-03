@@ -93,3 +93,27 @@ fn test_palette_dimensions_consistency() {
     assert_eq!(PALETTE_WIDTH, 580.0);
     assert_eq!(PALETTE_LIST_HEIGHT, 320.0);
 }
+
+#[test]
+fn test_filter_commands_no_limit() {
+    let mut commands = Vec::new();
+    for i in 0..150 {
+        commands.push(PaletteCommand {
+            category: "Test".into(),
+            label: format!("Command {i}").into(),
+            title: format!("Test: Command {i}").into(),
+            shortcut: None,
+            action: std::sync::Arc::new(|| Box::new(crate::actions::NewFile)),
+            is_enabled: None,
+        });
+    }
+    let state = MenuEditorState::default();
+
+    // Empty query returns all commands without limit
+    let items_empty = filter_commands(&commands, "", &state);
+    assert_eq!(items_empty.len(), 150);
+
+    // Matching query returns all matching commands without limit
+    let items_match = filter_commands(&commands, "Command", &state);
+    assert_eq!(items_match.len(), 150);
+}

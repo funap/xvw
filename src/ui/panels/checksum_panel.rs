@@ -2,6 +2,7 @@ use crate::core::checksum::{ChecksumAlgorithm, ChecksumCategory, ChecksumCompare
 use crate::core::editor::Editor;
 use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
+use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::input::{self, Input, InputState};
 use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::notification::Notification;
@@ -12,7 +13,6 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use std::collections::HashMap;
 use std::ops::Range;
-use std::time::Duration;
 
 /// Maximum byte length automatically computed without manual confirmation.
 pub const AUTO_CALC_MAX_BYTES: usize = 1_000_000;
@@ -163,7 +163,6 @@ pub struct ChecksumPanel {
     pub is_calculating: bool,
     pub results: Option<ChecksumResults>,
     pub selected_algorithm: Option<ChecksumAlgorithm>,
-    last_copied_algorithm: Option<ChecksumAlgorithm>,
     is_panel_active: bool,
     calculation_generation: usize,
     computed_signature: Option<CalculationSignature>,
@@ -173,7 +172,6 @@ pub struct ChecksumPanel {
     _editor_subscription: Option<Subscription>,
     _compare_subscription: Option<Subscription>,
     calculation_task: Option<Task<()>>,
-    copy_feedback_task: Option<Task<()>>,
 }
 
 impl ChecksumPanel {
@@ -196,7 +194,6 @@ impl ChecksumPanel {
             is_calculating: false,
             results: None,
             selected_algorithm: None,
-            last_copied_algorithm: None,
             is_panel_active: true,
             calculation_generation: 0,
             computed_signature: None,
@@ -206,7 +203,6 @@ impl ChecksumPanel {
             _editor_subscription: None,
             _compare_subscription: Some(compare_subscription),
             calculation_task: None,
-            copy_feedback_task: None,
         };
         this.set_editor(editor, cx);
         this
@@ -241,7 +237,6 @@ impl ChecksumPanel {
         self.computed_signature = None;
         self.last_observed_signature = None;
         self.selected_algorithm = None;
-        self.last_copied_algorithm = None;
 
         if let Some(editor_id) = next_editor_id {
             self.restore_cached_state(editor_id);
@@ -511,30 +506,11 @@ impl ChecksumPanel {
         self.results.as_ref().map(|res| res.format_all())
     }
 
-    fn mark_copied_feedback(&mut self, algo: ChecksumAlgorithm, cx: &mut Context<Self>) {
-        self.last_copied_algorithm = Some(algo);
-        self.copy_feedback_task = None;
-        let task = cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(1400)).await;
-            if let Some(this) = this.upgrade() {
-                this.update(cx, |this, cx| {
-                    if this.last_copied_algorithm == Some(algo) {
-                        this.last_copied_algorithm = None;
-                        cx.notify();
-                    }
-                });
-            }
-        });
-        self.copy_feedback_task = Some(task);
-        cx.notify();
-    }
-
     fn perform_copy_algorithm_value(&mut self, algo: ChecksumAlgorithm, value: String, window: &mut Window, cx: &mut Context<Self>) {
         if value.is_empty() {
             return;
         }
         cx.write_to_clipboard(ClipboardItem::new_string(value));
-        self.mark_copied_feedback(algo, cx);
         window.push_notification(Notification::info(format!("Copied {} value", algo.label())), cx);
     }
 
@@ -545,7 +521,6 @@ impl ChecksumPanel {
     fn copy_raw_hex(&mut self, action: &CopyRawHex, window: &mut Window, cx: &mut Context<Self>) {
         if !action.value.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(action.value.clone()));
-            self.mark_copied_feedback(action.algo, cx);
             window.push_notification(Notification::info(format!("Copied {} raw hex", action.algo.label())), cx);
         }
     }
@@ -553,7 +528,6 @@ impl ChecksumPanel {
     fn copy_row(&mut self, action: &CopyRow, window: &mut Window, cx: &mut Context<Self>) {
         if !action.text.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(action.text.clone()));
-            self.mark_copied_feedback(action.algo, cx);
             window.push_notification(Notification::info("Copied checksum row to clipboard"), cx);
         }
     }
@@ -597,7 +571,6 @@ impl ChecksumPanel {
         let copy_val_for_btn = val_str.clone();
         let copy_val_for_dblclick = val_str.clone();
         let is_selected = self.selected_algorithm == Some(algo);
-        let is_copied = self.last_copied_algorithm == Some(algo);
 
         let mut label_el = h_flex().flex_shrink_0().items_center().gap_1p5().child(
             div()
@@ -638,16 +611,17 @@ impl ChecksumPanel {
             .text_color(if is_matched { theme.success } else { theme.foreground })
             .child(val_str);
 
-        let copy_icon = if is_copied { IconName::Check } else { IconName::Copy };
-        let copy_button = Button::new(SharedString::from(format!("checksum-copy-{}", label)))
-            .ghost()
-            .icon(copy_icon)
+        let view_handle = view.clone();
+        let copy_button = Clipboard::new(SharedString::from(format!("checksum-copy-{}", label)))
+            .value(copy_val_for_btn)
+            .tooltip("Copy Value")
             .with_size(Size::XSmall)
-            .tooltip(if is_copied { "Copied!" } else { "Copy Value" })
-            .on_click(window.listener_for(view, move |this, _, window, cx| {
-                this.selected_algorithm = Some(algo);
-                this.perform_copy_algorithm_value(algo, copy_val_for_btn.clone(), window, cx);
-            }));
+            .on_copied(move |_, window, cx| {
+                view_handle.update(cx, |this, _| {
+                    this.selected_algorithm = Some(algo);
+                });
+                window.push_notification(Notification::info(format!("Copied {} value", algo.label())), cx);
+            });
 
         let right_container = h_flex()
             .flex_1()
@@ -718,7 +692,6 @@ impl ChecksumPanel {
         let copy_val_for_btn = copy_str.clone();
         let copy_val_for_dblclick = copy_str.clone();
         let is_selected = self.selected_algorithm == Some(algo);
-        let is_copied = self.last_copied_algorithm == Some(algo);
 
         // Render 16-character hex blocks with flex_wrap so all digits remain visible without ellipsis
         // at narrow sidebar widths (140px-250px) and collapse to fewer lines when widened.
@@ -761,16 +734,17 @@ impl ChecksumPanel {
             );
         }
 
-        let copy_icon = if is_copied { IconName::Check } else { IconName::Copy };
-        let copy_button = Button::new(SharedString::from(format!("checksum-copy-{}", label)))
-            .ghost()
-            .icon(copy_icon)
+        let view_handle = view.clone();
+        let copy_button = Clipboard::new(SharedString::from(format!("checksum-copy-{}", label)))
+            .value(copy_val_for_btn)
+            .tooltip("Copy Value")
             .with_size(Size::XSmall)
-            .tooltip(if is_copied { "Copied!" } else { "Copy Value" })
-            .on_click(window.listener_for(view, move |this, _, window, cx| {
-                this.selected_algorithm = Some(algo);
-                this.perform_copy_algorithm_value(algo, copy_val_for_btn.clone(), window, cx);
-            }));
+            .on_copied(move |_, window, cx| {
+                view_handle.update(cx, |this, _| {
+                    this.selected_algorithm = Some(algo);
+                });
+                window.push_notification(Notification::info(format!("Copied {} value", algo.label())), cx);
+            });
 
         let header_row = h_flex().w_full().justify_between().items_center().child(label_el).child(copy_button);
 
@@ -837,13 +811,11 @@ impl ChecksumPanel {
 
         if let Some(all_str) = all_formatted {
             actions_row = actions_row.child(
-                Button::new("copy_all_checksums_header")
-                    .ghost()
-                    .icon(IconName::Copy)
-                    .with_size(Size::XSmall)
+                Clipboard::new("copy_all_checksums_header")
+                    .value(all_str)
                     .tooltip("Copy All Checksums")
-                    .on_click(move |_, window, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(all_str.clone()));
+                    .with_size(Size::XSmall)
+                    .on_copied(|_, window, cx| {
                         window.push_notification(Notification::info("Copied all checksums to clipboard"), cx);
                     }),
             );

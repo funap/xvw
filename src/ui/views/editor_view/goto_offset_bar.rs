@@ -2,6 +2,7 @@ use std::ops::Range;
 
 use crate::core::address_map::AddressMap;
 use crate::core::goto::{GotoParseError, GotoRadix, ParsedGotoOffset, parse_goto_offset_with_map};
+use crate::ui::components::EventInterceptionExt;
 use crate::ui::icon::IconName;
 use gpui_kit::component::{
     ActiveTheme, Icon,
@@ -157,16 +158,7 @@ impl Render for GotoOffsetBar {
             .rounded_lg()
             .shadow_xl()
             .key_context("GotoOffsetBar")
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
-            .on_mouse_down(MouseButton::Right, |_, _, cx| {
-                cx.stop_propagation();
-            })
-            .on_scroll_wheel(|_, _, cx| {
-                cx.stop_propagation();
-            })
+            .occlude_and_block_input()
             .on_action(cx.listener(|this, _: &GotoJump, _, cx| {
                 this.execute_jump(false, cx);
             }))

@@ -2,27 +2,18 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use autocorrect::ignorer::Ignorer;
-use gpui_kit::component::input::{self, Input, InputState};
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable, Size, h_flex};
+use gpui_kit::component::command::{Command, CommandItem, CommandState};
+use gpui_kit::component::{ActiveTheme as _, Icon, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use crate::actions::{PaletteCancel, PaletteConfirm, PaletteSelectNext, PaletteSelectPrev};
 use crate::core::format::FileFormat;
 use crate::core::fuzzy_matcher::FuzzyMatcher;
 use crate::service::scratch_service::ScratchEntry;
+use crate::ui::dialogs::common::{PALETTE_LIST_HEIGHT, PALETTE_WIDTH, render_highlighted_text, render_palette_empty_message, render_palette_footer_hints};
 use crate::ui::icon::IconName;
 
-const CONTEXT: &str = "QuickOpenModal";
-
-pub fn init(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("down", PaletteSelectNext, Some(CONTEXT)),
-        KeyBinding::new("up", PaletteSelectPrev, Some(CONTEXT)),
-        KeyBinding::new("enter", PaletteConfirm, Some(CONTEXT)),
-        KeyBinding::new("escape", PaletteCancel, Some(CONTEXT)),
-    ]);
-}
+pub fn init(_cx: &mut App) {}
 
 const IGNORED_DIR_NAMES: &[&str] = &[
     ".git",
@@ -364,15 +355,11 @@ pub fn format_relative_time(time: SystemTime) -> String {
         "recently".to_string()
     }
 }
-pub use super::common::{palette_list_container, palette_modal_container, render_highlighted_text, render_palette_empty_message};
-
 pub struct QuickOpenModal {
-    focus_handle: FocusHandle,
-    query_input: Entity<InputState>,
-    scroll_handle: ScrollHandle,
+    pub command_state: Entity<CommandState>,
     all_candidates: Vec<QuickOpenCandidate>,
     filtered_items: Vec<QuickOpenItem>,
-    selected_index: usize,
+    query: String,
     is_loading: bool,
 }
 
@@ -380,30 +367,14 @@ impl EventEmitter<QuickOpenEvent> for QuickOpenModal {}
 
 impl QuickOpenModal {
     pub fn new(candidates: Vec<QuickOpenCandidate>, is_loading: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let focus_handle = cx.focus_handle();
-        let query_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search files, notes, or create new..."));
-
+        let command_state = cx.new(|cx| CommandState::new(window, cx));
         let filtered_items = filter_items(&candidates, "");
 
-        cx.subscribe(&query_input, |this, input, event: &input::InputEvent, cx| match event {
-            input::InputEvent::Change => {
-                let val = input.read(cx).value().to_string();
-                this.update_query(&val, cx);
-            }
-            input::InputEvent::PressEnter { .. } => {
-                this.confirm(cx);
-            }
-            _ => {}
-        })
-        .detach();
-
         Self {
-            focus_handle,
-            query_input,
-            scroll_handle: ScrollHandle::new(),
+            command_state,
             all_candidates: candidates,
             filtered_items,
-            selected_index: 0,
+            query: String::new(),
             is_loading,
         }
     }
@@ -416,13 +387,7 @@ impl QuickOpenModal {
             return;
         }
         self.all_candidates.extend(new_candidates);
-        let query = self.query_input.read(cx).value().to_string();
-        self.filtered_items = filter_items(&self.all_candidates, &query);
-        if !self.filtered_items.is_empty() {
-            self.selected_index = self.selected_index.min(self.filtered_items.len() - 1);
-        } else {
-            self.selected_index = 0;
-        }
+        self.filtered_items = filter_items(&self.all_candidates, &self.query);
         cx.notify();
     }
 
@@ -436,36 +401,22 @@ impl QuickOpenModal {
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
-        self.query_input.update(cx, |input, cx| {
-            input.focus(window, cx);
+        self.command_state.update(cx, |state, cx| {
+            state.focus(window, cx);
         });
     }
 
     pub fn update_query(&mut self, query: &str, cx: &mut Context<Self>) {
+        if self.query == query {
+            return;
+        }
+        self.query = query.to_string();
         self.filtered_items = filter_items(&self.all_candidates, query);
-        self.selected_index = 0;
-        self.scroll_handle.scroll_to_item(0);
         cx.notify();
     }
 
-    pub fn select_next(&mut self, cx: &mut Context<Self>) {
-        if !self.filtered_items.is_empty() {
-            self.selected_index = (self.selected_index + 1).min(self.filtered_items.len() - 1);
-            self.scroll_handle.scroll_to_item(self.selected_index);
-            cx.notify();
-        }
-    }
-
-    pub fn select_prev(&mut self, cx: &mut Context<Self>) {
-        if !self.filtered_items.is_empty() {
-            self.selected_index = self.selected_index.saturating_sub(1);
-            self.scroll_handle.scroll_to_item(self.selected_index);
-            cx.notify();
-        }
-    }
-
-    pub fn confirm(&mut self, cx: &mut Context<Self>) {
-        if let Some(item) = self.filtered_items.get(self.selected_index) {
+    pub fn confirm_index(&mut self, row_ix: usize, cx: &mut Context<Self>) {
+        if let Some(item) = self.filtered_items.get(row_ix) {
             match item {
                 QuickOpenItem::RecentFile { path, format, .. } => {
                     cx.emit(QuickOpenEvent::OpenFile {
@@ -497,16 +448,15 @@ impl QuickOpenModal {
 
 impl Render for QuickOpenModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = cx.entity().clone();
         let theme = cx.theme().clone();
 
-        let mut list_children = Vec::new();
-
-        if self.filtered_items.is_empty() {
-            list_children.push(render_palette_empty_message("No matching files or notes found", &theme));
-        } else {
-            for (idx, item) in self.filtered_items.iter().enumerate() {
-                let is_selected = idx == self.selected_index;
-                let element = match item {
+        let items: Vec<CommandItem> = self
+            .filtered_items
+            .iter()
+            .map(|item| {
+                let theme_clone = theme.clone();
+                match item {
                     QuickOpenItem::RecentFile {
                         file_name,
                         detail,
@@ -514,44 +464,40 @@ impl Render for QuickOpenModal {
                         detail_matches,
                         ..
                     } => {
-                        let name_elem = render_highlighted_text(file_name, name_matches, theme.foreground, theme.primary, true);
-                        let detail_elem =
-                            (!detail.is_empty()).then(|| render_highlighted_text(detail, detail_matches, theme.muted_foreground, theme.primary, false));
+                        let file_name = file_name.clone();
+                        let detail = detail.clone();
+                        let name_matches = name_matches.clone();
+                        let detail_matches = detail_matches.clone();
 
-                        h_flex()
-                            .id(SharedString::from(format!("palette-item-{idx}")))
-                            .items_center()
-                            .justify_between()
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .when(is_selected, |el| el.bg(theme.list_active))
-                            .when(!is_selected, |el| el.hover(|s| s.bg(theme.list_hover)))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.selected_index = idx;
-                                this.confirm(cx);
-                            }))
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .overflow_hidden()
-                                    .child(Icon::new(IconName::Binary).size(px(14.0)).text_color(theme.muted_foreground))
-                                    .child(div().text_sm().child(name_elem))
-                                    .when_some(detail_elem, |el, d| el.child(div().text_xs().text_color(theme.muted_foreground).child(d))),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(theme.secondary)
-                                    .text_color(theme.muted_foreground)
-                                    .child("Recent"),
-                            )
-                            .into_any_element()
+                        CommandItem::new().label(file_name.clone()).child(move |_window, _cx| {
+                            let name_elem = render_highlighted_text(&file_name, &name_matches, theme_clone.foreground, theme_clone.primary, true);
+                            let detail_elem = (!detail.is_empty())
+                                .then(|| render_highlighted_text(&detail, &detail_matches, theme_clone.muted_foreground, theme_clone.primary, false));
+
+                            h_flex()
+                                .items_center()
+                                .justify_between()
+                                .w_full()
+                                .child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .overflow_hidden()
+                                        .child(Icon::new(IconName::Binary).size(px(14.0)).text_color(theme_clone.muted_foreground))
+                                        .child(div().text_sm().child(name_elem))
+                                        .when_some(detail_elem, |el, d| el.child(div().text_xs().text_color(theme_clone.muted_foreground).child(d))),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .px_1p5()
+                                        .py_0p5()
+                                        .rounded_sm()
+                                        .bg(theme_clone.secondary)
+                                        .text_color(theme_clone.muted_foreground)
+                                        .child("Recent"),
+                                )
+                        })
                     }
                     QuickOpenItem::WorkspaceFile {
                         file_name,
@@ -560,44 +506,40 @@ impl Render for QuickOpenModal {
                         path_matches,
                         ..
                     } => {
-                        let name_elem = render_highlighted_text(file_name, name_matches, theme.foreground, theme.primary, true);
-                        let path_elem = (relative_path != file_name)
-                            .then(|| render_highlighted_text(relative_path, path_matches, theme.muted_foreground, theme.primary, false));
+                        let file_name = file_name.clone();
+                        let relative_path = relative_path.clone();
+                        let name_matches = name_matches.clone();
+                        let path_matches = path_matches.clone();
 
-                        h_flex()
-                            .id(SharedString::from(format!("palette-item-{idx}")))
-                            .items_center()
-                            .justify_between()
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .when(is_selected, |el| el.bg(theme.list_active))
-                            .when(!is_selected, |el| el.hover(|s| s.bg(theme.list_hover)))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.selected_index = idx;
-                                this.confirm(cx);
-                            }))
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .overflow_hidden()
-                                    .child(Icon::new(IconName::File).size(px(14.0)).text_color(theme.muted_foreground))
-                                    .child(div().text_sm().child(name_elem))
-                                    .when_some(path_elem, |el, p| el.child(div().text_xs().text_color(theme.muted_foreground).child(p))),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(theme.secondary)
-                                    .text_color(theme.muted_foreground)
-                                    .child("File"),
-                            )
-                            .into_any_element()
+                        CommandItem::new().label(file_name.clone()).child(move |_window, _cx| {
+                            let name_elem = render_highlighted_text(&file_name, &name_matches, theme_clone.foreground, theme_clone.primary, true);
+                            let path_elem = (relative_path != file_name)
+                                .then(|| render_highlighted_text(&relative_path, &path_matches, theme_clone.muted_foreground, theme_clone.primary, false));
+
+                            h_flex()
+                                .items_center()
+                                .justify_between()
+                                .w_full()
+                                .child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .overflow_hidden()
+                                        .child(Icon::new(IconName::File).size(px(14.0)).text_color(theme_clone.muted_foreground))
+                                        .child(div().text_sm().child(name_elem))
+                                        .when_some(path_elem, |el, p| el.child(div().text_xs().text_color(theme_clone.muted_foreground).child(p))),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .px_1p5()
+                                        .py_0p5()
+                                        .rounded_sm()
+                                        .bg(theme_clone.secondary)
+                                        .text_color(theme_clone.muted_foreground)
+                                        .child("File"),
+                                )
+                        })
                     }
                     QuickOpenItem::Note {
                         entry,
@@ -605,32 +547,10 @@ impl Render for QuickOpenModal {
                         filename_matches,
                         ..
                     } => {
+                        let entry = entry.clone();
+                        let title_matches = title_matches.clone();
+                        let filename_matches = filename_matches.clone();
                         let rel_time = entry.modified.map(format_relative_time).unwrap_or_default();
-                        let title_element = render_highlighted_text(&entry.title, title_matches, theme.foreground, theme.primary, true);
-
-                        let filename_element = if filename_matches.is_empty() {
-                            div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(format!("({})", entry.filename))
-                                .into_any_element()
-                        } else {
-                            h_flex()
-                                .items_center()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child("(")
-                                .child(render_highlighted_text(
-                                    &entry.filename,
-                                    filename_matches,
-                                    theme.muted_foreground,
-                                    theme.primary,
-                                    false,
-                                ))
-                                .child(")")
-                                .into_any_element()
-                        };
-
                         let target_name_opt = entry
                             .target_file
                             .as_ref()
@@ -638,176 +558,173 @@ impl Render for QuickOpenModal {
                             .and_then(|n| n.to_str())
                             .map(|s| s.to_string());
 
-                        h_flex()
-                            .id(SharedString::from(format!("palette-item-{idx}")))
-                            .items_center()
-                            .justify_between()
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .when(is_selected, |el| el.bg(theme.list_active))
-                            .when(!is_selected, |el| el.hover(|s| s.bg(theme.list_hover)))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.selected_index = idx;
-                                this.confirm(cx);
-                            }))
-                            .child(
+                        CommandItem::new().label(entry.title.clone()).child(move |_window, _cx| {
+                            let title_element = render_highlighted_text(&entry.title, &title_matches, theme_clone.foreground, theme_clone.primary, true);
+                            let filename_element = if filename_matches.is_empty() {
+                                div()
+                                    .text_xs()
+                                    .text_color(theme_clone.muted_foreground)
+                                    .child(format!("({})", entry.filename))
+                                    .into_any_element()
+                            } else {
                                 h_flex()
                                     .items_center()
-                                    .gap_2()
-                                    .overflow_hidden()
-                                    .child(Icon::new(IconName::FileText).size(px(14.0)).text_color(theme.muted_foreground))
-                                    .child(div().text_sm().child(title_element))
-                                    .child(filename_element)
-                                    .when_some(target_name_opt, |el, target_name| {
-                                        el.child(
+                                    .text_xs()
+                                    .text_color(theme_clone.muted_foreground)
+                                    .child("(")
+                                    .child(render_highlighted_text(
+                                        &entry.filename,
+                                        &filename_matches,
+                                        theme_clone.muted_foreground,
+                                        theme_clone.primary,
+                                        false,
+                                    ))
+                                    .child(")")
+                                    .into_any_element()
+                            };
+
+                            h_flex()
+                                .items_center()
+                                .justify_between()
+                                .w_full()
+                                .child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .overflow_hidden()
+                                        .child(Icon::new(IconName::FileText).size(px(14.0)).text_color(theme_clone.muted_foreground))
+                                        .child(div().text_sm().child(title_element))
+                                        .child(filename_element)
+                                        .when_some(target_name_opt.as_ref(), |el, target_name| {
+                                            el.child(
+                                                div()
+                                                    .px_1()
+                                                    .py_0p5()
+                                                    .rounded_md()
+                                                    .bg(theme_clone.secondary)
+                                                    .text_xs()
+                                                    .text_color(theme_clone.primary)
+                                                    .child(target_name.clone()),
+                                            )
+                                        }),
+                                )
+                                .child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .when(!rel_time.is_empty(), |el| {
+                                            el.child(div().text_xs().text_color(theme_clone.muted_foreground).child(rel_time.clone()))
+                                        })
+                                        .child(
                                             div()
-                                                .px_1()
-                                                .py_0p5()
-                                                .rounded_md()
-                                                .bg(theme.secondary)
                                                 .text_xs()
-                                                .text_color(theme.primary)
-                                                .child(target_name),
-                                        )
-                                    }),
-                            )
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .when(!rel_time.is_empty(), |el| {
-                                        el.child(div().text_xs().text_color(theme.muted_foreground).child(rel_time))
-                                    })
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .px_1p5()
-                                            .py_0p5()
-                                            .rounded_sm()
-                                            .bg(theme.secondary)
-                                            .text_color(theme.muted_foreground)
-                                            .child("Note"),
-                                    ),
-                            )
-                            .into_any_element()
+                                                .px_1p5()
+                                                .py_0p5()
+                                                .rounded_sm()
+                                                .bg(theme_clone.secondary)
+                                                .text_color(theme_clone.muted_foreground)
+                                                .child("Note"),
+                                        ),
+                                )
+                        })
                     }
                     QuickOpenItem::NewNote { query } => {
+                        let query = query.clone();
                         let label = if query.is_empty() {
                             "Create new scratchpad note".to_string()
                         } else {
                             format!("Create new scratchpad note \"{query}\"")
                         };
 
+                        CommandItem::new().label(label.clone()).child(move |_window, _cx| {
+                            h_flex()
+                                .items_center()
+                                .justify_between()
+                                .w_full()
+                                .child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(Icon::new(IconName::Plus).size(px(14.0)).text_color(theme_clone.primary))
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(theme_clone.primary)
+                                                .child(label.clone()),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .px_1p5()
+                                        .py_0p5()
+                                        .rounded_sm()
+                                        .bg(theme_clone.secondary)
+                                        .text_color(theme_clone.primary)
+                                        .child("New"),
+                                )
+                        })
+                    }
+                }
+            })
+            .collect();
+
+        let count = self.filtered_items.len();
+        let is_loading = self.is_loading;
+        let footer_theme = theme.clone();
+        let view_for_query = view.clone();
+        let view_for_confirm = view.clone();
+        let view_for_cancel = view;
+
+        div()
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation();
+            })
+            .child(
+                Command::new(&self.command_state)
+                    .w(px(PALETTE_WIDTH))
+                    .max_h(px(PALETTE_LIST_HEIGHT))
+                    .searchable(true)
+                    .filterable(false)
+                    .placeholder("Search files, notes, or create new...")
+                    .items(items)
+                    .empty(move |_state, _window, cx| render_palette_empty_message("No matching files or notes found", cx.theme()))
+                    .footer(move |_state, _window, _cx| {
                         h_flex()
-                            .id(SharedString::from(format!("palette-item-new-{idx}")))
                             .items_center()
                             .justify_between()
-                            .px_3()
-                            .py_1p5()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .when(is_selected, |el| el.bg(theme.list_active))
-                            .when(!is_selected, |el| el.hover(|s| s.bg(theme.list_hover)))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.selected_index = idx;
-                                this.confirm(cx);
-                            }))
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(Icon::new(IconName::Plus).size(px(14.0)).text_color(theme.primary))
-                                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(theme.primary).child(label)),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded_sm()
-                                    .bg(theme.secondary)
-                                    .text_color(theme.foreground)
-                                    .child("New"),
-                            )
-                            .into_any_element()
-                    }
-                };
-                list_children.push(element);
-            }
-        }
-
-        palette_modal_container(&theme)
-            .id("quick-open-modal")
-            .key_context(CONTEXT)
-            .track_focus(&self.focus_handle)
-            .occlude()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                cx.stop_propagation();
-            })
-            .on_scroll_wheel(|_, _, cx| {
-                cx.stop_propagation();
-            })
-            .on_action(cx.listener(|this, _: &PaletteSelectNext, _, cx| {
-                this.select_next(cx);
-            }))
-            .on_action(cx.listener(|this, _: &PaletteSelectPrev, _, cx| {
-                this.select_prev(cx);
-            }))
-            .on_action(cx.listener(|this, _: &PaletteConfirm, _, cx| {
-                this.confirm(cx);
-            }))
-            .on_action(cx.listener(|this, _: &PaletteCancel, _, cx| {
-                this.cancel(cx);
-            }))
-            .child(
-                h_flex()
-                    .items_center()
-                    .p_3()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .bg(theme.tab_bar)
-                    .rounded_t_lg()
-                    .child(
-                        Input::new(&self.query_input)
-                            .cleanable(true)
-                            .prefix(Icon::new(IconName::Search).size(px(16.0)))
-                            .with_size(Size::Small),
-                    ),
-            )
-            .child(palette_list_container(&self.scroll_handle, "palette-items-scroll").children(list_children))
-            .child(
-                h_flex()
-                    .items_center()
-                    .justify_between()
-                    .px_3()
-                    .py_1p5()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .bg(theme.muted)
-                    .rounded_b_lg()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(
-                        h_flex()
-                            .items_center()
-                            .gap_3()
-                            .child("↑↓ Navigate")
-                            .child("↵ Select")
-                            .child("Esc Dismiss")
-                            .when(self.is_loading, |el| {
+                            .w_full()
+                            .text_xs()
+                            .text_color(footer_theme.muted_foreground)
+                            .child(h_flex().items_center().gap_3().child(render_palette_footer_hints()).when(is_loading, |el| {
                                 el.child(
                                     h_flex()
                                         .items_center()
                                         .gap_1()
-                                        .text_color(theme.primary)
+                                        .text_color(footer_theme.primary)
                                         .child(Icon::new(IconName::Loader).size(px(12.0)))
                                         .child("Scanning files..."),
                                 )
-                            }),
-                    )
-                    .child(format!("{} items", self.filtered_items.len())),
+                            }))
+                            .child(format!("{count} items"))
+                    })
+                    .on_query(move |query, _window, cx| {
+                        view_for_query.update(cx, |this, cx| {
+                            this.update_query(query, cx);
+                        });
+                    })
+                    .on_confirm(move |index_path, _window, cx| {
+                        view_for_confirm.update(cx, |this, cx| {
+                            this.confirm_index(index_path.row, cx);
+                        });
+                    })
+                    .on_cancel(move |_window, cx| {
+                        view_for_cancel.update(cx, |this, cx| {
+                            this.cancel(cx);
+                        });
+                    }),
             )
     }
 }
