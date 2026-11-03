@@ -603,6 +603,83 @@ fn test_search_generation_and_race_condition() {
 }
 
 #[test]
+fn test_find_and_search_state_independence() {
+    use crate::core::search::SearchMode;
+
+    let mut editor = create_editor_with_content(b"alpha beta alpha beta alpha");
+
+    // 1. Setup search_state with query "alpha" and simulated results
+    editor.search_state_mut().set_query_and_mode("alpha".to_string(), SearchMode::Text);
+    let search_gen = editor.search_state().generation;
+    editor.search_state_mut().set_results(vec![0, 11, 22], search_gen, true);
+    assert_eq!(editor.search_state().query, "alpha");
+    assert_eq!(editor.search_state().results, vec![0, 11, 22]);
+
+    // 2. Set query on find_state; verify search_state is unmodified
+    editor.find_state_mut().set_query_and_mode("beta".to_string(), SearchMode::Text);
+    assert_eq!(editor.find_state().query, "beta");
+    assert!(editor.find_state().results.is_empty());
+    assert_eq!(editor.search_state().query, "alpha");
+    assert_eq!(editor.search_state().results, vec![0, 11, 22]);
+
+    // 3. Mutate search_state; verify find_state is unaffected
+    let find_gen_before = editor.find_state().generation;
+    editor.search_state_mut().set_query("gamma".to_string());
+    assert_eq!(editor.search_state().query, "gamma");
+    assert_eq!(editor.find_state().query, "beta");
+    assert_eq!(editor.find_state().generation, find_gen_before);
+
+    // 4. Verify find_pattern and search_pattern return their respective patterns
+    let find_pat = editor.find_pattern().expect("valid find pattern");
+    let search_pat = editor.search_pattern().expect("valid search pattern");
+    assert_ne!(find_pat, search_pat);
+
+    // 5. Verify next_find_result and prev_find_result cycle matches independently
+    editor.cursor.offset = 0;
+    // First "beta" match is at offset 6
+    let next1 = editor.next_find_result();
+    assert_eq!(next1, Some(6));
+    assert_eq!(editor.cursor.offset, 6);
+
+    // Second "beta" match is at offset 17
+    let next2 = editor.next_find_result();
+    assert_eq!(next2, Some(17));
+    assert_eq!(editor.cursor.offset, 17);
+
+    // Wrap around to first match at offset 6
+    let next3 = editor.next_find_result();
+    assert_eq!(next3, Some(6));
+    assert_eq!(editor.cursor.offset, 6);
+
+    // Prev wraps to offset 17
+    let prev1 = editor.prev_find_result();
+    assert_eq!(prev1, Some(17));
+    assert_eq!(editor.cursor.offset, 17);
+
+    // Prev to offset 6
+    let prev2 = editor.prev_find_result();
+    assert_eq!(prev2, Some(6));
+    assert_eq!(editor.cursor.offset, 6);
+
+    // Throughout this, search_state is unchanged
+    assert_eq!(editor.search_state().query, "gamma");
+
+    // 6. Test encoding change notifies both find_state and search_state
+    let find_gen_before_enc = editor.find_state().generation;
+    let search_gen_before_enc = editor.search_state().generation;
+    editor.set_encoding(crate::core::encoding::Encoding::Utf16Be);
+    assert_eq!(editor.find_state().generation, find_gen_before_enc + 1);
+    assert_eq!(editor.search_state().generation, search_gen_before_enc + 1);
+
+    // 7. Test document change notifies both find_state and search_state
+    let find_gen_before_doc = editor.find_state().generation;
+    let search_gen_before_doc = editor.search_state().generation;
+    editor.insert_bytes(0, b"!".to_vec());
+    assert_eq!(editor.find_state().generation, find_gen_before_doc + 1);
+    assert_eq!(editor.search_state().generation, search_gen_before_doc + 1);
+}
+
+#[test]
 fn test_search_with_encoding() {
     use crate::core::encoding::Encoding;
     use crate::core::search::SearchMode;

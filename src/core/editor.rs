@@ -18,6 +18,7 @@ use crate::core::command::{Command, ReplaceRangeCommand};
 use crate::core::document::Document;
 use crate::core::encoding::Encoding;
 use crate::core::radix::{ByteGroupSize, DisplayRadix};
+use crate::core::search::PatternByte;
 use crate::core::selection::Selection;
 use crate::core::structure::{ParseResult, ParsedField};
 use std::collections::BTreeSet;
@@ -36,6 +37,7 @@ pub struct Editor {
     pub layout: LayoutEngine,
     pub options: ViewOptions,
     pub search_state: SearchState,
+    pub find_state: SearchState,
     pub structure: EditorStructureState,
 }
 
@@ -382,6 +384,7 @@ impl Editor {
             layout: LayoutEngine::new(cached_layout_version),
             options: ViewOptions::default(),
             search_state: SearchState::default(),
+            find_state: SearchState::default(),
             structure: EditorStructureState::default(),
         }
     }
@@ -442,6 +445,14 @@ impl Editor {
 
     pub fn search_state_mut(&mut self) -> &mut SearchState {
         &mut self.search_state
+    }
+
+    pub fn find_state(&self) -> &SearchState {
+        &self.find_state
+    }
+
+    pub fn find_state_mut(&mut self) -> &mut SearchState {
+        &mut self.find_state
     }
 
     pub fn structure(&self) -> &EditorStructureState {
@@ -517,6 +528,7 @@ impl Editor {
         if self.options.encoding != encoding {
             self.options.encoding = encoding;
             self.search_state.on_encoding_changed();
+            self.find_state.on_encoding_changed();
         }
     }
 
@@ -865,8 +877,35 @@ impl Editor {
         self.replace_range_with_cursor(range, Vec::new(), cursor_after)
     }
 
-    pub fn search_pattern(&self) -> Option<Vec<crate::core::search::PatternByte>> {
+    pub fn search_pattern(&self) -> Option<Vec<PatternByte>> {
         self.search_state.search_pattern(self.options.encoding)
+    }
+
+    pub fn find_pattern(&self) -> Option<Vec<PatternByte>> {
+        self.find_state.search_pattern(self.options.encoding)
+    }
+
+    pub fn next_find_result(&mut self) -> Option<usize> {
+        let pattern = self.find_pattern()?;
+        let doc = self.document.read().ok()?;
+        let data = doc.buffer.data();
+        let from_offset = self.cursor.offset.saturating_add(1);
+        let next_offset = crate::core::search::find_next_occurrence(data, &pattern, from_offset)?;
+        drop(doc);
+        self.auto_unfold_if_needed(next_offset);
+        self.cursor.offset = next_offset;
+        Some(next_offset)
+    }
+
+    pub fn prev_find_result(&mut self) -> Option<usize> {
+        let pattern = self.find_pattern()?;
+        let doc = self.document.read().ok()?;
+        let data = doc.buffer.data();
+        let prev_offset = crate::core::search::find_prev_occurrence(data, &pattern, self.cursor.offset)?;
+        drop(doc);
+        self.auto_unfold_if_needed(prev_offset);
+        self.cursor.offset = prev_offset;
+        Some(prev_offset)
     }
 
     /// Finds and navigates to the next occurrence starting after the current cursor offset,
@@ -1195,6 +1234,7 @@ impl Editor {
     fn document_changed(&mut self) {
         self.layout.invalidate();
         self.search_state.on_document_changed();
+        self.find_state.on_document_changed();
 
         if self.structure.is_async && self.ksy_definition().is_some() {
             self.cancel_structure_parsing();
