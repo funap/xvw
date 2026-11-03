@@ -25,7 +25,6 @@ pub fn init(cx: &mut gpui_kit::App) {
     dialogs::new_file_modal::init(cx);
     dialogs::fill_selection_modal::init(cx);
     dialogs::command_palette_modal::init(cx);
-    components::data_table::init(cx);
     panels::file_tree_view::init(cx);
     panels::search_panel::init(cx);
     panels::strings_panel::init(cx);
