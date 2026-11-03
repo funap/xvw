@@ -18,6 +18,7 @@ use crate::core::command::{Command, ReplaceRangeCommand};
 use crate::core::document::Document;
 use crate::core::encoding::Encoding;
 use crate::core::radix::{ByteGroupSize, DisplayRadix};
+use crate::core::search::PatternByte;
 use crate::core::selection::Selection;
 use crate::core::structure::{ParseResult, ParsedField};
 use std::collections::BTreeSet;
@@ -36,6 +37,7 @@ pub struct Editor {
     pub layout: LayoutEngine,
     pub options: ViewOptions,
     pub search_state: SearchState,
+    pub find_state: SearchState,
     pub structure: EditorStructureState,
 }
 
@@ -314,6 +316,16 @@ impl<'a> CustomLayoutSessionMut<'a> {
         }
     }
 
+    pub fn remove_breaks_in_range(&mut self, range: Range<usize>) -> usize {
+        let mut doc = self.document.write().expect("document write lock");
+        let removed = doc.metadata.custom_layout.remove_breaks_in_range(range);
+        if removed > 0 {
+            doc.bump_layout_version();
+            self.layout.invalidate();
+        }
+        removed
+    }
+
     pub fn toggle_break(&mut self, offset: usize) {
         let mut doc = self.document.write().expect("document write lock");
         doc.bump_layout_version();
@@ -382,6 +394,7 @@ impl Editor {
             layout: LayoutEngine::new(cached_layout_version),
             options: ViewOptions::default(),
             search_state: SearchState::default(),
+            find_state: SearchState::default(),
             structure: EditorStructureState::default(),
         }
     }
@@ -442,6 +455,16 @@ impl Editor {
 
     pub fn search_state_mut(&mut self) -> &mut SearchState {
         &mut self.search_state
+    }
+
+    /// Returns the search state for the editor's find bar.
+    pub fn find_state(&self) -> &SearchState {
+        &self.find_state
+    }
+
+    /// Returns a mutable reference to the search state for the editor's find bar.
+    pub fn find_state_mut(&mut self) -> &mut SearchState {
+        &mut self.find_state
     }
 
     pub fn structure(&self) -> &EditorStructureState {
@@ -517,6 +540,7 @@ impl Editor {
         if self.options.encoding != encoding {
             self.options.encoding = encoding;
             self.search_state.on_encoding_changed();
+            self.find_state.on_encoding_changed();
         }
     }
 
@@ -865,8 +889,40 @@ impl Editor {
         self.replace_range_with_cursor(range, Vec::new(), cursor_after)
     }
 
-    pub fn search_pattern(&self) -> Option<Vec<crate::core::search::PatternByte>> {
+    pub fn search_pattern(&self) -> Option<Vec<PatternByte>> {
         self.search_state.search_pattern(self.options.encoding)
+    }
+
+    /// Returns the search pattern for the find bar query, or `None` if the query is empty or invalid.
+    pub fn find_pattern(&self) -> Option<Vec<PatternByte>> {
+        self.find_state.search_pattern(self.options.encoding)
+    }
+
+    /// Finds and navigates to the next occurrence matching the find bar query,
+    /// updating the cursor offset and unfolding hidden ranges if needed.
+    pub fn next_find_result(&mut self) -> Option<usize> {
+        let pattern = self.find_pattern()?;
+        let doc = self.document.read().ok()?;
+        let data = doc.buffer.data();
+        let from_offset = self.cursor.offset.saturating_add(1);
+        let next_offset = crate::core::search::find_next_occurrence(data, &pattern, from_offset)?;
+        drop(doc);
+        self.auto_unfold_if_needed(next_offset);
+        self.cursor.offset = next_offset;
+        Some(next_offset)
+    }
+
+    /// Finds and navigates to the previous occurrence matching the find bar query,
+    /// updating the cursor offset and unfolding hidden ranges if needed.
+    pub fn prev_find_result(&mut self) -> Option<usize> {
+        let pattern = self.find_pattern()?;
+        let doc = self.document.read().ok()?;
+        let data = doc.buffer.data();
+        let prev_offset = crate::core::search::find_prev_occurrence(data, &pattern, self.cursor.offset)?;
+        drop(doc);
+        self.auto_unfold_if_needed(prev_offset);
+        self.cursor.offset = prev_offset;
+        Some(prev_offset)
     }
 
     /// Finds and navigates to the next occurrence starting after the current cursor offset,
@@ -1195,6 +1251,7 @@ impl Editor {
     fn document_changed(&mut self) {
         self.layout.invalidate();
         self.search_state.on_document_changed();
+        self.find_state.on_document_changed();
 
         if self.structure.is_async && self.ksy_definition().is_some() {
             self.cancel_structure_parsing();

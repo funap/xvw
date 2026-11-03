@@ -603,6 +603,155 @@ fn test_search_generation_and_race_condition() {
 }
 
 #[test]
+fn test_find_and_search_state_independence() {
+    use crate::core::search::SearchMode;
+
+    let mut editor = create_editor_with_content(b"alpha beta alpha beta alpha");
+
+    // 1. Setup search_state with query "alpha" and simulated results
+    editor.search_state_mut().set_query_and_mode("alpha".to_string(), SearchMode::Text);
+    let search_gen = editor.search_state().generation;
+    editor.search_state_mut().set_results(vec![0, 11, 22], search_gen, true);
+    assert_eq!(editor.search_state().query, "alpha");
+    assert_eq!(editor.search_state().results, vec![0, 11, 22]);
+
+    // 2. Set query on find_state; verify search_state is unmodified
+    editor.find_state_mut().set_query_and_mode("beta".to_string(), SearchMode::Text);
+    assert_eq!(editor.find_state().query, "beta");
+    assert!(editor.find_state().results.is_empty());
+    assert_eq!(editor.search_state().query, "alpha");
+    assert_eq!(editor.search_state().results, vec![0, 11, 22]);
+
+    // 3. Mutate search_state; verify find_state is unaffected
+    let find_gen_before = editor.find_state().generation;
+    editor.search_state_mut().set_query("gamma".to_string());
+    assert_eq!(editor.search_state().query, "gamma");
+    assert_eq!(editor.find_state().query, "beta");
+    assert_eq!(editor.find_state().generation, find_gen_before);
+
+    // 4. Verify find_pattern and search_pattern return their respective patterns
+    let find_pat = editor.find_pattern().expect("valid find pattern");
+    let search_pat = editor.search_pattern().expect("valid search pattern");
+    assert_ne!(find_pat, search_pat);
+
+    // 5. Verify next_find_result and prev_find_result cycle matches independently
+    editor.cursor.offset = 0;
+    // First "beta" match is at offset 6
+    let next1 = editor.next_find_result();
+    assert_eq!(next1, Some(6));
+    assert_eq!(editor.cursor.offset, 6);
+
+    // Second "beta" match is at offset 17
+    let next2 = editor.next_find_result();
+    assert_eq!(next2, Some(17));
+    assert_eq!(editor.cursor.offset, 17);
+
+    // Wrap around to first match at offset 6
+    let next3 = editor.next_find_result();
+    assert_eq!(next3, Some(6));
+    assert_eq!(editor.cursor.offset, 6);
+
+    // Prev wraps to offset 17
+    let prev1 = editor.prev_find_result();
+    assert_eq!(prev1, Some(17));
+    assert_eq!(editor.cursor.offset, 17);
+
+    // Prev to offset 6
+    let prev2 = editor.prev_find_result();
+    assert_eq!(prev2, Some(6));
+    assert_eq!(editor.cursor.offset, 6);
+
+    // Throughout this, search_state is unchanged
+    assert_eq!(editor.search_state().query, "gamma");
+
+    // 6. Test encoding change notifies both find_state and search_state
+    let find_gen_before_enc = editor.find_state().generation;
+    let search_gen_before_enc = editor.search_state().generation;
+    editor.set_encoding(crate::core::encoding::Encoding::Utf16Be);
+    assert_eq!(editor.find_state().generation, find_gen_before_enc + 1);
+    assert_eq!(editor.search_state().generation, search_gen_before_enc + 1);
+
+    // 7. Test document change notifies both find_state and search_state
+    let find_gen_before_doc = editor.find_state().generation;
+    let search_gen_before_doc = editor.search_state().generation;
+    editor.insert_bytes(0, b"!".to_vec());
+    assert_eq!(editor.find_state().generation, find_gen_before_doc + 1);
+    assert_eq!(editor.search_state().generation, search_gen_before_doc + 1);
+}
+
+#[test]
+fn test_editor_maintains_simultaneous_queries_without_interference() {
+    use crate::core::search::SearchMode;
+
+    let mut editor = create_editor_with_content(b"ALPHA BRAVO ALPHA CHARLIE ALPHA DELTA");
+
+    // 1. Configure SearchPanel query: "ALPHA" (Text mode) with simulated search results
+    editor.search_state_mut().set_query_and_mode("ALPHA".to_string(), SearchMode::Text);
+    let search_gen = editor.search_state().generation;
+    editor.search_state_mut().set_results(vec![0, 12, 26], search_gen, true);
+
+    // 2. Configure Find Widget query: "42 52 41" (Hex mode for "BRA")
+    editor.find_state_mut().set_query_and_mode("42 52 41".to_string(), SearchMode::Hex);
+
+    // Verify both states coexist without mutual interference
+    assert_eq!(editor.search_state().query, "ALPHA");
+    assert_eq!(editor.search_state().mode, SearchMode::Text);
+    assert_eq!(editor.search_state().results, vec![0, 12, 26]);
+    assert_eq!(editor.find_state().query, "42 52 41");
+    assert_eq!(editor.find_state().mode, SearchMode::Hex);
+    assert!(editor.find_state().results.is_empty()); // Find Widget is on-demand
+
+    // 3. Navigate Find Widget: finds "BRA" at offset 6
+    editor.cursor.offset = 0;
+    let find_res1 = editor.next_find_result();
+    assert_eq!(find_res1, Some(6));
+    assert_eq!(editor.cursor.offset, 6);
+    // Search state is untouched (still pointing to initial result 0)
+    assert_eq!(editor.search_state().current_result(), Some(0));
+    assert_eq!(editor.search_state().results, vec![0, 12, 26]);
+
+    // 4. Navigate SearchPanel: advances to next search result at offset 12
+    let search_res1 = editor.next_search_result();
+    assert_eq!(search_res1, Some(12));
+    assert_eq!(editor.cursor.offset, 12);
+    assert_eq!(editor.search_state().current_result(), Some(12));
+    // Find state is untouched
+    assert_eq!(editor.find_state().query, "42 52 41");
+    assert_eq!(editor.find_state().mode, SearchMode::Hex);
+
+    // 5. Navigate SearchPanel again: advances to offset 26
+    let search_res2 = editor.next_search_result();
+    assert_eq!(search_res2, Some(26));
+    assert_eq!(editor.cursor.offset, 26);
+    assert_eq!(editor.search_state().current_result(), Some(26));
+
+    // 6. Navigate Find Widget again: wraps around to match at 6
+    let find_res2 = editor.next_find_result();
+    assert_eq!(find_res2, Some(6));
+    assert_eq!(editor.cursor.offset, 6);
+    // SearchPanel current_result is still 26
+    assert_eq!(editor.search_state().current_result(), Some(26));
+
+    // 7. Clear Find state: only find_state is cleared
+    editor.find_state_mut().clear();
+    assert!(editor.find_state().query.is_empty());
+    // SearchPanel state remains completely intact
+    assert_eq!(editor.search_state().query, "ALPHA");
+    assert_eq!(editor.search_state().results, vec![0, 12, 26]);
+    assert_eq!(editor.search_state().current_result(), Some(26));
+
+    // 8. Re-populate Find state and clear SearchPanel: only search_state is cleared
+    editor.find_state_mut().set_query_and_mode("DELTA".to_string(), SearchMode::Text);
+    editor.search_state_mut().clear();
+    assert!(editor.search_state().query.is_empty());
+    assert!(editor.search_state().results.is_empty());
+    assert_eq!(editor.find_state().query, "DELTA");
+    let find_delta = editor.next_find_result();
+    assert_eq!(find_delta, Some(32));
+    assert_eq!(editor.cursor.offset, 32);
+}
+
+#[test]
 fn test_search_with_encoding() {
     use crate::core::encoding::Encoding;
     use crate::core::search::SearchMode;
@@ -2204,4 +2353,46 @@ fn test_toggle_struct_collapsed_updates_state_and_layout() {
     // Expand
     editor.toggle_struct_collapsed(collapse_key);
     assert!(!editor.structure.is_collapsed(collapse_key));
+}
+
+#[test]
+fn test_custom_layout_toggle_break_at_line_start() {
+    let mut editor = create_editor_with_content(&[0u8; 64]);
+    assert_eq!(editor.line_starts(), vec![0, 16, 32, 48]);
+
+    // Add break at 10
+    editor.custom_layout_mut().toggle_break(10);
+    assert!(editor.custom_layout().has_break(10));
+    assert_eq!(editor.line_starts(), vec![0, 10, 26, 42, 58]);
+
+    // Toggle break at 10 again (simulates pressing return at line start)
+    editor.custom_layout_mut().toggle_break(10);
+    assert!(!editor.custom_layout().has_break(10));
+    assert_eq!(editor.line_starts(), vec![0, 16, 32, 48]);
+}
+
+#[test]
+fn test_custom_layout_remove_breaks_in_range() {
+    let mut editor = create_editor_with_content(&[0u8; 64]);
+
+    // Add breaks at 10, 20, 30
+    editor.custom_layout_mut().add_break(10);
+    editor.custom_layout_mut().add_break(20);
+    editor.custom_layout_mut().add_break(30);
+    assert!(editor.custom_layout().has_break(10));
+    assert!(editor.custom_layout().has_break(20));
+    assert!(editor.custom_layout().has_break(30));
+
+    // Remove breaks in range 10..30 (should remove 10 and 20, keeping 30)
+    let removed = editor.custom_layout_mut().remove_breaks_in_range(10..30);
+    assert_eq!(removed, 2);
+    assert!(!editor.custom_layout().has_break(10));
+    assert!(!editor.custom_layout().has_break(20));
+    assert!(editor.custom_layout().has_break(30));
+
+    // Remove remaining break in range 30..40
+    let removed = editor.custom_layout_mut().remove_breaks_in_range(30..40);
+    assert_eq!(removed, 1);
+    assert!(!editor.custom_layout().has_break(30));
+    assert_eq!(editor.line_starts(), vec![0, 16, 32, 48]);
 }

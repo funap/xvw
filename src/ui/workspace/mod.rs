@@ -1669,6 +1669,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_action_add_custom_break))
             .on_action(cx.listener(Self::on_action_remove_custom_break_backward))
             .on_action(cx.listener(Self::on_action_remove_custom_break_forward))
+            .on_action(cx.listener(Self::on_action_remove_custom_breaks_in_range))
             .on_action(cx.listener(Self::on_action_join_line))
             .on_action(cx.listener(Self::on_action_clear_all_custom_breaks))
             .on_action(cx.listener(Self::on_action_show_all_bookmarks))

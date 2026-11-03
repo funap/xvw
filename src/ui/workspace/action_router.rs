@@ -463,6 +463,14 @@ impl Workspace {
         }
     }
 
+    pub(crate) fn on_action_remove_custom_breaks_in_range(&mut self, action: &RemoveCustomBreaksInRange, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.remove_custom_breaks_in_range(action, window, cx);
+            });
+        }
+    }
+
     pub(crate) fn on_action_join_line(&mut self, action: &JoinLine, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {

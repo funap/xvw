@@ -190,6 +190,10 @@ pub(crate) fn shortcut_for_label(category: &str, label: &str) -> Option<&'static
             | ("Edit > Custom Line Breaks", "Clear All Line Breaks")
             | ("View > Custom Line Breaks", "Reset Custom Breaks")
             | ("View > Custom Line Breaks", "Clear All Line Breaks") => Some("⇧⌘Backspace"),
+            ("View", "Reset Breaks in Selection")
+            | ("Edit", "Reset Breaks in Selection")
+            | ("Edit > Custom Line Breaks", "Reset Breaks in Selection")
+            | ("View > Custom Line Breaks", "Reset Breaks in Selection") => Some("⇧Enter"),
             ("Go", "Go to Address...") => Some("⌘L"),
             ("Go", "Go to Beginning") | ("Go", "Beginning of File") => Some("⌘Home"),
             ("Go", "Go to End") | ("Go", "End of File") => Some("⌘End"),
@@ -262,6 +266,10 @@ pub(crate) fn shortcut_for_label(category: &str, label: &str) -> Option<&'static
             | ("Edit > Custom Line Breaks", "Clear All Line Breaks")
             | ("View > Custom Line Breaks", "Reset Custom Breaks")
             | ("View > Custom Line Breaks", "Clear All Line Breaks") => Some("Ctrl+Shift+Backspace"),
+            ("View", "Reset Breaks in Selection")
+            | ("Edit", "Reset Breaks in Selection")
+            | ("Edit > Custom Line Breaks", "Reset Breaks in Selection")
+            | ("View > Custom Line Breaks", "Reset Breaks in Selection") => Some("Shift+Enter"),
             ("Go", "Go to Address...") => Some("Ctrl+L"),
             ("Go", "Go to Beginning") | ("Go", "Beginning of File") => Some("Ctrl+Home"),
             ("Go", "Go to End") | ("Go", "End of File") => Some("Ctrl+End"),
@@ -573,6 +581,7 @@ fn build_view_menu() -> MenuDef {
                     MenuItemDef::separator(),
                     MenuItemDef::action_with_condition("Remove Break Backward", crate::actions::RemoveCustomBreakBackward, |s| s.has_doc),
                     MenuItemDef::action_with_condition("Remove Break Forward", crate::actions::RemoveCustomBreakForward, |s| s.has_doc),
+                    MenuItemDef::action_with_condition("Reset Breaks in Selection", crate::actions::RemoveCustomBreaksInRange, |s| s.has_doc),
                     MenuItemDef::separator(),
                     MenuItemDef::action_with_condition("Reset Custom Breaks", crate::actions::ClearAllCustomBreaks, |s| s.has_doc),
                 ],
@@ -1003,6 +1012,15 @@ mod tests {
         #[cfg(not(target_os = "macos"))]
         assert_eq!(reset_breaks.shortcut.as_deref(), Some("Ctrl+Shift+Backspace"));
 
+        let reset_range = commands
+            .iter()
+            .find(|c| c.title == "View: Custom Line Breaks > Reset Breaks in Selection")
+            .expect("Reset Breaks in Selection");
+        #[cfg(target_os = "macos")]
+        assert_eq!(reset_range.shortcut.as_deref(), Some("⇧Enter"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(reset_range.shortcut.as_deref(), Some("Shift+Enter"));
+
         let go_addr = commands.iter().find(|c| c.title == "Go: Go to Address...").expect("Go to Address...");
         #[cfg(target_os = "macos")]
         assert_eq!(go_addr.shortcut.as_deref(), Some("⌘L"));
@@ -1213,6 +1231,7 @@ mod tests {
             assert_eq!(shortcut_for_label("View", "Reset Custom Breaks"), Some("⇧⌘Backspace"));
             assert_eq!(shortcut_for_label("View", "Clear All Line Breaks"), Some("⇧⌘Backspace"));
             assert_eq!(shortcut_for_label("Edit > Custom Line Breaks", "Clear All Line Breaks"), Some("⇧⌘Backspace"));
+            assert_eq!(shortcut_for_label("View", "Reset Breaks in Selection"), Some("⇧Enter"));
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -1221,6 +1240,7 @@ mod tests {
             assert_eq!(shortcut_for_label("Edit > Custom Line Breaks", "Join Line"), Some("Ctrl+J"));
             assert_eq!(shortcut_for_label("View", "Reset Custom Breaks"), Some("Ctrl+Shift+Backspace"));
             assert_eq!(shortcut_for_label("View", "Clear All Line Breaks"), Some("Ctrl+Shift+Backspace"));
+            assert_eq!(shortcut_for_label("View", "Reset Breaks in Selection"), Some("Shift+Enter"));
             assert_eq!(
                 shortcut_for_label("Edit > Custom Line Breaks", "Clear All Line Breaks"),
                 Some("Ctrl+Shift+Backspace")

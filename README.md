@@ -40,7 +40,7 @@ Engineered to be snappy, intuitive, and versatile for reverse engineering, firmw
 - 🧬 **Interactive Kaitai Struct Parsing**  
   Load `.ksy` format definitions at runtime to dissect complex binary formats (ZIP, ELF, Mach-O, PNG, etc.) with structured tree navigation, inline color highlights, and parsed values.
 - ✂️ **Custom Logical Line Breaks**  
-  Hit `Enter` anywhere to break lines at natural packet or record boundaries instead of being locked into a rigid 16-byte grid. Press `Cmd+J` / `Ctrl+J` to join lines back.
+  Hit `Enter` anywhere to break lines at natural packet or record boundaries instead of being locked into a rigid 16-byte grid. Press `Enter` again at the start of a line to revert the break, or `Shift+Enter` to remove all custom breaks in the selected range. Press `Cmd+J` / `Ctrl+J` to join lines back.
 - 🔍 **Real-Time Data Inspector**  
   Inspect any byte or selection decoded simultaneously into `i8`–`i64`, `u8`–`u64` (Little/Big Endian), `f32`/`f64`, Unix timestamps, binary bits, and character representations.
 - 📊 **2D Visual Map & Entropy View**  
@@ -175,7 +175,8 @@ xvw binary.bin --panel map
 | **Jump to Start of File** | `Cmd + Home` / `Home` | `Ctrl + Home` / `Home` |
 | **Jump to End of File** | `Cmd + End` / `End` | `Ctrl + End` / `End` |
 | **Go to Address / Range** | `Cmd + L` / `Ctrl + G` | `Ctrl + L` / `Ctrl + G` |
-| **Insert Custom Break** | `Enter` | `Enter` |
+| **Toggle / Insert Custom Break** | `Enter` | `Enter` |
+| **Reset Breaks in Range** | `Shift + Enter` | `Shift + Enter` |
 | **Join Lines** | `Cmd + J` | `Ctrl + J` |
 | **Reset Custom Breaks** | `Cmd + Shift + Backspace` | `Ctrl + Shift + Backspace` |
 | **Toggle Insert / Overwrite** | `Insert` | `Insert` |
