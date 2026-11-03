@@ -975,8 +975,8 @@ mod tests {
         let rope = Rope::from("# Scratchpad\n\n## Notes\n- item\n");
         assert!(highlighter.update(None, &rope, None));
         assert!(highlighter.tree().is_some());
-        let embedded = crate::theme::EmbeddedThemes::load_from_assets(&crate::assets::Assets);
-        let default_dark = embedded.get("Default Dark").expect("Default Dark theme should be present");
+        let registry = crate::theme::load_themes_from_assets(&crate::assets::Assets);
+        let default_dark = registry.themes().get("Default Dark").expect("Default Dark theme should be present");
         let theme = gpui_kit::component::highlighter::HighlightTheme {
             name: default_dark.name.to_string(),
             appearance: default_dark.mode,

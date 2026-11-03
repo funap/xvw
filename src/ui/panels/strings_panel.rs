@@ -1031,11 +1031,12 @@ mod tests {
     fn test_strings_address_contrast_across_all_embedded_themes() {
         use super::strings_row_colors;
         use crate::assets::Assets;
-        use crate::theme::EmbeddedThemes;
+        use crate::theme::{load_themes_from_assets, theme_names};
         use gpui_kit::{Hsla, Rgba};
 
-        let embedded = EmbeddedThemes::load_from_assets(&Assets);
-        assert!(!embedded.theme_names().is_empty());
+        let registry = load_themes_from_assets(&Assets);
+        let names = theme_names(registry.themes());
+        assert!(!names.is_empty());
 
         fn channel_to_linear(c: f32) -> f32 {
             if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
@@ -1053,10 +1054,10 @@ mod tests {
             (lighter + 0.05) / (darker + 0.05)
         }
 
-        for name in embedded.theme_names() {
-            let config = embedded.get(&name).unwrap();
+        for name in names {
+            let config = registry.themes().get(&name).unwrap();
             let mut theme = super::Theme::default();
-            theme.apply_config(&config);
+            theme.apply_config(config);
 
             let colors = strings_row_colors(false, false, &theme);
             let ratio = contrast_ratio(colors.address_color, colors.bg_color);

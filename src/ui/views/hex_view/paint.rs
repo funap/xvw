@@ -2711,15 +2711,16 @@ mod tests {
     fn test_description_palette_contrast_across_all_embedded_themes() {
         use super::*;
         use crate::assets::Assets;
-        use crate::theme::EmbeddedThemes;
+        use crate::theme::{load_themes_from_assets, theme_names};
 
-        let embedded = EmbeddedThemes::load_from_assets(&Assets);
-        assert!(!embedded.theme_names().is_empty());
+        let registry = load_themes_from_assets(&Assets);
+        let names = theme_names(registry.themes());
+        assert!(!names.is_empty());
 
-        for name in embedded.theme_names() {
-            let config = embedded.get(&name).unwrap();
+        for name in names {
+            let config = registry.themes().get(&name).unwrap();
             let mut theme = Theme::default();
-            theme.apply_config(&config);
+            theme.apply_config(config);
 
             let palette = DescriptionPalette::from_theme(&theme);
             let bg = theme.background;
