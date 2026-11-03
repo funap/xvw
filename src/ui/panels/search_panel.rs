@@ -67,7 +67,10 @@ pub enum SearchPanelEvent {
 }
 
 pub struct SearchTableDelegate {
-    panel: WeakEntity<SearchPanel>,
+    results: Vec<SearchResultItem>,
+    match_len: usize,
+    editor: Option<Entity<Editor>>,
+    selected_index: Option<usize>,
 }
 
 impl TableDelegate for SearchTableDelegate {
@@ -75,8 +78,8 @@ impl TableDelegate for SearchTableDelegate {
         3
     }
 
-    fn rows_count(&self, cx: &App) -> usize {
-        self.panel.upgrade().map(|p| p.read(cx).results.len()).unwrap_or(0)
+    fn rows_count(&self, _cx: &App) -> usize {
+        self.results.len()
     }
 
     fn column(&self, col_ix: usize, _cx: &App) -> Column {
@@ -89,9 +92,7 @@ impl TableDelegate for SearchTableDelegate {
     }
 
     fn fit_column(&mut self, col_ix: usize, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> Option<Pixels> {
-        let panel = self.panel.upgrade()?;
-        let panel = panel.read(cx);
-        let (encoding, buffer, address_map) = if let Some(ed) = &panel.editor {
+        let (encoding, buffer, address_map) = if let Some(ed) = &self.editor {
             let ed_ref = ed.read(cx);
             let doc = ed_ref.document.read().ok();
             let buf = doc.as_ref().map(|d| d.buffer.clone());
@@ -102,18 +103,18 @@ impl TableDelegate for SearchTableDelegate {
         };
         let buffer_slice = buffer.as_ref().map(|b| b.data());
 
-        let max_len = panel
+        let max_len = self
             .results
             .iter()
             .take(128)
             .map(|item| match col_ix {
                 0 => format!("0x{:08X}", address_map.offset_to_address(item.offset)).chars().count(),
                 1 => {
-                    let (hex, _) = format_row_previews(buffer_slice, item.offset, panel.match_len, encoding);
+                    let (hex, _) = format_row_previews(buffer_slice, item.offset, self.match_len, encoding);
                     hex.chars().count()
                 }
                 2 => {
-                    let (_, text) = format_row_previews(buffer_slice, item.offset, panel.match_len, encoding);
+                    let (_, text) = format_row_previews(buffer_slice, item.offset, self.match_len, encoding);
                     text.chars().count()
                 }
                 _ => 0,
@@ -125,16 +126,12 @@ impl TableDelegate for SearchTableDelegate {
     }
 
     fn context_menu(&mut self, row_ix: usize, menu: PopupMenu, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> PopupMenu {
-        let Some(panel) = self.panel.upgrade() else {
-            return menu;
-        };
-        let panel_ref = panel.read(cx);
-        let Some(item) = panel_ref.results.get(row_ix) else {
+        let Some(item) = self.results.get(row_ix) else {
             return menu;
         };
         let offset = item.offset;
-        let match_len = panel_ref.match_len;
-        let (encoding, buffer, address_map) = if let Some(ed) = &panel_ref.editor {
+        let match_len = self.match_len;
+        let (encoding, buffer, address_map) = if let Some(ed) = &self.editor {
             let ed_ref = ed.read(cx);
             let doc = ed_ref.document.read().ok();
             let buf = doc.as_ref().map(|d| d.buffer.clone());
@@ -153,16 +150,12 @@ impl TableDelegate for SearchTableDelegate {
     }
 
     fn render_td(&mut self, row_ix: usize, col_ix: usize, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
-        let Some(panel) = self.panel.upgrade() else {
-            return div().into_any_element();
-        };
-        let panel_ref = panel.read(cx);
-        let Some(item) = panel_ref.results.get(row_ix) else {
+        let Some(item) = self.results.get(row_ix) else {
             return div().into_any_element();
         };
         let theme = cx.theme();
         let font_family = cx.global::<Appearance>().font_family.clone();
-        let (encoding, buffer, address_map) = if let Some(ed) = &panel_ref.editor {
+        let (encoding, buffer, address_map) = if let Some(ed) = &self.editor {
             let ed_ref = ed.read(cx);
             let doc = ed_ref.document.read().ok();
             let buf = doc.as_ref().map(|d| d.buffer.clone());
@@ -174,9 +167,9 @@ impl TableDelegate for SearchTableDelegate {
         let buffer_data = buffer.as_ref().map(|b| b.data());
         let offset = item.offset;
         let offset_value = format!("0x{:08X}", address_map.offset_to_address(offset));
-        let (preview_hex, preview_text) = format_row_previews(buffer_data, offset, panel_ref.match_len, encoding);
+        let (preview_hex, preview_text) = format_row_previews(buffer_data, offset, self.match_len, encoding);
 
-        let is_selected = panel_ref.selected_index == Some(row_ix);
+        let is_selected = self.selected_index == Some(row_ix);
 
         match col_ix {
             0 => div()
@@ -226,8 +219,12 @@ impl EventEmitter<SearchPanelEvent> for SearchPanel {}
 impl SearchPanel {
     pub fn new(editor: Option<Entity<Editor>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
-        let view = cx.entity().downgrade();
-        let delegate = SearchTableDelegate { panel: view };
+        let delegate = SearchTableDelegate {
+            results: Vec::new(),
+            match_len: 0,
+            editor: None,
+            selected_index: None,
+        };
         let table_state = cx.new(|cx| {
             TableState::new(delegate, window, cx)
                 .row_selectable(true)
@@ -292,10 +289,7 @@ impl SearchPanel {
         self.selected_index = None;
         self.is_searching = false;
         self.search_task = None;
-        self.table_state.update(cx, |table, cx| {
-            table.refresh(cx);
-            table.clear_selection(cx);
-        });
+        self.sync_table_state(cx);
 
         if let Some(ed) = &editor {
             self._editor_subscription = Some(cx.observe(ed, |this, ed, cx| {
@@ -312,42 +306,18 @@ impl SearchPanel {
             self.input.update(cx, |input, cx| {
                 input.set_placeholder(mode.placeholder(), window, cx);
             });
-            self.results.clear();
-            self.is_truncated = false;
-            self.selected_index = None;
-            self.last_query.clear();
-            self.match_len = 0;
-            self.table_state.update(cx, |table, cx| {
-                table.refresh(cx);
-                table.clear_selection(cx);
-            });
-            cx.notify();
+            self.clear_results(cx);
         }
     }
 
     pub fn trigger_search(&mut self, cx: &mut Context<Self>) {
         let query = self.input.read(cx).value().to_string();
         if query.trim().is_empty() {
-            self.results.clear();
-            self.is_truncated = false;
-            self.selected_index = None;
-            self.last_query.clear();
-            self.match_len = 0;
-            self.table_state.update(cx, |table, cx| {
-                table.refresh(cx);
-                table.clear_selection(cx);
-            });
-            if let Some(ed) = &self.editor {
-                ed.update(cx, |ed, cx| {
-                    ed.search_state_mut().clear();
-                    cx.notify();
-                });
-            }
-            cx.notify();
+            self.clear_results(cx);
             return;
         }
 
-        let Some(editor_entity) = &self.editor else {
+        let Some(editor_entity) = self.editor.clone() else {
             return;
         };
 
@@ -359,22 +329,8 @@ impl SearchPanel {
         };
 
         if pattern_len == 0 {
-            self.results.clear();
-            self.is_truncated = false;
-            self.selected_index = None;
+            self.clear_results(cx);
             self.last_query = query.clone();
-            self.match_len = 0;
-            self.table_state.update(cx, |table, cx| {
-                table.refresh(cx);
-                table.clear_selection(cx);
-            });
-            if let Some(ed) = &self.editor {
-                ed.update(cx, |ed, cx| {
-                    ed.search_state_mut().clear();
-                    cx.notify();
-                });
-            }
-            cx.notify();
             return;
         }
 
@@ -384,6 +340,7 @@ impl SearchPanel {
         self.results.clear();
         self.is_truncated = false;
         self.selected_index = None;
+        self.sync_table_state(cx);
 
         // Update editor search query so visible ranges in HexView are highlighted
         editor_entity.update(cx, |editor, cx| {
@@ -445,14 +402,7 @@ impl SearchPanel {
                     if !this.results.is_empty() {
                         this.selected_index = Some(0);
                     }
-                    this.table_state.update(cx, |table, cx| {
-                        table.refresh(cx);
-                        if let Some(idx) = this.selected_index {
-                            table.set_selected_row(idx, cx);
-                        } else {
-                            table.clear_selection(cx);
-                        }
-                    });
+                    this.sync_table_state(cx);
                     if let Some(ed) = &this.editor {
                         let generation = ed.read(cx).search_state.generation;
                         ed.update(cx, |editor, cx| {
@@ -476,6 +426,7 @@ impl SearchPanel {
             let len = self.match_len;
 
             self.table_state.update(cx, |table, cx| {
+                table.delegate_mut().selected_index = Some(index);
                 if table.selected_row() != Some(index) {
                     table.set_selected_row(index, cx);
                 }
@@ -522,15 +473,16 @@ impl SearchPanel {
     }
 
     fn clear_results_action(&mut self, _: &ClearResults, _: &mut Window, cx: &mut Context<Self>) {
+        self.clear_results(cx);
+    }
+
+    fn clear_results(&mut self, cx: &mut Context<Self>) {
         self.results.clear();
         self.is_truncated = false;
         self.selected_index = None;
         self.last_query.clear();
         self.match_len = 0;
-        self.table_state.update(cx, |table, cx| {
-            table.refresh(cx);
-            table.clear_selection(cx);
-        });
+        self.sync_table_state(cx);
         if let Some(ed) = &self.editor {
             ed.update(cx, |ed, cx| {
                 ed.search_state_mut().clear();
@@ -538,6 +490,27 @@ impl SearchPanel {
             });
         }
         cx.notify();
+    }
+
+    fn sync_table_state(&mut self, cx: &mut Context<Self>) {
+        let results = self.results.clone();
+        let match_len = self.match_len;
+        let editor = self.editor.clone();
+        let selected_index = self.selected_index;
+
+        self.table_state.update(cx, |table, cx| {
+            let delegate = table.delegate_mut();
+            delegate.results = results;
+            delegate.match_len = match_len;
+            delegate.editor = editor;
+            delegate.selected_index = selected_index;
+            table.refresh(cx);
+            if let Some(idx) = selected_index {
+                table.set_selected_row(idx, cx);
+            } else {
+                table.clear_selection(cx);
+            }
+        });
     }
 
     fn copy_address(&mut self, action: &CopyAddress, window: &mut Window, cx: &mut Context<Self>) {
@@ -594,17 +567,16 @@ impl SearchPanel {
 
         if self.selected_index != found_index {
             self.selected_index = found_index;
-            if let Some(idx) = found_index {
-                self.table_state.update(cx, |table, cx| {
+            self.table_state.update(cx, |table, cx| {
+                table.delegate_mut().selected_index = found_index;
+                if let Some(idx) = found_index {
                     if table.selected_row() != Some(idx) {
                         table.set_selected_row(idx, cx);
                     }
-                });
-            } else {
-                self.table_state.update(cx, |table, cx| {
+                } else {
                     table.clear_selection(cx);
-                });
-            }
+                }
+            });
         }
     }
 }
@@ -666,22 +638,7 @@ impl Render for SearchPanel {
             .tooltip("Clear results")
             .disabled(!has_editor || (self.results.is_empty() && self.last_query.is_empty()))
             .on_click(cx.listener(|this, _, _window, cx| {
-                this.results.clear();
-                this.is_truncated = false;
-                this.selected_index = None;
-                this.last_query.clear();
-                this.match_len = 0;
-                this.table_state.update(cx, |table, cx| {
-                    table.refresh(cx);
-                    table.clear_selection(cx);
-                });
-                if let Some(ed) = &this.editor {
-                    ed.update(cx, |ed, cx| {
-                        ed.search_state_mut().clear();
-                        cx.notify();
-                    });
-                }
-                cx.notify();
+                this.clear_results(cx);
             }));
 
         let header = crate::ui::panels::panel_header("SEARCH", is_focused, theme, badge, Some(actions.into_any_element()));

@@ -62,6 +62,11 @@ pub enum StringsPanelEvent {
 
 pub struct StringsTableDelegate {
     panel: WeakEntity<StringsPanel>,
+    results: Vec<StringMatch>,
+    visible_indices: Vec<usize>,
+    sort_column: Option<(usize, ColumnSort)>,
+    editor: Option<Entity<Editor>>,
+    selected_index: Option<usize>,
 }
 
 impl TableDelegate for StringsTableDelegate {
@@ -69,22 +74,15 @@ impl TableDelegate for StringsTableDelegate {
         3
     }
 
-    fn rows_count(&self, cx: &App) -> usize {
-        self.panel.upgrade().map(|p| p.read(cx).sorted_indices(cx).len()).unwrap_or(0)
+    fn rows_count(&self, _cx: &App) -> usize {
+        self.visible_indices.len()
     }
 
-    fn column(&self, col_ix: usize, cx: &App) -> Column {
-        let sort = self
-            .panel
-            .upgrade()
-            .map(|p| {
-                let p = p.read(cx);
-                match p.sort_column {
-                    Some((ix, s)) if ix == col_ix => s,
-                    _ => ColumnSort::Default,
-                }
-            })
-            .unwrap_or(ColumnSort::Default);
+    fn column(&self, col_ix: usize, _cx: &App) -> Column {
+        let sort = match self.sort_column {
+            Some((ix, s)) if ix == col_ix => s,
+            _ => ColumnSort::Default,
+        };
 
         match col_ix {
             0 => Column::new("address", "Address").width(px(88.0)).min_width(px(50.0)).resizable(true).sort(sort),
@@ -95,9 +93,11 @@ impl TableDelegate for StringsTableDelegate {
     }
 
     fn perform_sort(&mut self, col_ix: usize, sort: ColumnSort, _window: &mut Window, cx: &mut Context<TableState<Self>>) {
+        let sort_col = if sort == ColumnSort::Default { None } else { Some((col_ix, sort)) };
+        self.sort_column = sort_col;
         if let Some(panel) = self.panel.upgrade() {
             panel.update(cx, |panel, cx| {
-                panel.sort_column = if sort == ColumnSort::Default { None } else { Some((col_ix, sort)) };
+                panel.sort_column = sort_col;
                 panel.sync_selection_to_filter(cx);
                 cx.notify();
             });
@@ -105,20 +105,18 @@ impl TableDelegate for StringsTableDelegate {
     }
 
     fn fit_column(&mut self, col_ix: usize, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> Option<Pixels> {
-        let panel = self.panel.upgrade()?;
-        let panel = panel.read(cx);
-        let visible_indices = panel.sorted_indices(cx);
-        let address_map = panel
+        let address_map = self
             .editor
             .as_ref()
             .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
             .unwrap_or_default();
 
-        let max_len = visible_indices
+        let max_len = self
+            .visible_indices
             .iter()
             .take(128)
             .filter_map(|&index| {
-                panel.results.get(index).map(|item| match col_ix {
+                self.results.get(index).map(|item| match col_ix {
                     0 => format!("0x{:08X}", address_map.offset_to_address(item.offset)).chars().count(),
                     1 => item.byte_len.to_string().chars().count(),
                     2 => preview_text(&item.text).chars().count(),
@@ -132,18 +130,13 @@ impl TableDelegate for StringsTableDelegate {
     }
 
     fn context_menu(&mut self, row_ix: usize, menu: PopupMenu, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> PopupMenu {
-        let Some(panel) = self.panel.upgrade() else {
+        let Some(&index) = self.visible_indices.get(row_ix) else {
             return menu;
         };
-        let panel_ref = panel.read(cx);
-        let visible_indices = panel_ref.sorted_indices(cx);
-        let Some(&index) = visible_indices.get(row_ix) else {
+        let Some(item) = self.results.get(index) else {
             return menu;
         };
-        let Some(item) = panel_ref.results.get(index) else {
-            return menu;
-        };
-        let address_map = panel_ref
+        let address_map = self
             .editor
             .as_ref()
             .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
@@ -152,25 +145,20 @@ impl TableDelegate for StringsTableDelegate {
         let text_value = item.text.clone();
 
         menu.menu_with_icon("Copy Address", IconName::Hash, Box::new(CopyAddress { value: offset_value }))
-            .menu_with_icon("Copy Value", IconName::TextInitial, Box::new(CopyValue { value: text_value }))
+            .menu_with_icon("Copy Value", IconName::Binary, Box::new(CopyValue { value: text_value }))
     }
 
     fn render_td(&mut self, row_ix: usize, col_ix: usize, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
-        let Some(panel) = self.panel.upgrade() else {
+        let Some(&index) = self.visible_indices.get(row_ix) else {
             return div().into_any_element();
         };
-        let panel_ref = panel.read(cx);
-        let visible_indices = panel_ref.sorted_indices(cx);
-        let Some(&index) = visible_indices.get(row_ix) else {
-            return div().into_any_element();
-        };
-        let Some(item) = panel_ref.results.get(index) else {
+        let Some(item) = self.results.get(index) else {
             return div().into_any_element();
         };
 
         let theme = cx.theme();
         let font_family = cx.global::<Appearance>().font_family.clone();
-        let address_map = panel_ref
+        let address_map = self
             .editor
             .as_ref()
             .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
@@ -179,7 +167,7 @@ impl TableDelegate for StringsTableDelegate {
         let offset_value = format!("0x{:08X}", address_map.offset_to_address(item.offset));
         let preview = preview_text(&item.text);
 
-        let is_selected = panel_ref.selected_index == Some(index);
+        let is_selected = self.selected_index == Some(index);
         let colors = strings_row_colors(is_selected, false, theme);
 
         match col_ix {
@@ -235,7 +223,14 @@ impl StringsPanel {
     pub fn new(editor: Option<Entity<Editor>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         let view = cx.entity().downgrade();
-        let delegate = StringsTableDelegate { panel: view };
+        let delegate = StringsTableDelegate {
+            panel: view,
+            results: Vec::new(),
+            visible_indices: Vec::new(),
+            sort_column: None,
+            editor: None,
+            selected_index: None,
+        };
         let table_state = cx.new(|cx| {
             TableState::new(delegate, window, cx)
                 .row_selectable(true)
@@ -274,10 +269,7 @@ impl StringsPanel {
         let input_subscription = cx.subscribe_in(&min_length_input, window, |this, _, event: &input::InputEvent, _window, cx| {
             if let input::InputEvent::Change = event {
                 this.invalidate_scan();
-                this.table_state.update(cx, |table, cx| {
-                    table.refresh(cx);
-                    table.clear_selection(cx);
-                });
+                this.sync_selection_to_filter(cx);
                 cx.notify();
             }
         });
@@ -327,12 +319,9 @@ impl StringsPanel {
         self.cache_current_state();
         self._editor_subscription = None;
         self.invalidate_scan();
-        self.table_state.update(cx, |table, cx| {
-            table.refresh(cx);
-            table.clear_selection(cx);
-        });
         self.editor = editor.clone();
         self.scan_signature = self.current_signature(cx);
+        self.sync_selection_to_filter(cx);
 
         if let Some(ed) = &editor {
             self._editor_subscription = Some(cx.observe(ed, |this, _, cx| {
@@ -397,11 +386,8 @@ impl StringsPanel {
             cx.notify();
         } else {
             self.invalidate_scan();
-            self.table_state.update(cx, |table, cx| {
-                table.refresh(cx);
-                table.clear_selection(cx);
-            });
             self.scan_signature = signature;
+            self.sync_selection_to_filter(cx);
             cx.notify();
         }
     }
@@ -419,10 +405,7 @@ impl StringsPanel {
 
     pub fn trigger_scan(&mut self, cx: &mut Context<Self>) {
         self.invalidate_scan();
-        self.table_state.update(cx, |table, cx| {
-            table.refresh(cx);
-            table.clear_selection(cx);
-        });
+        self.sync_selection_to_filter(cx);
         let generation = self.scan_generation;
         self.scan_signature = self.current_signature(cx);
 
@@ -540,7 +523,18 @@ impl StringsPanel {
         }
 
         let row_ix = self.selected_index.and_then(|idx| visible_indices.iter().position(|&i| i == idx));
+        let results = self.results.clone();
+        let editor = self.editor.clone();
+        let sort_column = self.sort_column;
+        let selected_index = self.selected_index;
+
         self.table_state.update(cx, |table, cx| {
+            let delegate = table.delegate_mut();
+            delegate.results = results;
+            delegate.visible_indices = visible_indices;
+            delegate.sort_column = sort_column;
+            delegate.editor = editor;
+            delegate.selected_index = selected_index;
             table.refresh(cx);
             if let Some(row_ix) = row_ix {
                 table.set_selected_row(row_ix, cx);
@@ -556,14 +550,15 @@ impl StringsPanel {
             let offset = item.offset;
             let len = item.byte_len;
 
-            let visible_indices = self.sorted_indices(cx);
-            if let Some(row_ix) = visible_indices.iter().position(|&i| i == index) {
-                self.table_state.update(cx, |table, cx| {
-                    if table.selected_row() != Some(row_ix) {
-                        table.set_selected_row(row_ix, cx);
-                    }
-                });
-            }
+            self.table_state.update(cx, |table, cx| {
+                table.delegate_mut().selected_index = Some(index);
+                let row_ix = table.delegate().visible_indices.iter().position(|&i| i == index);
+                if let Some(row_ix) = row_ix
+                    && table.selected_row() != Some(row_ix)
+                {
+                    table.set_selected_row(row_ix, cx);
+                }
+            });
 
             if let Some(ed) = &self.editor {
                 ed.update(cx, |editor, cx| {
@@ -620,10 +615,7 @@ impl StringsPanel {
 
     fn clear_results(&mut self, _: &ClearResults, _: &mut Window, cx: &mut Context<Self>) {
         self.invalidate_scan();
-        self.table_state.update(cx, |table, cx| {
-            table.refresh(cx);
-            table.clear_selection(cx);
-        });
+        self.sync_selection_to_filter(cx);
         cx.notify();
     }
 }
@@ -689,10 +681,7 @@ impl Render for StringsPanel {
             .disabled(!self.has_scanned && !self.is_scanning)
             .on_click(cx.listener(|this, _, _window, cx| {
                 this.invalidate_scan();
-                this.table_state.update(cx, |table, cx| {
-                    table.refresh(cx);
-                    table.clear_selection(cx);
-                });
+                this.sync_selection_to_filter(cx);
                 cx.notify();
             }));
         let header = crate::ui::panels::panel_header("STRINGS", is_focused, theme, None, Some(actions.into_any_element()));
