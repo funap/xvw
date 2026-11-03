@@ -239,7 +239,7 @@ impl EditorView {
             if this.is_search_visible {
                 let query = search_bar.read(cx).query(cx);
                 let mode = search_bar.read(cx).mode();
-                if query != this.editor.read(cx).find_state.query {
+                if query != this.editor.read(cx).find_state.query || mode != this.editor.read(cx).find_state.mode {
                     this.perform_incremental_search(&query, mode, cx);
                 }
             }
@@ -506,11 +506,24 @@ impl EditorView {
     }
 
     fn perform_search_next(&mut self, cx: &mut Context<Self>) {
+        let is_search_visible = self.is_search_visible;
         let (next_offset, pattern_len) = self.editor.update(cx, |editor: &mut Editor, cx| {
-            let pattern_len = editor.find_pattern().map(|p| p.len()).unwrap_or(1);
-            let offset = editor.next_find_result();
-            cx.notify();
-            (offset, pattern_len)
+            if is_search_visible {
+                let pattern_len = editor.find_pattern().map(|p| p.len()).unwrap_or(1);
+                let offset = editor.next_find_result();
+                cx.notify();
+                (offset, pattern_len)
+            } else if !editor.search_state.query.is_empty() {
+                let pattern_len = editor.search_pattern().map(|p| p.len()).unwrap_or(1);
+                let offset = editor.next_search_result();
+                cx.notify();
+                (offset, pattern_len)
+            } else {
+                let pattern_len = editor.find_pattern().map(|p| p.len()).unwrap_or(1);
+                let offset = editor.next_find_result();
+                cx.notify();
+                (offset, pattern_len)
+            }
         });
         if let Some(offset) = next_offset {
             self.hex_view.update(cx, |view, cx| {
@@ -527,11 +540,24 @@ impl EditorView {
     }
 
     fn perform_search_prev(&mut self, cx: &mut Context<Self>) {
+        let is_search_visible = self.is_search_visible;
         let (prev_offset, pattern_len) = self.editor.update(cx, |editor: &mut Editor, cx| {
-            let pattern_len = editor.find_pattern().map(|p| p.len()).unwrap_or(1);
-            let offset = editor.prev_find_result();
-            cx.notify();
-            (offset, pattern_len)
+            if is_search_visible {
+                let pattern_len = editor.find_pattern().map(|p| p.len()).unwrap_or(1);
+                let offset = editor.prev_find_result();
+                cx.notify();
+                (offset, pattern_len)
+            } else if !editor.search_state.query.is_empty() {
+                let pattern_len = editor.search_pattern().map(|p| p.len()).unwrap_or(1);
+                let offset = editor.prev_search_result();
+                cx.notify();
+                (offset, pattern_len)
+            } else {
+                let pattern_len = editor.find_pattern().map(|p| p.len()).unwrap_or(1);
+                let offset = editor.prev_find_result();
+                cx.notify();
+                (offset, pattern_len)
+            }
         });
         if let Some(offset) = prev_offset {
             self.hex_view.update(cx, |view, cx| {
