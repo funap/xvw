@@ -69,6 +69,32 @@ pub struct StringsTableDelegate {
     selected_index: Option<usize>,
 }
 
+impl StringsTableDelegate {
+    fn sort_indices(&mut self) {
+        let Some((col_ix, sort)) = self.sort_column else {
+            self.visible_indices.sort();
+            return;
+        };
+        if sort == ColumnSort::Default {
+            self.visible_indices.sort();
+            return;
+        }
+
+        self.visible_indices.sort_by(|left, right| {
+            let left_match = &self.results[*left];
+            let right_match = &self.results[*right];
+            let ordering = match col_ix {
+                0 => left_match.offset.cmp(&right_match.offset),
+                1 => left_match.byte_len.cmp(&right_match.byte_len),
+                2 => left_match.text.cmp(&right_match.text),
+                _ => std::cmp::Ordering::Equal,
+            };
+            let ordering = if sort == ColumnSort::Descending { ordering.reverse() } else { ordering };
+            ordering.then_with(|| left.cmp(right))
+        });
+    }
+}
+
 impl TableDelegate for StringsTableDelegate {
     fn columns_count(&self, _cx: &App) -> usize {
         3
@@ -95,11 +121,14 @@ impl TableDelegate for StringsTableDelegate {
     fn perform_sort(&mut self, col_ix: usize, sort: ColumnSort, _window: &mut Window, cx: &mut Context<TableState<Self>>) {
         let sort_col = if sort == ColumnSort::Default { None } else { Some((col_ix, sort)) };
         self.sort_column = sort_col;
+        self.sort_indices();
         if let Some(panel) = self.panel.upgrade() {
-            panel.update(cx, |panel, cx| {
-                panel.sort_column = sort_col;
-                panel.sync_selection_to_filter(cx);
-                cx.notify();
+            cx.defer(move |cx| {
+                panel.update(cx, |panel, cx| {
+                    panel.sort_column = sort_col;
+                    panel.sync_selection_to_filter(cx);
+                    cx.notify();
+                });
             });
         }
     }
@@ -550,14 +579,17 @@ impl StringsPanel {
             let offset = item.offset;
             let len = item.byte_len;
 
-            self.table_state.update(cx, |table, cx| {
-                table.delegate_mut().selected_index = Some(index);
-                let row_ix = table.delegate().visible_indices.iter().position(|&i| i == index);
-                if let Some(row_ix) = row_ix
-                    && table.selected_row() != Some(row_ix)
-                {
-                    table.set_selected_row(row_ix, cx);
-                }
+            let table_state = self.table_state.clone();
+            cx.defer(move |cx| {
+                table_state.update(cx, |table, cx| {
+                    table.delegate_mut().selected_index = Some(index);
+                    let row_ix = table.delegate().visible_indices.iter().position(|&i| i == index);
+                    if let Some(row_ix) = row_ix
+                        && table.selected_row() != Some(row_ix)
+                    {
+                        table.set_selected_row(row_ix, cx);
+                    }
+                });
             });
 
             if let Some(ed) = &self.editor {

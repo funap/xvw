@@ -425,11 +425,14 @@ impl SearchPanel {
             let offset = self.results[index].offset;
             let len = self.match_len;
 
-            self.table_state.update(cx, |table, cx| {
-                table.delegate_mut().selected_index = Some(index);
-                if table.selected_row() != Some(index) {
-                    table.set_selected_row(index, cx);
-                }
+            let table_state = self.table_state.clone();
+            cx.defer(move |cx| {
+                table_state.update(cx, |table, cx| {
+                    table.delegate_mut().selected_index = Some(index);
+                    if table.selected_row() != Some(index) {
+                        table.set_selected_row(index, cx);
+                    }
+                });
             });
 
             if let Some(ed) = &self.editor {
