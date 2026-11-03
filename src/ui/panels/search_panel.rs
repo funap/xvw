@@ -743,7 +743,7 @@ impl Render for SearchPanel {
                 .flex_1()
                 .overflow_hidden()
                 .children(truncation_notice)
-                .child(DataTable::new(&self.table_state).bordered(true))
+                .child(DataTable::new(&self.table_state).bordered(false))
                 .into_any_element()
         };
 

@@ -1816,7 +1816,7 @@ impl Render for StructTreeView {
                     .into_any_element()
                 }
             } else {
-                DataTable::new(&self.table_state).bordered(true).into_any_element()
+                DataTable::new(&self.table_state).bordered(false).into_any_element()
             }))
     }
 }
