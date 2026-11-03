@@ -2,6 +2,7 @@ use crate::core::editor::Editor;
 use crate::core::selection::Selection;
 use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
+use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::input::{self, Input, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, button::Button, button::ButtonVariants, h_flex, v_flex};
@@ -343,16 +344,11 @@ impl DataInspector {
             }
 
             if can_copy {
-                let copy_val = val_for_click.clone();
                 action_buttons = action_buttons.child(
-                    Button::new(SharedString::from(format!("inspector-copy-{}", label)))
-                        .ghost()
-                        .icon(IconName::Copy)
-                        .with_size(gpui_kit::component::Size::XSmall)
+                    Clipboard::new(SharedString::from(format!("inspector-copy-{}", label)))
+                        .value(val_for_click.clone())
                         .tooltip("Copy Value")
-                        .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(copy_val.clone()));
-                        }),
+                        .with_size(gpui_kit::component::Size::XSmall),
                 );
             }
 

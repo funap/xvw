@@ -1,9 +1,10 @@
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme as _, Icon, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{App, ClipboardItem, FontWeight, MouseButton, Window, div, px};
+use gpui_kit::{App, FontWeight, MouseButton, Window, div, px};
 
 use crate::ui::icon::IconName;
 
@@ -144,13 +145,10 @@ pub fn open_about_dialog(window: &mut Window, cx: &mut App) {
             .footer(
                 DialogFooter::new()
                     .child(
-                        Button::new("copy-about-info")
-                            .ghost()
-                            .icon(IconName::Copy)
-                            .label("Copy Info")
+                        Clipboard::new("copy-about-info")
+                            .value(copy_text.clone())
                             .tooltip("Copy version details to clipboard")
-                            .on_click(move |_, window, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
+                            .on_copied(move |_, window, cx| {
                                 window.push_notification(Notification::info("Version info copied to clipboard"), cx);
                             }),
                     )
