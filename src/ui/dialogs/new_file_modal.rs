@@ -1,46 +1,23 @@
 use crate::core::new_file::{format_fill_preview, format_size_preview, parse_buffer_size, parse_fill_byte};
-use crate::ui::components::EventInterceptionExt;
 use crate::ui::icon::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::input::{self, Input, InputState};
-use gpui_kit::component::{ActiveTheme as _, Disableable, Icon, Sizable, Size, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable, Icon, Sizable, Size, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-#[derive(Clone, PartialEq, Action)]
-pub struct ConfirmCreate;
-
-#[derive(Clone, PartialEq, Action)]
-pub struct CancelModal;
-
-const CONTEXT: &str = "NewFileModal";
-
-pub fn init(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("enter", ConfirmCreate, Some(CONTEXT)),
-        KeyBinding::new("escape", CancelModal, Some(CONTEXT)),
-    ]);
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum NewFileModalEvent {
-    Create { size: usize, fill_byte: u8 },
-    Cancel,
-}
+pub fn init(_cx: &mut App) {}
 
 pub struct NewFileModal {
-    focus_handle: FocusHandle,
-    size_input: Entity<InputState>,
-    fill_input: Entity<InputState>,
-    parsed_size: Result<usize, String>,
-    parsed_fill: Result<u8, String>,
+    pub size_input: Entity<InputState>,
+    pub fill_input: Entity<InputState>,
+    pub parsed_size: Result<usize, String>,
+    pub parsed_fill: Result<u8, String>,
 }
-
-impl EventEmitter<NewFileModalEvent> for NewFileModal {}
 
 impl NewFileModal {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let focus_handle = cx.focus_handle();
         let size_input = cx.new(|cx| InputState::new(window, cx).placeholder("1024, 0x400, 4KB, 1MB..."));
         let fill_input = cx.new(|cx| InputState::new(window, cx).placeholder("0x00, FF, 255, ' '..."));
 
@@ -53,7 +30,6 @@ impl NewFileModal {
         });
 
         let this = Self {
-            focus_handle,
             size_input: size_input.clone(),
             fill_input: fill_input.clone(),
             parsed_size: parse_buffer_size("1024"),
@@ -83,10 +59,8 @@ impl NewFileModal {
         this
     }
 
-    pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
-        self.size_input.update(cx, |input, cx| {
-            input.focus(window, cx);
-        });
+    pub fn is_valid(&self) -> bool {
+        self.parsed_size.is_ok() && self.parsed_fill.is_ok()
     }
 
     pub fn set_size_preset(&mut self, preset: &'static str, window: &mut Window, cx: &mut Context<Self>) {
@@ -103,54 +77,6 @@ impl NewFileModal {
         });
         self.parsed_fill = parse_fill_byte(preset);
         cx.notify();
-    }
-
-    pub fn submit(&mut self, cx: &mut Context<Self>) {
-        if let (Ok(size), Ok(fill_byte)) = (&self.parsed_size, &self.parsed_fill) {
-            cx.emit(NewFileModalEvent::Create {
-                size: *size,
-                fill_byte: *fill_byte,
-            });
-        }
-    }
-
-    pub fn cancel(&mut self, cx: &mut Context<Self>) {
-        cx.emit(NewFileModalEvent::Cancel);
-    }
-}
-
-impl NewFileModal {
-    fn render_header(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .justify_between()
-            .items_center()
-            .px_4()
-            .py_3()
-            .border_b_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(Icon::new(IconName::File).size(px(18.0)).text_color(theme.primary))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.foreground)
-                            .child("New Binary File"),
-                    ),
-            )
-            .child(
-                Button::new("close-btn")
-                    .icon(IconName::Close)
-                    .ghost()
-                    .with_size(Size::XSmall)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.cancel(cx);
-                    })),
-            )
     }
 
     fn render_size_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> impl IntoElement {
@@ -289,70 +215,130 @@ impl NewFileModal {
                     ),
             )
     }
-
-    fn render_footer(&self, theme: &gpui_kit::component::Theme, is_valid: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .justify_end()
-            .items_center()
-            .gap_2()
-            .px_4()
-            .py_3()
-            .border_t_1()
-            .border_color(theme.border)
-            .bg(theme.tab_bar)
-            .child(
-                Button::new("cancel-btn")
-                    .label("Cancel")
-                    .ghost()
-                    .with_size(Size::Small)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.cancel(cx);
-                    })),
-            )
-            .child(
-                Button::new("create-btn")
-                    .label("Create")
-                    .primary()
-                    .with_size(Size::Small)
-                    .disabled(!is_valid)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.submit(cx);
-                    })),
-            )
-    }
 }
 
 impl Render for NewFileModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let is_valid = self.parsed_size.is_ok() && self.parsed_fill.is_ok();
 
         v_flex()
-            .id("new-file-modal")
-            .key_context(CONTEXT)
-            .track_focus(&self.focus_handle)
-            .occlude_and_block_input()
-            .on_action(cx.listener(|this, _: &ConfirmCreate, _, cx| {
-                this.submit(cx);
-            }))
-            .on_action(cx.listener(|this, _: &CancelModal, _, cx| {
-                this.cancel(cx);
-            }))
+            .gap_4()
+            .child(self.render_size_section(&theme, cx))
+            .child(self.render_fill_section(&theme, cx))
+    }
+}
+
+/// Displays the New Binary File dialog.
+pub fn open_new_file_dialog(window: &mut Window, cx: &mut App, on_confirm: impl Fn(usize, u8, &mut Window, &mut App) + 'static) {
+    if window.has_active_dialog(cx) {
+        return;
+    }
+
+    let on_confirm = std::rc::Rc::new(on_confirm);
+    let view = cx.new(|cx| NewFileModal::new(window, cx));
+
+    // Focus size input initially
+    view.update(cx, |v, cx| {
+        v.size_input.update(cx, |input, cx| {
+            input.focus(window, cx);
+        });
+    });
+
+    let on_confirm_for_click = on_confirm.clone();
+    let on_confirm_for_ok = on_confirm.clone();
+    let view_for_dialog = view.clone();
+    let view_for_content = view.clone();
+    let view_for_ok = view.clone();
+
+    window.open_dialog(cx, move |dialog, _window, cx| {
+        let theme = cx.theme();
+        let is_valid = view_for_dialog.read(cx).is_valid();
+
+        let on_confirm_btn = on_confirm_for_click.clone();
+        let view_btn = view_for_dialog.clone();
+
+        dialog
             .w(px(460.0))
-            .bg(theme.background)
-            .border_1()
-            .border_color(theme.border)
-            .rounded_lg()
-            .shadow_xl()
-            .overflow_hidden()
-            .child(self.render_header(&theme, cx))
-            .child(
-                v_flex()
-                    .p_4()
-                    .gap_4()
-                    .child(self.render_size_section(&theme, cx))
-                    .child(self.render_fill_section(&theme, cx)),
+            .title(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(Icon::new(IconName::File).size(px(18.0)).text_color(theme.primary))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.foreground)
+                            .child("New Binary File"),
+                    ),
             )
-            .child(self.render_footer(&theme, is_valid, cx))
+            .content({
+                let view = view_for_content.clone();
+                move |content, _window, _cx| content.child(view.clone())
+            })
+            .footer(
+                DialogFooter::new()
+                    .child(
+                        Button::new("cancel-btn")
+                            .label("Cancel")
+                            .ghost()
+                            .with_size(Size::Small)
+                            .on_click(|_, window, cx| {
+                                window.close_dialog(cx);
+                            }),
+                    )
+                    .child(
+                        Button::new("create-btn")
+                            .label("Create")
+                            .primary()
+                            .with_size(Size::Small)
+                            .disabled(!is_valid)
+                            .on_click(move |_, window, cx| {
+                                let (size, fill) = {
+                                    let v = view_btn.read(cx);
+                                    match (v.parsed_size.as_ref(), v.parsed_fill.as_ref()) {
+                                        (Ok(s), Ok(f)) => (*s, *f),
+                                        _ => return,
+                                    }
+                                };
+                                window.close_dialog(cx);
+                                on_confirm_btn(size, fill, window, cx);
+                            }),
+                    ),
+            )
+            .on_ok({
+                let on_confirm_ok = on_confirm_for_ok.clone();
+                let view_ok = view_for_ok.clone();
+                move |_, window, cx| {
+                    let v = view_ok.read(cx);
+                    if let (Ok(size), Ok(fill)) = (&v.parsed_size, &v.parsed_fill) {
+                        let size = *size;
+                        let fill = *fill;
+                        on_confirm_ok(size, fill, window, cx);
+                        true
+                    } else {
+                        false
+                    }
+                }
+            })
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::new_file::{parse_buffer_size, parse_fill_byte};
+
+    #[test]
+    fn test_new_file_preset_values_are_valid() {
+        assert!(parse_buffer_size("0").is_ok());
+        assert!(parse_buffer_size("256").is_ok());
+        assert!(parse_buffer_size("1KB").is_ok());
+        assert!(parse_buffer_size("4KB").is_ok());
+        assert!(parse_buffer_size("64KB").is_ok());
+        assert!(parse_buffer_size("1MB").is_ok());
+
+        assert!(parse_fill_byte("0x00").is_ok());
+        assert!(parse_fill_byte("0xFF").is_ok());
+        assert!(parse_fill_byte("0x20").is_ok());
     }
 }

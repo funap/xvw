@@ -83,8 +83,6 @@ pub struct Workspace {
     pub scratchpad_panel: Entity<crate::ui::views::scratchpad_view::ScratchpadView>,
     pub workspace_resizable_state: Entity<ResizableState>,
     pub is_right_panel_visible: bool,
-    pub new_file_modal: Option<Entity<crate::ui::dialogs::new_file_modal::NewFileModal>>,
-    pub fill_selection_modal: Option<Entity<crate::ui::dialogs::fill_selection_modal::FillSelectionModal>>,
     pub active_palette: Option<ActivePalette>,
     pub untitled_count: usize,
     pub(crate) force_close: bool,
@@ -588,8 +586,6 @@ impl Workspace {
             scratchpad_panel,
             workspace_resizable_state,
             is_right_panel_visible: false,
-            new_file_modal: None,
-            fill_selection_modal: None,
             active_palette: None,
             untitled_count: 0,
             force_close: false,
@@ -1169,39 +1165,19 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_new_file(&mut self, _: &NewFile, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::dialogs::new_file_modal::{NewFileModal, NewFileModalEvent};
-
-        let modal = cx.new(|cx| NewFileModal::new(window, cx));
-        cx.subscribe_in(&modal, window, |this, _, event: &NewFileModalEvent, window, cx| match event {
-            NewFileModalEvent::Create { size, fill_byte } => {
-                this.create_new_file(*size, *fill_byte, window, cx);
-            }
-            NewFileModalEvent::Cancel => {
-                this.close_new_file_modal(window, cx);
-            }
-        })
-        .detach();
-
-        modal.update(cx, |m, cx| {
-            m.focus(window, cx);
+        let workspace = cx.entity().clone();
+        crate::ui::dialogs::new_file_modal::open_new_file_dialog(window, cx, move |size, fill_byte, window, cx| {
+            workspace.update(cx, |this, cx| {
+                this.create_new_file(size, fill_byte, window, cx);
+            });
         });
-
-        self.new_file_modal = Some(modal);
-        cx.notify();
     }
 
     pub(crate) fn on_action_new_empty_file(&mut self, _: &crate::actions::NewEmptyFile, window: &mut Window, cx: &mut Context<Self>) {
         self.create_new_file(0, 0, window, cx);
     }
 
-    fn close_new_file_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.new_file_modal = None;
-        self.sync_active_editor(window, cx);
-        cx.notify();
-    }
-
     fn create_new_file(&mut self, size: usize, fill_byte: u8, window: &mut Window, cx: &mut Context<Self>) {
-        self.new_file_modal = None;
         self.untitled_count += 1;
         let title = format!("Untitled-{}.bin", self.untitled_count);
         let path = std::path::PathBuf::from(title);
@@ -1214,8 +1190,6 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_fill_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use crate::ui::dialogs::fill_selection_modal::{FillSelectionModal, FillSelectionModalEvent};
-
         let Some(active_editor) = self.active_editor(cx) else {
             return;
         };
@@ -1233,31 +1207,14 @@ impl Workspace {
             return;
         }
 
-        let modal = cx.new(|cx| FillSelectionModal::new(range.clone(), window, cx));
+        let workspace = cx.entity().clone();
         let editor_entity = active_editor.clone();
         let target_range = range.clone();
-        cx.subscribe_in(&modal, window, move |this, _, event: &FillSelectionModalEvent, window, cx| match event {
-            FillSelectionModalEvent::Fill(pattern) => {
-                this.execute_fill_selection(&editor_entity, target_range.clone(), pattern, window, cx);
-            }
-            FillSelectionModalEvent::Cancel => {
-                this.close_fill_selection_modal(window, cx);
-            }
-        })
-        .detach();
-
-        modal.update(cx, |m, cx| {
-            m.focus(window, cx);
+        crate::ui::dialogs::fill_selection_modal::open_fill_selection_dialog(range, window, cx, move |pattern, window, cx| {
+            workspace.update(cx, |this, cx| {
+                this.execute_fill_selection(&editor_entity, target_range.clone(), &pattern, window, cx);
+            });
         });
-
-        self.fill_selection_modal = Some(modal);
-        cx.notify();
-    }
-
-    fn close_fill_selection_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.fill_selection_modal = None;
-        self.sync_active_editor(window, cx);
-        cx.notify();
     }
 
     pub(crate) fn restore_editor_focus(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1302,7 +1259,7 @@ impl Workspace {
     }
 
     pub(crate) fn open_quick_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.new_file_modal.is_some() || self.fill_selection_modal.is_some() {
+        if window.has_active_dialog(cx) {
             return;
         }
 
@@ -1427,7 +1384,7 @@ impl Workspace {
     }
 
     pub(crate) fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.new_file_modal.is_some() || self.fill_selection_modal.is_some() {
+        if window.has_active_dialog(cx) {
             return;
         }
 
@@ -1475,7 +1432,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.fill_selection_modal = None;
         let len = range.len();
         let bytes = pattern.generate(len);
         let start = range.start;
@@ -1649,18 +1605,6 @@ impl Workspace {
                 activity_bar.set_activity(None, cx);
             }
         });
-    }
-
-    fn render_modal_backdrop(overlay_bg: gpui::Hsla, modal: impl IntoElement) -> Div {
-        div()
-            .absolute()
-            .inset_0()
-            .bg(overlay_bg)
-            .flex()
-            .items_center()
-            .justify_center()
-            .occlude_and_block_input()
-            .child(modal)
     }
 }
 
@@ -1927,12 +1871,6 @@ impl Render for Workspace {
                     }),
             )
             .child(self.status_bar.clone())
-            .when_some(self.new_file_modal.clone(), |el, modal| {
-                el.child(Self::render_modal_backdrop(theme.overlay, modal))
-            })
-            .when_some(self.fill_selection_modal.clone(), |el, modal| {
-                el.child(Self::render_modal_backdrop(theme.overlay, modal))
-            })
             .when_some(self.active_palette.clone(), |el, palette| {
                 let content = match palette {
                     ActivePalette::QuickOpen(modal) => modal.into_any_element(),
