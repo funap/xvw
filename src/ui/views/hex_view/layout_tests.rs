@@ -716,6 +716,7 @@ fn test_hex_view_layout_suite() {
     check_cursor_row_and_header_highlight();
     check_description_indentation_with_duplicate_element_names();
     check_row_render_cache();
+    check_bytes_per_row_lifecycle();
     check_dual_search_highlight_resolution_and_precedence();
     check_search_visibility_lifecycle();
 }
@@ -762,6 +763,7 @@ fn check_row_render_cache() {
     cache.validate(
         1,
         1,
+        16,
         0,
         0,
         px(13.0),
@@ -779,6 +781,7 @@ fn check_row_render_cache() {
     cache.validate(
         1,
         1,
+        16,
         0,
         0,
         px(13.0),
@@ -796,6 +799,7 @@ fn check_row_render_cache() {
     cache.validate(
         2,
         1,
+        16,
         0,
         0,
         px(13.0),
@@ -813,6 +817,7 @@ fn check_row_render_cache() {
     cache.validate(
         2,
         1,
+        16,
         100,
         0,
         px(13.0),
@@ -828,6 +833,7 @@ fn check_row_render_cache() {
     cache.validate(
         2,
         1,
+        16,
         101,
         0,
         px(13.0),
@@ -840,6 +846,179 @@ fn check_row_render_cache() {
         hsla(0.0, 0.0, 1.0, 1.0),
     );
     assert!(cache.get(0).is_none());
+
+    // Bytes per row changed -> cached row invalidated
+    cache.validate(
+        2,
+        1,
+        16,
+        101,
+        0,
+        px(13.0),
+        &font_fam,
+        DisplayRadix::Hexadecimal,
+        ByteGroupSize::One,
+        true,
+        Encoding::Ascii,
+        hsla(0.0, 0.0, 0.0, 1.0),
+        hsla(0.0, 0.0, 1.0, 1.0),
+    );
+    cache.insert(0, dummy_row(0x2000));
+    // Same bytes_per_row -> retained
+    cache.validate(
+        2,
+        1,
+        16,
+        101,
+        0,
+        px(13.0),
+        &font_fam,
+        DisplayRadix::Hexadecimal,
+        ByteGroupSize::One,
+        true,
+        Encoding::Ascii,
+        hsla(0.0, 0.0, 0.0, 1.0),
+        hsla(0.0, 0.0, 1.0, 1.0),
+    );
+    assert!(cache.get(0).is_some());
+    // Changed bytes_per_row (e.g. 16 -> 8) -> invalidated
+    cache.validate(
+        2,
+        1,
+        8,
+        101,
+        0,
+        px(13.0),
+        &font_fam,
+        DisplayRadix::Hexadecimal,
+        ByteGroupSize::One,
+        true,
+        Encoding::Ascii,
+        hsla(0.0, 0.0, 0.0, 1.0),
+        hsla(0.0, 0.0, 1.0, 1.0),
+    );
+    assert!(cache.get(0).is_none());
+}
+
+fn check_bytes_per_row_lifecycle() {
+    use super::row_cache::*;
+    use super::types::HexTextSource;
+
+    let doc = Arc::new(RwLock::new(Document::new(PathBuf::from("/test.bin"), Buffer::new(vec![0xAA; 64]))));
+    let mut editor = Editor::new(doc);
+    assert_eq!(editor.bytes_per_row(), 16);
+    let line_starts_16 = editor.line_starts();
+    assert_eq!(line_starts_16.bytes_per_row(), 16);
+    assert_eq!(line_starts_16.len(), 4);
+    assert_eq!(line_starts_16.get(0), Some(0));
+    assert_eq!(line_starts_16.get(1), Some(16));
+
+    let mut cache = RowRenderCache::default();
+    let font_fam = gpui_kit::SharedString::from("monospace");
+    cache.validate(
+        1,
+        1,
+        line_starts_16.bytes_per_row(),
+        0,
+        0,
+        px(13.0),
+        &font_fam,
+        DisplayRadix::Hexadecimal,
+        ByteGroupSize::One,
+        true,
+        Encoding::Ascii,
+        hsla(0.0, 0.0, 0.0, 1.0),
+        hsla(0.0, 0.0, 1.0, 1.0),
+    );
+    cache.insert(
+        0,
+        CachedRow {
+            physical_address: 0,
+            shaped_addr: None,
+            hex_source: HexTextSource {
+                text: gpui_kit::SharedString::from("AA ".repeat(16)),
+                groups: Vec::new(),
+            },
+            shaped_hex: None,
+            ascii_cells: Vec::new(),
+            shaped_ascii: None,
+            structure_fields: None,
+            desc: None,
+        },
+    );
+    assert!(cache.get(0).is_some());
+
+    // Update bytes_per_row to 8
+    editor.set_bytes_per_row(8);
+    assert_eq!(editor.bytes_per_row(), 8);
+    let line_starts_8 = editor.line_starts();
+    assert_eq!(line_starts_8.bytes_per_row(), 8);
+    assert_eq!(line_starts_8.len(), 8);
+    assert_eq!(line_starts_8.get(0), Some(0));
+    assert_eq!(line_starts_8.get(1), Some(8));
+
+    // When cache is validated with new line_starts.bytes_per_row(), cached rows are invalidated
+    cache.validate(
+        1,
+        1,
+        line_starts_8.bytes_per_row(),
+        0,
+        0,
+        px(13.0),
+        &font_fam,
+        DisplayRadix::Hexadecimal,
+        ByteGroupSize::One,
+        true,
+        Encoding::Ascii,
+        hsla(0.0, 0.0, 0.0, 1.0),
+        hsla(0.0, 0.0, 1.0, 1.0),
+    );
+    assert!(cache.get(0).is_none(), "Changing bytes_per_row from 16 to 8 must invalidate cached rows");
+
+    // Insert row for 8 bytes per row
+    cache.insert(
+        0,
+        CachedRow {
+            physical_address: 0,
+            shaped_addr: None,
+            hex_source: HexTextSource {
+                text: gpui_kit::SharedString::from("AA ".repeat(8)),
+                groups: Vec::new(),
+            },
+            shaped_hex: None,
+            ascii_cells: Vec::new(),
+            shaped_ascii: None,
+            structure_fields: None,
+            desc: None,
+        },
+    );
+    assert!(cache.get(0).is_some());
+
+    // Update bytes_per_row to 32
+    editor.set_bytes_per_row(32);
+    assert_eq!(editor.bytes_per_row(), 32);
+    let line_starts_32 = editor.line_starts();
+    assert_eq!(line_starts_32.bytes_per_row(), 32);
+    assert_eq!(line_starts_32.len(), 2);
+    assert_eq!(line_starts_32.get(0), Some(0));
+    assert_eq!(line_starts_32.get(1), Some(32));
+
+    cache.validate(
+        1,
+        1,
+        line_starts_32.bytes_per_row(),
+        0,
+        0,
+        px(13.0),
+        &font_fam,
+        DisplayRadix::Hexadecimal,
+        ByteGroupSize::One,
+        true,
+        Encoding::Ascii,
+        hsla(0.0, 0.0, 0.0, 1.0),
+        hsla(0.0, 0.0, 1.0, 1.0),
+    );
+    assert!(cache.get(0).is_none(), "Changing bytes_per_row from 8 to 32 must invalidate cached rows");
 }
 
 fn merge_search_and_find_highlights_for_test(

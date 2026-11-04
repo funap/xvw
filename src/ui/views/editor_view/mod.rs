@@ -209,6 +209,7 @@ impl EditorView {
             this.hex_view.update(cx, |_, cx| {
                 cx.notify();
             });
+            this.update_highlights(cx);
             cx.notify();
         });
 

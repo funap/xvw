@@ -977,11 +977,12 @@ mod tests {
         assert!(highlighter.tree().is_some());
         let registry = crate::theme::load_themes_from_assets(&crate::assets::Assets);
         let default_dark = registry.themes().get("Default Dark").expect("Default Dark theme should be present");
-        let theme = gpui_kit::component::highlighter::HighlightTheme {
-            name: default_dark.name.to_string(),
-            appearance: default_dark.mode,
-            style: default_dark.highlight.clone().expect("Highlight style must exist"),
-        };
+        let theme: gpui_kit::component::highlighter::HighlightTheme = serde_json::from_value(serde_json::json!({
+            "name": default_dark.name.to_string(),
+            "appearance": default_dark.mode,
+            "style": default_dark.highlight.clone().expect("Highlight style must exist"),
+        }))
+        .expect("deserialize HighlightTheme");
         let styles = highlighter.styles(&(0..rope.len()), &theme);
         // Verify that heading text "Scratchpad" receives the heading title style
         let scratchpad_range = "# Scratchpad".find("Scratchpad").unwrap();

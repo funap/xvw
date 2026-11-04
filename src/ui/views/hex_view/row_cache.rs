@@ -58,6 +58,7 @@ pub struct CachedRow {
 pub struct RowRenderCache {
     generation: usize,
     layout_version: usize,
+    bytes_per_row: usize,
     collapsed_ptr: usize,
     parse_result_ptr: usize,
     font_size: Pixels,
@@ -79,6 +80,7 @@ impl RowRenderCache {
         &mut self,
         generation: usize,
         layout_version: usize,
+        bytes_per_row: usize,
         collapsed_ptr: usize,
         parse_result_ptr: usize,
         font_size: Pixels,
@@ -92,6 +94,7 @@ impl RowRenderCache {
     ) {
         if self.generation != generation
             || self.layout_version != layout_version
+            || self.bytes_per_row != bytes_per_row
             || self.collapsed_ptr != collapsed_ptr
             || self.parse_result_ptr != parse_result_ptr
             || self.font_size != font_size
@@ -105,6 +108,7 @@ impl RowRenderCache {
         {
             self.generation = generation;
             self.layout_version = layout_version;
+            self.bytes_per_row = bytes_per_row;
             self.collapsed_ptr = collapsed_ptr;
             self.parse_result_ptr = parse_result_ptr;
             self.font_size = font_size;

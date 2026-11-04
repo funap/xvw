@@ -167,6 +167,7 @@ pub struct HexView {
     cached_desc_content_width: std::cell::Cell<Option<f32>>,
     resizing_column: Option<(ResizingColumn, f32, f32)>,
     last_cursor_offset: Option<usize>,
+    last_bytes_per_row: Option<usize>,
     last_max_bytes_per_row: Option<usize>,
     last_bookmark_version: u64,
     last_structure_generation: usize,
@@ -228,54 +229,78 @@ impl HexView {
         })
         .detach();
 
-        let _editor_subscription = cx.observe(&editor, |this, editor_entity, cx| {
-            let ed = editor_entity.read(cx);
-            let current_bm_version = ed.bookmarks().version();
-            if this.last_bookmark_version != current_bm_version {
-                this.last_bookmark_version = current_bm_version;
-                this.cached_comment_content_width.set(None);
-            }
-            let current_generation = ed.structure.generation;
-            if this.last_structure_generation != current_generation {
-                this.last_structure_generation = current_generation;
-                this.clear_desc_content_width_cache();
-            }
-            if ed.is_read_only() {
-                this.clear_pending_hex_input();
-            }
-            let new_encoding = ed.options.encoding;
-            let new_radix = ed.options.radix;
-            let new_group_size = ed.options.group_size;
-            let new_endian = ed.options.is_big_endian;
-            let cursor_offset = if InsertModeState::is_enabled(cx) {
-                ed.insert_cursor_offset()
-            } else {
-                ed.cursor.offset
-            };
-            let cursor_changed = this.last_cursor_offset != Some(cursor_offset);
-            if cursor_changed {
-                this.cursor_reveal_pending = true;
-                this.cursor_blink.update(cx, |cursor, cx| {
-                    cursor.pause(cx);
-                });
-            }
+        let _editor_subscription =
+            cx.observe(&editor, |this, editor_entity, cx| {
+                let (
+                    current_bm_version,
+                    current_generation,
+                    is_read_only,
+                    new_encoding,
+                    new_radix,
+                    new_group_size,
+                    new_endian,
+                    new_bytes_per_row,
+                    cursor_offset,
+                ) = {
+                    let ed = editor_entity.read(cx);
+                    let cursor_offset = if InsertModeState::is_enabled(cx) {
+                        ed.insert_cursor_offset()
+                    } else {
+                        ed.cursor.offset
+                    };
+                    (
+                        ed.bookmarks().version(),
+                        ed.structure.generation,
+                        ed.is_read_only(),
+                        ed.options.encoding,
+                        ed.options.radix,
+                        ed.options.group_size,
+                        ed.options.is_big_endian,
+                        ed.bytes_per_row(),
+                        cursor_offset,
+                    )
+                };
 
-            if this.encoding != new_encoding {
-                this.encoding = new_encoding;
-            }
-            if this.radix != new_radix || this.group_size != new_group_size || this.is_big_endian != new_endian {
-                this.radix = new_radix;
-                this.group_size = new_group_size;
-                this.is_big_endian = new_endian;
-                this.hex_content_width = 0.0;
-                this.cursor_reveal_pending = true;
-            }
-            this.clamp_scroll_offsets(cx);
-            if cursor_changed {
-                this.ensure_cursor_visible(cx);
-            }
-            cx.notify();
-        });
+                if this.last_bookmark_version != current_bm_version {
+                    this.last_bookmark_version = current_bm_version;
+                    this.cached_comment_content_width.set(None);
+                }
+                if this.last_structure_generation != current_generation {
+                    this.last_structure_generation = current_generation;
+                    this.clear_desc_content_width_cache();
+                }
+                if is_read_only {
+                    this.clear_pending_hex_input();
+                }
+                let cursor_changed = this.last_cursor_offset != Some(cursor_offset);
+                if cursor_changed {
+                    this.cursor_reveal_pending = true;
+                    this.cursor_blink.update(cx, |cursor, cx| {
+                        cursor.pause(cx);
+                    });
+                }
+
+                if this.encoding != new_encoding {
+                    this.encoding = new_encoding;
+                }
+                if this.radix != new_radix || this.group_size != new_group_size || this.is_big_endian != new_endian {
+                    this.radix = new_radix;
+                    this.group_size = new_group_size;
+                    this.is_big_endian = new_endian;
+                    this.hex_content_width = 0.0;
+                    this.cursor_reveal_pending = true;
+                }
+                if this.last_bytes_per_row != Some(new_bytes_per_row) {
+                    this.last_bytes_per_row = Some(new_bytes_per_row);
+                    this.hex_content_width = 0.0;
+                    this.cursor_reveal_pending = true;
+                }
+                this.clamp_scroll_offsets(cx);
+                if cursor_changed {
+                    this.ensure_cursor_visible(cx);
+                }
+                cx.notify();
+            });
 
         let _insert_mode_subscription = cx.observe_global::<InsertModeState>(|this, cx| {
             this.pause_cursor_blink(cx);
@@ -325,6 +350,7 @@ impl HexView {
             cached_desc_content_width: std::cell::Cell::new(None),
             resizing_column: None,
             last_cursor_offset: None,
+            last_bytes_per_row: None,
             last_max_bytes_per_row: None,
             last_bookmark_version,
             last_structure_generation,
@@ -2573,18 +2599,22 @@ impl Render for HexView {
         let font_size = self.font_size_prop;
 
         let total_rows = self.effective_total_rows(cx);
-        let (max_bytes_per_row, is_struct_mode) = {
+        let (bytes_per_row, max_bytes_per_row, is_struct_mode) = {
             let editor = self.editor.read(cx);
             let line_starts = editor.line_starts();
             (
+                line_starts.bytes_per_row(),
                 line_starts.max_bytes_per_row(),
                 editor.structure.show_inline_structure_view && editor.parse_result().is_some(),
             )
         };
-        let max_bytes_per_row_changed = self.last_max_bytes_per_row != Some(max_bytes_per_row);
-        if max_bytes_per_row_changed {
+        let bytes_per_row_changed = self.last_bytes_per_row != Some(bytes_per_row) || self.last_max_bytes_per_row != Some(max_bytes_per_row);
+        if bytes_per_row_changed {
+            self.last_bytes_per_row = Some(bytes_per_row);
             self.last_max_bytes_per_row = Some(max_bytes_per_row);
             self.ascii_col_width = Self::default_ascii_col_width(max_bytes_per_row);
+            self.cursor_reveal_pending = true;
+            self.row_cache.borrow_mut().clear();
         }
         let ascii_col_width = self.effective_ascii_col_width(max_bytes_per_row);
 
@@ -2618,7 +2648,7 @@ impl Render for HexView {
         };
         let total_data_width = f32::from(hex_grid_width(probe_source.text.len(), hex_cell_width));
         self.hex_content_width = total_data_width;
-        if max_bytes_per_row_changed || self.hex_col_width <= 0.0 {
+        if bytes_per_row_changed || self.hex_col_width <= 0.0 {
             self.hex_col_width = total_data_width;
         }
         let max_hex_scroll = (total_data_width - self.hex_col_width).max(0.0);
@@ -3827,6 +3857,7 @@ impl Render for HexView {
                         cache_borrow.validate(
                             doc.history.state_id(),
                             doc.layout_version(),
+                            line_starts.bytes_per_row(),
                             collapsed_ptr,
                             parse_result_ptr,
                             font_size,
