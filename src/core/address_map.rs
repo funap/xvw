@@ -243,6 +243,41 @@ impl AddressMap {
         self.segments.iter().map(|seg| seg.buffer_offset..seg.end_buffer_offset()).collect()
     }
 
+    /// Resolves a target address or offset to a linear buffer offset for editor navigation/jumping.
+    ///
+    /// If the map has a custom base address or address gaps, this maps the physical address to
+    /// the corresponding linear buffer offset. Otherwise, it treats the value directly as a buffer offset.
+    pub fn resolve_jump_offset(&self, target: usize) -> usize {
+        if self.base_address() > 0 || self.has_gaps() {
+            self.address_to_offset(target).unwrap_or(target)
+        } else {
+            target
+        }
+    }
+
+    /// Resolves an address range or offset range to a linear buffer range `[start..end)`.
+    ///
+    /// If the map has a custom base address or address gaps, `range.start` and the inclusive end
+    /// `range.end - 1` are translated from physical addresses to buffer offsets.
+    pub fn resolve_jump_range(&self, range: std::ops::Range<usize>, total_size: usize) -> std::ops::Range<usize> {
+        if self.base_address() > 0 || self.has_gaps() {
+            let start_offset = self.address_to_offset(range.start).unwrap_or(range.start);
+            let end_offset = if range.end > range.start {
+                let last_addr = range.end.saturating_sub(1);
+                self.address_to_offset(last_addr).unwrap_or(last_addr).saturating_add(1)
+            } else {
+                start_offset
+            };
+            let min_off = start_offset.min(end_offset).min(total_size);
+            let max_off = start_offset.max(end_offset).min(total_size);
+            min_off..max_off
+        } else {
+            let start = range.start.min(total_size);
+            let end = range.end.min(total_size).max(start);
+            start..end
+        }
+    }
+
     /// Returns the recommended default file extension ("mot", "hex", or "bin") based on the current path and address map structure.
     pub fn default_extension(&self, current_path: &Path) -> &'static str {
         let ext = current_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
@@ -414,6 +449,39 @@ mod tests {
         assert_eq!(map.address_to_offset(0x1000), Some(0));
         assert_eq!(map.address_to_offset(0x1032), Some(50));
         assert!(!map.has_gaps());
+    }
+
+    #[test]
+    fn test_address_map_resolve_jump_offset_and_range() {
+        // Single segment with SREC base address 0x1000, length 100
+        let srec_map = AddressMap::single_segment(0x1000, 100);
+        assert_eq!(srec_map.resolve_jump_offset(0x1000), 0);
+        assert_eq!(srec_map.resolve_jump_offset(0x1020), 32);
+        assert_eq!(srec_map.resolve_jump_range(0x1000..0x1021, 100), 0..33);
+        assert_eq!(srec_map.resolve_jump_range(0x1000..0x1000, 100), 0..0);
+
+        // Gapped segments (e.g. SREC with multiple chunks)
+        let gapped_map = AddressMap::from_segments(vec![
+            MemorySegment {
+                buffer_offset: 0,
+                address: 0x1000,
+                length: 16,
+            },
+            MemorySegment {
+                buffer_offset: 16,
+                address: 0x2000,
+                length: 32,
+            },
+        ]);
+        assert_eq!(gapped_map.resolve_jump_offset(0x1005), 5);
+        assert_eq!(gapped_map.resolve_jump_offset(0x2000), 16);
+        assert_eq!(gapped_map.resolve_jump_offset(0x2005), 21);
+        assert_eq!(gapped_map.resolve_jump_range(0x2000..0x2020, 48), 16..48);
+
+        // Plain binary file (base address 0, no gaps)
+        let default_map = AddressMap::default();
+        assert_eq!(default_map.resolve_jump_offset(0x20), 0x20);
+        assert_eq!(default_map.resolve_jump_range(0x200..0x220, 0x1000), 0x200..0x220);
     }
 
     #[test]

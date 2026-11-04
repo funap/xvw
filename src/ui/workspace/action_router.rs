@@ -1129,13 +1129,16 @@ impl Workspace {
             let (text, label) = match mode {
                 ScratchpadInsertMode::OffsetOnly => {
                     let formatted = if let Some(range) = selection {
+                        let start_addr = doc.offset_to_address(range.start);
                         if range.len() > 1 {
-                            crate::core::offset_link::format_offset_plain(range.start, Some(range.len()), total)
+                            let end_addr = doc.offset_to_address(range.end.saturating_sub(1));
+                            crate::core::offset_link::format_address_range_plain(start_addr, end_addr, total)
                         } else {
-                            crate::core::offset_link::format_offset_plain(range.start, None, total)
+                            crate::core::offset_link::format_address_plain(start_addr, total)
                         }
                     } else {
-                        crate::core::offset_link::format_offset_plain(cursor, None, total)
+                        let addr = doc.offset_to_address(cursor);
+                        crate::core::offset_link::format_address_plain(addr, total)
                     };
                     (formatted, "offset")
                 }

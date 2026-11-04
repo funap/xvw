@@ -1059,6 +1059,50 @@ mod tests {
     }
 
     #[test]
+    fn test_scratchpad_srec_address_jump_resolution() {
+        use crate::core::address_map::{AddressMap, MemorySegment};
+        use crate::core::offset_link::{OffsetLinkTarget, format_address_range_plain, parse_offset_link};
+
+        // Simulate an imported SREC document with base address 0x00FD_0000 and 64 bytes
+        let srec_map = AddressMap::from_segments(vec![MemorySegment {
+            buffer_offset: 0,
+            address: 0x00FD_0000,
+            length: 64,
+        }]);
+
+        // 1. Single address jump: user clicks or navigates to 0x00FD0010 in scratchpad
+        let parsed_single = parse_offset_link("0x00FD0010").expect("single address must parse");
+        assert_eq!(parsed_single, OffsetLinkTarget::Offset(0x00FD_0010));
+        let resolved_offset = match parsed_single {
+            OffsetLinkTarget::Offset(off) => srec_map.resolve_jump_offset(off),
+            OffsetLinkTarget::Range(_) => panic!("expected offset"),
+        };
+        assert_eq!(resolved_offset, 16);
+
+        // 2. Range jump: user clicks or navigates to 0x00FD0010..0x00FD001F in scratchpad
+        let parsed_range = parse_offset_link("0x00FD0010..0x00FD001F").expect("range must parse");
+        assert_eq!(parsed_range, OffsetLinkTarget::Range(0x00FD_0010..0x00FD_0020));
+        let resolved_range = match parsed_range {
+            OffsetLinkTarget::Range(r) => srec_map.resolve_jump_range(r, 64),
+            OffsetLinkTarget::Offset(_) => panic!("expected range"),
+        };
+        assert_eq!(resolved_range, 16..32);
+        assert_eq!(resolved_range.len(), 16);
+
+        // 3. Selection formatting roundtrip: selection at buffer offset [0..32) (addresses 0x00FD0000..0x00FD001F)
+        let start_addr = srec_map.offset_to_address(0);
+        let end_addr = srec_map.offset_to_address(31);
+        let formatted = format_address_range_plain(start_addr, end_addr, 64);
+        assert_eq!(formatted, "0x00FD0000..0x00FD001F");
+        let reparsed = parse_offset_link(&formatted).expect("reparsed range must parse");
+        let roundtrip_range = match reparsed {
+            OffsetLinkTarget::Range(r) => srec_map.resolve_jump_range(r, 64),
+            OffsetLinkTarget::Offset(_) => panic!("expected range"),
+        };
+        assert_eq!(roundtrip_range, 0..32);
+    }
+
+    #[test]
     fn test_calculate_text_stats() {
         use super::calculate_text_stats;
 

@@ -907,10 +907,14 @@ impl EditorView {
             .update(cx, |hv, cx| hv.show_only_bookmark_color(crate::core::bookmark::BookmarkColor::Pink, window, cx));
     }
 
-    /// Jumps the editor to a specific byte offset, optionally extending current selection.
+    /// Jumps the editor to a specific byte offset or mapped address, optionally extending current selection.
     pub fn jump_to_offset(&mut self, offset: usize, extend: bool, cx: &mut Context<Self>) {
         self.editor.update(cx, |editor, cx| {
-            editor.go_to_offset(offset, extend);
+            let target_offset = {
+                let doc = editor.document.read().expect("document read lock");
+                doc.address_map.resolve_jump_offset(offset)
+            };
+            editor.go_to_offset(target_offset, extend);
             cx.notify();
         });
         let cursor_offset = self.editor.read(cx).cursor.offset;
@@ -923,7 +927,11 @@ impl EditorView {
     /// Jumps the editor to and selects a contiguous byte range `[start..end)`.
     pub fn jump_to_range(&mut self, range: std::ops::Range<usize>, cx: &mut Context<Self>) {
         self.editor.update(cx, |editor, cx| {
-            editor.go_to_range(range);
+            let target_range = {
+                let doc = editor.document.read().expect("document read lock");
+                doc.address_map.resolve_jump_range(range, doc.buffer.len())
+            };
+            editor.go_to_range(target_range);
             cx.notify();
         });
         let cursor_offset = self.editor.read(cx).cursor.offset;

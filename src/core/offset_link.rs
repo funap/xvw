@@ -172,7 +172,7 @@ pub fn find_offset_token_at(text: &str, offset: usize) -> Option<(std::ops::Rang
 }
 
 /// Determines hexadecimal padding width based on file size or offset.
-fn hex_padding(total_size: usize, offset: usize) -> usize {
+pub fn hex_padding(total_size: usize, offset: usize) -> usize {
     let max_val = total_size.max(offset);
     if max_val > 0xFFFF_FFFF {
         16
@@ -183,17 +183,27 @@ fn hex_padding(total_size: usize, offset: usize) -> usize {
     }
 }
 
+/// Formats a single physical memory address or offset as plain text with appropriate hex padding.
+pub fn format_address_plain(addr: usize, total_size: usize) -> String {
+    let pad = hex_padding(total_size, addr);
+    format!("0x{:0width$X}", addr, width = pad)
+}
+
+/// Formats an inclusive physical memory address range `[start_addr..end_addr]` as plain text.
+pub fn format_address_range_plain(start_addr: usize, end_addr: usize, total_size: usize) -> String {
+    let pad = hex_padding(total_size, start_addr.max(end_addr));
+    format!("0x{:0width$X}..0x{:0width$X}", start_addr, end_addr, width = pad)
+}
+
 /// Formats an offset or range as plain text (e.g. `0x00001040` or `0x00001000..0x0000103F`).
+#[allow(dead_code)]
 pub fn format_offset_plain(offset: usize, length: Option<usize>, total_size: usize) -> String {
-    let pad = hex_padding(total_size, offset);
     match length {
         Some(len) if len > 1 => {
-            let end_inclusive = offset + len - 1;
-            format!("0x{:0width$X}..0x{:0width$X}", offset, end_inclusive, width = pad)
+            let end_inclusive = offset.saturating_add(len).saturating_sub(1);
+            format_address_range_plain(offset, end_inclusive, total_size)
         }
-        _ => {
-            format!("0x{:0width$X}", offset, width = pad)
-        }
+        _ => format_address_plain(offset, total_size),
     }
 }
 
@@ -205,6 +215,14 @@ mod tests {
     fn test_format_offset_plain() {
         assert_eq!(format_offset_plain(0x10, None, 0x100), "0x0010");
         assert_eq!(format_offset_plain(0x10, Some(16), 0x100), "0x0010..0x001F");
+    }
+
+    #[test]
+    fn test_format_address_plain_and_range() {
+        assert_eq!(format_address_plain(0x00FD_0000, 256), "0x00FD0000");
+        assert_eq!(format_address_range_plain(0x00FD_0000, 0x00FD_001F, 256), "0x00FD0000..0x00FD001F");
+        assert_eq!(format_address_plain(0x1000, 0x100), "0x1000");
+        assert_eq!(format_address_range_plain(0x1000, 0x100F, 0x100), "0x1000..0x100F");
     }
 
     #[test]
