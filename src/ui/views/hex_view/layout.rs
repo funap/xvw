@@ -1,6 +1,6 @@
 use super::types::*;
 use crate::core::encoding::Encoding;
-use crate::core::radix::{ByteGroupSize, DisplayRadix, format_group};
+use crate::core::radix::{ByteGroupSize, DisplayRadix, HexCase, format_group};
 use gpui_kit::*;
 use std::ops::Range;
 
@@ -132,7 +132,14 @@ pub fn make_hex_view_layout(input: LayoutInput) -> HexViewLayout {
 
 /// Build the exact text stream used by the batched Hex renderer and retain the
 /// byte/text ranges needed to translate shaped coordinates back to bytes.
-pub fn build_hex_text_source(chunk: &[u8], line_offset: usize, radix: DisplayRadix, group_size: ByteGroupSize, is_big_endian: bool) -> HexTextSource {
+pub fn build_hex_text_source(
+    chunk: &[u8],
+    line_offset: usize,
+    radix: DisplayRadix,
+    group_size: ByteGroupSize,
+    is_big_endian: bool,
+    hex_case: HexCase,
+) -> HexTextSource {
     let chunk = if chunk.len() > 1024 { &chunk[..1024] } else { chunk };
     let group_bytes = group_size.byte_count();
     let mut text = String::with_capacity(chunk.len().saturating_mul(3));
@@ -154,7 +161,7 @@ pub fn build_hex_text_source(chunk: &[u8], line_offset: usize, radix: DisplayRad
             radix,
             group_size,
             is_big_endian,
-            crate::core::format::hex_case::HexCase::Lower,
+            hex_case,
         ));
         let text_end = text.len();
 

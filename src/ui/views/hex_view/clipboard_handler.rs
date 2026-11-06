@@ -75,6 +75,7 @@ impl ClipboardHandler {
         window: &mut Window,
         cx: &mut App,
     ) {
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let (formatted, raw_bytes) = {
             let Some(range) = range else {
                 return;
@@ -90,7 +91,7 @@ impl ClipboardHandler {
             } else {
                 let clamped_range = range.start..range.end.min(total);
                 let slice = doc.buffer.get_range(clamped_range.start, clamped_range.len());
-                (format_bytes(slice, clamped_range.start, format, editor.options.encoding, HexCase::Lower), slice.to_vec())
+                (format_bytes(slice, clamped_range.start, format, editor.options.encoding, hex_case), slice.to_vec())
             }
         };
 
@@ -98,13 +99,14 @@ impl ClipboardHandler {
         let item = if raw_bytes.is_empty() {
             ClipboardItem::new_string(formatted)
         } else {
-            let raw = format_hex_spaces(&raw_bytes, HexCase::Lower);
+            let raw = format_hex_spaces(&raw_bytes, hex_case);
             ClipboardItem::new_string_with_metadata(formatted, format!("xvw-bytes:{raw}"))
         };
         cx.write_to_clipboard(item);
     }
 
     pub fn copy_range(editor: &Entity<Editor>, focus_handle: &FocusHandle, range: Option<Range<usize>>, window: &mut Window, cx: &mut App) {
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let (formatted, raw_bytes) = {
             let Some(range) = range else {
                 return;
@@ -129,7 +131,7 @@ impl ClipboardHandler {
                 let line_starts = editor.line_starts();
                 let slice = doc.buffer.get_range(clamped_range.start, clamped_range.len());
                 (
-                    crate::core::radix::format_display_content_with_lines(doc.buffer.data(), clamped_range, &line_starts, radix, group_size, is_big_endian, HexCase::Lower),
+                    crate::core::radix::format_display_content_with_lines(doc.buffer.data(), clamped_range, &line_starts, radix, group_size, is_big_endian, hex_case),
                     slice.to_vec(),
                 )
             }
@@ -139,7 +141,7 @@ impl ClipboardHandler {
         let item = if raw_bytes.is_empty() {
             ClipboardItem::new_string(formatted)
         } else {
-            let raw = format_hex_spaces(&raw_bytes, HexCase::Lower);
+            let raw = format_hex_spaces(&raw_bytes, hex_case);
             ClipboardItem::new_string_with_metadata(formatted, format!("xvw-bytes:{raw}"))
         };
         cx.write_to_clipboard(item);
@@ -168,7 +170,8 @@ impl ClipboardHandler {
             return false;
         }
 
-        let clipboard_text = format_hex_spaces(&bytes, HexCase::Lower);
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
+        let clipboard_text = format_hex_spaces(&bytes, hex_case);
         cx.write_to_clipboard(ClipboardItem::new_string_with_metadata(
             clipboard_text.clone(),
             format!("xvw-bytes:{clipboard_text}"),

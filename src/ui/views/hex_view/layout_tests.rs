@@ -10,7 +10,7 @@ use crate::core::document::Document;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::layout::LineMap;
-use crate::core::radix::{ByteGroupSize, DisplayRadix};
+use crate::core::radix::{ByteGroupSize, DisplayRadix, HexCase};
 use crate::core::structure::types::{FieldValue, ParseResult, ParsedField};
 use gpui_kit::{Hsla, hsla, px};
 use std::path::PathBuf;
@@ -284,7 +284,7 @@ fn check_structure_and_highlights() {
         "Collapsed width ({width_collapsed}) should be smaller than expanded width ({width_expanded})"
     );
 
-    let source = build_hex_text_source(&[0x12, 0x34, 0x56], 0, DisplayRadix::Hexadecimal, ByteGroupSize::One, false);
+    let source = build_hex_text_source(&[0x12, 0x34, 0x56], 0, DisplayRadix::Hexadecimal, ByteGroupSize::One, false, HexCase::Lower);
     let cell_width = px(8.0);
     assert_eq!(source.text.as_ref(), "12 34 56");
     assert_eq!(f32::from(hex_grid_x(source.groups[0].text_start, cell_width)), 0.0);
@@ -292,11 +292,16 @@ fn check_structure_and_highlights() {
     assert_eq!(f32::from(hex_grid_x(source.groups[2].text_start, cell_width)), 48.0);
     assert_eq!(f32::from(hex_grid_width(source.text.len(), cell_width)), 64.0);
 
-    let source2 = build_hex_text_source(&[0x12], 1, DisplayRadix::Hexadecimal, ByteGroupSize::Four, false);
+    let source2 = build_hex_text_source(&[0x12], 1, DisplayRadix::Hexadecimal, ByteGroupSize::Four, false, HexCase::Lower);
     assert_eq!(source2.text.as_ref(), "..12....");
     assert_eq!(f32::from(hex_grid_x(source2.groups[0].text_start, cell_width)), 0.0);
     assert_eq!(f32::from(hex_grid_x(source2.groups[0].text_end, cell_width)), 64.0);
     assert_eq!(f32::from(hex_grid_width(source2.text.len(), cell_width)), 64.0);
+
+    let lower_src = build_hex_text_source(&[0xAB, 0xCD, 0xEF], 0, DisplayRadix::Hexadecimal, ByteGroupSize::One, true, HexCase::Lower);
+    let upper_src = build_hex_text_source(&[0xAB, 0xCD, 0xEF], 0, DisplayRadix::Hexadecimal, ByteGroupSize::One, true, HexCase::Upper);
+    assert_eq!(lower_src.text.as_ref(), "ab cd ef");
+    assert_eq!(upper_src.text.as_ref(), "AB CD EF");
 
     assert_eq!(centered_glyph_offset(10.0, 6.0), 2.0);
     assert_eq!(centered_glyph_offset(10.0, 12.0), 0.0);
@@ -771,6 +776,7 @@ fn check_row_render_cache() {
         DisplayRadix::Hexadecimal,
         ByteGroupSize::One,
         true,
+        HexCase::Lower,
         Encoding::Ascii,
         hsla(0.0, 0.0, 0.0, 1.0),
         hsla(0.0, 0.0, 1.0, 1.0),
@@ -789,6 +795,7 @@ fn check_row_render_cache() {
         DisplayRadix::Hexadecimal,
         ByteGroupSize::One,
         true,
+        HexCase::Lower,
         Encoding::Ascii,
         hsla(0.0, 0.0, 0.0, 1.0),
         hsla(0.0, 0.0, 1.0, 1.0),
@@ -807,6 +814,7 @@ fn check_row_render_cache() {
         DisplayRadix::Hexadecimal,
         ByteGroupSize::One,
         true,
+        HexCase::Lower,
         Encoding::Ascii,
         hsla(0.0, 0.0, 0.0, 1.0),
         hsla(0.0, 0.0, 1.0, 1.0),
@@ -825,6 +833,7 @@ fn check_row_render_cache() {
         DisplayRadix::Hexadecimal,
         ByteGroupSize::One,
         true,
+        HexCase::Lower,
         Encoding::Ascii,
         hsla(0.0, 0.0, 0.0, 1.0),
         hsla(0.0, 0.0, 1.0, 1.0),
@@ -841,6 +850,7 @@ fn check_row_render_cache() {
         DisplayRadix::Hexadecimal,
         ByteGroupSize::One,
         true,
+        HexCase::Lower,
         Encoding::Ascii,
         hsla(0.0, 0.0, 0.0, 1.0),
         hsla(0.0, 0.0, 1.0, 1.0),
@@ -859,6 +869,7 @@ fn check_row_render_cache() {
         DisplayRadix::Hexadecimal,
         ByteGroupSize::One,
         true,
+        HexCase::Lower,
         Encoding::Ascii,
         hsla(0.0, 0.0, 0.0, 1.0),
         hsla(0.0, 0.0, 1.0, 1.0),
@@ -876,6 +887,7 @@ fn check_row_render_cache() {
         DisplayRadix::Hexadecimal,
         ByteGroupSize::One,
         true,
+        HexCase::Lower,
         Encoding::Ascii,
         hsla(0.0, 0.0, 0.0, 1.0),
         hsla(0.0, 0.0, 1.0, 1.0),
@@ -893,6 +905,44 @@ fn check_row_render_cache() {
         DisplayRadix::Hexadecimal,
         ByteGroupSize::One,
         true,
+        HexCase::Lower,
+        Encoding::Ascii,
+        hsla(0.0, 0.0, 0.0, 1.0),
+        hsla(0.0, 0.0, 1.0, 1.0),
+    );
+    assert!(cache.get(0).is_none());
+
+    // HexCase changed -> cached row invalidated
+    cache.validate(
+        2,
+        1,
+        8,
+        101,
+        0,
+        px(13.0),
+        &font_fam,
+        DisplayRadix::Hexadecimal,
+        ByteGroupSize::One,
+        true,
+        HexCase::Lower,
+        Encoding::Ascii,
+        hsla(0.0, 0.0, 0.0, 1.0),
+        hsla(0.0, 0.0, 1.0, 1.0),
+    );
+    cache.insert(0, dummy_row(0x2000));
+    assert!(cache.get(0).is_some());
+    cache.validate(
+        2,
+        1,
+        8,
+        101,
+        0,
+        px(13.0),
+        &font_fam,
+        DisplayRadix::Hexadecimal,
+        ByteGroupSize::One,
+        true,
+        HexCase::Upper,
         Encoding::Ascii,
         hsla(0.0, 0.0, 0.0, 1.0),
         hsla(0.0, 0.0, 1.0, 1.0),
@@ -926,6 +976,7 @@ fn check_bytes_per_row_lifecycle() {
         DisplayRadix::Hexadecimal,
         ByteGroupSize::One,
         true,
+        HexCase::Lower,
         Encoding::Ascii,
         hsla(0.0, 0.0, 0.0, 1.0),
         hsla(0.0, 0.0, 1.0, 1.0),
@@ -969,6 +1020,7 @@ fn check_bytes_per_row_lifecycle() {
         DisplayRadix::Hexadecimal,
         ByteGroupSize::One,
         true,
+        HexCase::Lower,
         Encoding::Ascii,
         hsla(0.0, 0.0, 0.0, 1.0),
         hsla(0.0, 0.0, 1.0, 1.0),
@@ -1014,6 +1066,7 @@ fn check_bytes_per_row_lifecycle() {
         DisplayRadix::Hexadecimal,
         ByteGroupSize::One,
         true,
+        HexCase::Lower,
         Encoding::Ascii,
         hsla(0.0, 0.0, 0.0, 1.0),
         hsla(0.0, 0.0, 1.0, 1.0),
