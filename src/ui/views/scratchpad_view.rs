@@ -1051,7 +1051,7 @@ mod tests {
         // When inserting a 32-byte selection [0x200..0x220) into scratchpad as offset,
         // it formats as 0x0200..0x021F. Jumping back to it via Command+Click must select
         // all 32 bytes [0x200..0x220) without being 1 byte short.
-        let formatted = format_offset_plain(0x200, Some(32), 0x1000);
+        let formatted = format_offset_plain(0x200, Some(32), 0x1000, crate::core::format::HexCase::Upper);
         assert_eq!(formatted, "0x0200..0x021F");
         let parsed = parse_offset_link(&formatted).expect("must parse formatted plain offset");
         assert_eq!(parsed, OffsetLinkTarget::Range(0x200..0x220));
@@ -1092,7 +1092,7 @@ mod tests {
         // 3. Selection formatting roundtrip: selection at buffer offset [0..32) (addresses 0x00FD0000..0x00FD001F)
         let start_addr = srec_map.offset_to_address(0);
         let end_addr = srec_map.offset_to_address(31);
-        let formatted = format_address_range_plain(start_addr, end_addr, 64);
+        let formatted = format_address_range_plain(start_addr, end_addr, 64, crate::core::format::HexCase::Upper);
         assert_eq!(formatted, "0x00FD0000..0x00FD001F");
         let reparsed = parse_offset_link(&formatted).expect("reparsed range must parse");
         let roundtrip_range = match reparsed {

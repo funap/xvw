@@ -5,7 +5,7 @@ use crate::app_state::InsertModeState;
 use crate::core::clipboard::parse_paste_bytes;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
-use crate::core::format::{CopyFormat, format_bytes, format_hex_spaces};
+use crate::core::format::{CopyFormat, HexCase, format_bytes, format_hex_spaces};
 use crate::core::radix::{ByteGroupSize, DisplayRadix};
 use gpui_kit::{App, ClipboardItem, Entity, FocusHandle, Window};
 
@@ -90,7 +90,7 @@ impl ClipboardHandler {
             } else {
                 let clamped_range = range.start..range.end.min(total);
                 let slice = doc.buffer.get_range(clamped_range.start, clamped_range.len());
-                (format_bytes(slice, clamped_range.start, format, editor.options.encoding), slice.to_vec())
+                (format_bytes(slice, clamped_range.start, format, editor.options.encoding, HexCase::Lower), slice.to_vec())
             }
         };
 
@@ -98,7 +98,7 @@ impl ClipboardHandler {
         let item = if raw_bytes.is_empty() {
             ClipboardItem::new_string(formatted)
         } else {
-            let raw = format_hex_spaces(&raw_bytes);
+            let raw = format_hex_spaces(&raw_bytes, HexCase::Lower);
             ClipboardItem::new_string_with_metadata(formatted, format!("xvw-bytes:{raw}"))
         };
         cx.write_to_clipboard(item);
@@ -129,7 +129,7 @@ impl ClipboardHandler {
                 let line_starts = editor.line_starts();
                 let slice = doc.buffer.get_range(clamped_range.start, clamped_range.len());
                 (
-                    crate::core::radix::format_display_content_with_lines(doc.buffer.data(), clamped_range, &line_starts, radix, group_size, is_big_endian),
+                    crate::core::radix::format_display_content_with_lines(doc.buffer.data(), clamped_range, &line_starts, radix, group_size, is_big_endian, HexCase::Lower),
                     slice.to_vec(),
                 )
             }
@@ -139,7 +139,7 @@ impl ClipboardHandler {
         let item = if raw_bytes.is_empty() {
             ClipboardItem::new_string(formatted)
         } else {
-            let raw = format_hex_spaces(&raw_bytes);
+            let raw = format_hex_spaces(&raw_bytes, HexCase::Lower);
             ClipboardItem::new_string_with_metadata(formatted, format!("xvw-bytes:{raw}"))
         };
         cx.write_to_clipboard(item);
@@ -168,7 +168,7 @@ impl ClipboardHandler {
             return false;
         }
 
-        let clipboard_text = format_hex_spaces(&bytes);
+        let clipboard_text = format_hex_spaces(&bytes, HexCase::Lower);
         cx.write_to_clipboard(ClipboardItem::new_string_with_metadata(
             clipboard_text.clone(),
             format!("xvw-bytes:{clipboard_text}"),

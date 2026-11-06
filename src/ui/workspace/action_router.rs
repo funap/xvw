@@ -1132,13 +1132,13 @@ impl Workspace {
                         let start_addr = doc.offset_to_address(range.start);
                         if range.len() > 1 {
                             let end_addr = doc.offset_to_address(range.end.saturating_sub(1));
-                            crate::core::offset_link::format_address_range_plain(start_addr, end_addr, total)
+                            crate::core::offset_link::format_address_range_plain(start_addr, end_addr, total, crate::core::format::HexCase::Upper)
                         } else {
-                            crate::core::offset_link::format_address_plain(start_addr, total)
+                            crate::core::offset_link::format_address_plain(start_addr, total, crate::core::format::HexCase::Upper)
                         }
                     } else {
                         let addr = doc.offset_to_address(cursor);
-                        crate::core::offset_link::format_address_plain(addr, total)
+                        crate::core::offset_link::format_address_plain(addr, total, crate::core::format::HexCase::Upper)
                     };
                     (formatted, "offset")
                 }
@@ -1175,7 +1175,7 @@ impl Workspace {
                         String::new()
                     } else {
                         let slice = doc.buffer.get_range(start, len);
-                        crate::core::format::format_hex_spaces(slice)
+                        crate::core::format::format_hex_spaces(slice, crate::core::format::HexCase::Lower)
                     };
                     (text, "hex bytes")
                 }

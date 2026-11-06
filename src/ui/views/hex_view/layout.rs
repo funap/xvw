@@ -154,6 +154,7 @@ pub fn build_hex_text_source(chunk: &[u8], line_offset: usize, radix: DisplayRad
             radix,
             group_size,
             is_big_endian,
+            crate::core::format::hex_case::HexCase::Lower,
         ));
         let text_end = text.len();
 

@@ -83,29 +83,36 @@ impl FieldValue {
     /// regular display for strings, byte arrays, structures, and non-integer
     /// values.
     pub fn format_with_radix(&self, radix: DisplayRadix) -> String {
+        self.format_with_radix_and_case(radix, crate::core::format::hex_case::HexCase::Lower)
+    }
+
+    /// Formats numeric values in the requested radix and hex case while preserving the
+    /// regular display for strings, byte arrays, structures, and non-integer
+    /// values.
+    pub fn format_with_radix_and_case(&self, radix: DisplayRadix, hex_case: crate::core::format::hex_case::HexCase) -> String {
         match self {
-            FieldValue::U8(value) => Self::format_unsigned(*value as u64, radix),
-            FieldValue::U16(value) => Self::format_unsigned(*value as u64, radix),
-            FieldValue::U32(value) => Self::format_unsigned(*value as u64, radix),
-            FieldValue::U64(value) => Self::format_unsigned(*value, radix),
-            FieldValue::I8(value) => Self::format_signed(*value as i64, radix),
-            FieldValue::I16(value) => Self::format_signed(*value as i64, radix),
-            FieldValue::I32(value) => Self::format_signed(*value as i64, radix),
-            FieldValue::I64(value) => Self::format_signed(*value, radix),
+            FieldValue::U8(value) => Self::format_unsigned(*value as u64, radix, hex_case),
+            FieldValue::U16(value) => Self::format_unsigned(*value as u64, radix, hex_case),
+            FieldValue::U32(value) => Self::format_unsigned(*value as u64, radix, hex_case),
+            FieldValue::U64(value) => Self::format_unsigned(*value, radix, hex_case),
+            FieldValue::I8(value) => Self::format_signed(*value as i64, radix, hex_case),
+            FieldValue::I16(value) => Self::format_signed(*value as i64, radix, hex_case),
+            FieldValue::I32(value) => Self::format_signed(*value as i64, radix, hex_case),
+            FieldValue::I64(value) => Self::format_signed(*value, radix, hex_case),
             other => other.to_string(),
         }
     }
 
-    fn format_unsigned(value: u64, radix: DisplayRadix) -> String {
+    fn format_unsigned(value: u64, radix: DisplayRadix, hex_case: crate::core::format::hex_case::HexCase) -> String {
         match radix {
-            DisplayRadix::Hexadecimal => format!("0x{value:X}"),
+            DisplayRadix::Hexadecimal => hex_case.format_prefixed_u64(value),
             DisplayRadix::Decimal => value.to_string(),
             DisplayRadix::Octal => format!("0o{value:o}"),
             DisplayRadix::Binary => format!("0b{value:b}"),
         }
     }
 
-    fn format_signed(value: i64, radix: DisplayRadix) -> String {
+    fn format_signed(value: i64, radix: DisplayRadix, hex_case: crate::core::format::hex_case::HexCase) -> String {
         if radix == DisplayRadix::Decimal {
             return value.to_string();
         }
@@ -113,7 +120,7 @@ impl FieldValue {
         let sign = if value.is_negative() { "-" } else { "" };
         let magnitude = value.unsigned_abs();
         match radix {
-            DisplayRadix::Hexadecimal => format!("{sign}0x{magnitude:X}"),
+            DisplayRadix::Hexadecimal => format!("{sign}{}", hex_case.format_prefixed_u64(magnitude)),
             DisplayRadix::Octal => format!("{sign}0o{magnitude:o}"),
             DisplayRadix::Binary => format!("{sign}0b{magnitude:b}"),
             DisplayRadix::Decimal => unreachable!("decimal values return before radix formatting"),
@@ -634,6 +641,14 @@ impl ParseResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::format::hex_case::HexCase;
+
+    #[test]
+    fn test_field_value_hex_case() {
+        let val = FieldValue::U8(0xAB);
+        assert_eq!(val.format_with_radix_and_case(DisplayRadix::Hexadecimal, HexCase::Lower), "0xab");
+        assert_eq!(val.format_with_radix_and_case(DisplayRadix::Hexadecimal, HexCase::Upper), "0xAB");
+    }
 
     fn test_field(id: &str, offset: usize) -> ParsedField {
         ParsedField {
@@ -687,8 +702,8 @@ mod tests {
         assert_eq!(FieldValue::U16(0x2A).format_with_radix(DisplayRadix::Binary), "0b101010");
         assert_eq!(FieldValue::U16(0x2A).format_with_radix(DisplayRadix::Octal), "0o52");
         assert_eq!(FieldValue::U16(0x2A).format_with_radix(DisplayRadix::Decimal), "42");
-        assert_eq!(FieldValue::U16(0x2A).format_with_radix(DisplayRadix::Hexadecimal), "0x2A");
-        assert_eq!(FieldValue::I8(-10).format_with_radix(DisplayRadix::Hexadecimal), "-0xA");
+        assert_eq!(FieldValue::U16(0x2A).format_with_radix(DisplayRadix::Hexadecimal), "0x2a");
+        assert_eq!(FieldValue::I8(-10).format_with_radix(DisplayRadix::Hexadecimal), "-0xa");
     }
 
     #[test]
