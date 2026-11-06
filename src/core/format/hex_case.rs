@@ -84,6 +84,15 @@ impl HexCase {
         }
     }
 
+    /// Formats a 64-bit integer with a lowercase `0x` prefix and unpadded hex digits.
+    #[inline]
+    pub fn format_prefixed_u64(&self, value: u64) -> String {
+        match self {
+            HexCase::Lower => format!("0x{:x}", value),
+            HexCase::Upper => format!("0x{:X}", value),
+        }
+    }
+
     /// Formats a value with a lowercase `0x` prefix and zero-padded hex digits.
     #[inline]
     pub fn format_prefixed_pad(&self, value: usize, width: usize) -> String {
