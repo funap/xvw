@@ -2,7 +2,7 @@ use crate::actions::*;
 use crate::app_state::InsertModeState;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
-use crate::core::format::{decode_uint_value, format_binary_repr, format_size_friendly, format_text_repr};
+use crate::core::format::{HexCase, decode_uint_value, format_binary_repr, format_size_friendly, format_text_repr};
 use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -21,6 +21,7 @@ pub struct StatusBar {
     active_editor: Option<WeakEntity<Editor>>,
     editor_subscription: Option<Subscription>,
     _insert_mode_subscription: Subscription,
+    _hex_case_subscription: Subscription,
 }
 
 impl EventEmitter<StatusBarEvent> for StatusBar {}
@@ -30,10 +31,14 @@ impl StatusBar {
         let _insert_mode_subscription = cx.observe_global::<InsertModeState>(|_, cx| {
             cx.notify();
         });
+        let _hex_case_subscription = cx.observe_global::<HexCase>(|_, cx| {
+            cx.notify();
+        });
         Self {
             active_editor: None,
             editor_subscription: None,
             _insert_mode_subscription,
+            _hex_case_subscription,
         }
     }
 
@@ -95,6 +100,7 @@ impl Render for StatusBar {
             (None, None)
         };
 
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let (position_text, position_copy_val) = if let Some(editor) = &active_editor {
             let editor = editor.read(cx);
             if editor.has_selection() {
@@ -104,19 +110,26 @@ impl Render for StatusBar {
                     let start_addr = editor.offset_to_address(range.start);
                     let end_addr = editor.offset_to_address(end_inclusive);
                     let byte_word = if len == 1 { "byte" } else { "bytes" };
-                    let text = format!("0x{:X} - 0x{:X} (0x{:X} | {} {})", start_addr, end_addr, len, len, byte_word);
-                    let copy_val = format!("0x{:X}..0x{:X}", start_addr, end_addr);
+                    let text = format!(
+                        "{} - {} ({} | {} {})",
+                        hex_case.format_prefixed(start_addr),
+                        hex_case.format_prefixed(end_addr),
+                        hex_case.format_prefixed(len),
+                        len,
+                        byte_word
+                    );
+                    let copy_val = format!("{}..{}", hex_case.format_prefixed(start_addr), hex_case.format_prefixed(end_addr));
                     (text, copy_val)
                 } else {
                     let cur_addr = editor.cursor_address();
-                    (format!("0x{:X} ({})", cur_addr, cur_addr), format!("0x{:X}", cur_addr))
+                    (format!("{} ({})", hex_case.format_prefixed(cur_addr), cur_addr), hex_case.format_prefixed(cur_addr))
                 }
             } else {
                 let cur_addr = editor.cursor_address();
-                (format!("0x{:X} ({})", cur_addr, cur_addr), format!("0x{:X}", cur_addr))
+                (format!("{} ({})", hex_case.format_prefixed(cur_addr), cur_addr), hex_case.format_prefixed(cur_addr))
             }
         } else {
-            ("0x0 (0)".to_string(), "0x0".to_string())
+            (format!("{} (0)", hex_case.format_prefixed(0)), hex_case.format_prefixed(0))
         };
 
         let is_read_only = if let Some(editor) = &active_editor {
@@ -178,7 +191,7 @@ impl Render for StatusBar {
                         }
                     })
                     .context_menu({
-                        let offset_hex = format!("0x{:X}", cursor_addr);
+                        let offset_hex = hex_case.format_prefixed(cursor_addr);
                         let offset_dec = format!("{}", cursor_addr);
                         let pos_str = position_copy_val.clone();
                         move |menu, _window, _cx| {

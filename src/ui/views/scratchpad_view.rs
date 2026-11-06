@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use crate::core::format::HexCase;
 use crate::settings::{DEFAULT_SCRATCHPAD_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, MAX_SPLIT_RATIO, MIN_SPLIT_RATIO, ScratchpadSettings};
 use gpui_kit::component::{
     ActiveTheme, Icon, Sizable, StyledExt,
@@ -19,18 +20,19 @@ use gpui_kit::*;
 struct ScratchpadOffsetDefinitionProvider;
 
 impl DefinitionProvider for ScratchpadOffsetDefinitionProvider {
-    fn definitions(&self, text: &Rope, offset: usize, _window: &mut Window, _cx: &mut App) -> Task<anyhow::Result<Vec<lsp_types::LocationLink>>> {
+    fn definitions(&self, text: &Rope, offset: usize, _window: &mut Window, cx: &mut App) -> Task<anyhow::Result<Vec<lsp_types::LocationLink>>> {
         let full_text = text.to_string();
         if let Some((range, target)) = crate::core::offset_link::find_offset_token_at(&full_text, offset) {
             let start_pos = text.offset_to_position(range.start);
             let end_pos = text.offset_to_position(range.end);
             let lsp_range = lsp_types::Range::new(start_pos, end_pos);
+            let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
 
             let target_str = match target {
-                crate::core::offset_link::OffsetLinkTarget::Offset(off) => format!("0x{:X}", off),
+                crate::core::offset_link::OffsetLinkTarget::Offset(off) => hex_case.format_prefixed(off),
                 crate::core::offset_link::OffsetLinkTarget::Range(r) => {
                     let end_inclusive = r.end.saturating_sub(1);
-                    format!("0x{:X}..0x{:X}", r.start, end_inclusive)
+                    format!("{}..{}", hex_case.format_prefixed(r.start), hex_case.format_prefixed(end_inclusive))
                 }
             };
 

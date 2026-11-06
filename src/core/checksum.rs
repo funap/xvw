@@ -1,3 +1,5 @@
+use crate::core::format::HexCase;
+
 pub fn sum8(data: &[u8]) -> u8 {
     data.iter().fold(0u8, |acc, &x| acc.wrapping_add(x))
 }
@@ -325,41 +327,56 @@ impl ChecksumResults {
         }
     }
 
+    /// Formats the result of a specific algorithm for UI display with a given HexCase.
+    pub fn format_display_with_case(&self, algo: ChecksumAlgorithm, hex_case: HexCase) -> String {
+        self.format_hex_with_case(algo, hex_case)
+    }
+
     /// Formats the result of a specific algorithm for UI display (hexadecimal representation).
     pub fn format_display(&self, algo: ChecksumAlgorithm) -> String {
-        self.format_hex(algo)
+        self.format_display_with_case(algo, HexCase::Lower)
+    }
+
+    /// Formats the hex value of a specific algorithm with a given HexCase.
+    pub fn format_hex_with_case(&self, algo: ChecksumAlgorithm, hex_case: HexCase) -> String {
+        match algo {
+            ChecksumAlgorithm::Sum8 => format!("0x{}", hex_case.format_byte(self.sum8)),
+            ChecksumAlgorithm::Sum16 => format!("0x{}", hex_case.format_u16(self.sum16)),
+            ChecksumAlgorithm::Sum32 => format!("0x{}", hex_case.format_u32(self.sum32)),
+            ChecksumAlgorithm::Sum64 => format!("0x{}", hex_case.format_u64(self.sum64)),
+            ChecksumAlgorithm::Adler32 => format!("0x{}", hex_case.format_u32(self.adler32)),
+            ChecksumAlgorithm::Crc16Ccitt => format!("0x{}", hex_case.format_u16(self.crc16_ccitt)),
+            ChecksumAlgorithm::Crc16Arc => format!("0x{}", hex_case.format_u16(self.crc16_arc)),
+            ChecksumAlgorithm::Crc32 => format!("0x{}", hex_case.format_u32(self.crc32)),
+            ChecksumAlgorithm::Md5 => self.md5.iter().map(|b| hex_case.format_byte(*b)).collect(),
+            ChecksumAlgorithm::Sha256 => self.sha256.iter().map(|b| hex_case.format_byte(*b)).collect(),
+        }
     }
 
     /// Formats the hex value of a specific algorithm (with `0x` prefix for integer sums/CRCs, lowercase hex for hashes).
     pub fn format_hex(&self, algo: ChecksumAlgorithm) -> String {
+        self.format_hex_with_case(algo, HexCase::Lower)
+    }
+
+    /// Formats the raw hex digits of a specific algorithm with a given HexCase without a `0x` prefix.
+    pub fn format_raw_hex_with_case(&self, algo: ChecksumAlgorithm, hex_case: HexCase) -> String {
         match algo {
-            ChecksumAlgorithm::Sum8 => format!("0x{:02X}", self.sum8),
-            ChecksumAlgorithm::Sum16 => format!("0x{:04X}", self.sum16),
-            ChecksumAlgorithm::Sum32 => format!("0x{:08X}", self.sum32),
-            ChecksumAlgorithm::Sum64 => format!("0x{:016X}", self.sum64),
-            ChecksumAlgorithm::Adler32 => format!("0x{:08X}", self.adler32),
-            ChecksumAlgorithm::Crc16Ccitt => format!("0x{:04X}", self.crc16_ccitt),
-            ChecksumAlgorithm::Crc16Arc => format!("0x{:04X}", self.crc16_arc),
-            ChecksumAlgorithm::Crc32 => format!("0x{:08X}", self.crc32),
-            ChecksumAlgorithm::Md5 => self.md5.iter().map(|b| format!("{:02x}", b)).collect(),
-            ChecksumAlgorithm::Sha256 => self.sha256.iter().map(|b| format!("{:02x}", b)).collect(),
+            ChecksumAlgorithm::Sum8 => hex_case.format_byte(self.sum8),
+            ChecksumAlgorithm::Sum16 => hex_case.format_u16(self.sum16),
+            ChecksumAlgorithm::Sum32 => hex_case.format_u32(self.sum32),
+            ChecksumAlgorithm::Sum64 => hex_case.format_u64(self.sum64),
+            ChecksumAlgorithm::Adler32 => hex_case.format_u32(self.adler32),
+            ChecksumAlgorithm::Crc16Ccitt => hex_case.format_u16(self.crc16_ccitt),
+            ChecksumAlgorithm::Crc16Arc => hex_case.format_u16(self.crc16_arc),
+            ChecksumAlgorithm::Crc32 => hex_case.format_u32(self.crc32),
+            ChecksumAlgorithm::Md5 => self.md5.iter().map(|b| hex_case.format_byte(*b)).collect(),
+            ChecksumAlgorithm::Sha256 => self.sha256.iter().map(|b| hex_case.format_byte(*b)).collect(),
         }
     }
 
     /// Formats the raw hex digits of a specific algorithm without a `0x` prefix.
     pub fn format_raw_hex(&self, algo: ChecksumAlgorithm) -> String {
-        match algo {
-            ChecksumAlgorithm::Sum8 => format!("{:02X}", self.sum8),
-            ChecksumAlgorithm::Sum16 => format!("{:04X}", self.sum16),
-            ChecksumAlgorithm::Sum32 => format!("{:08X}", self.sum32),
-            ChecksumAlgorithm::Sum64 => format!("{:016X}", self.sum64),
-            ChecksumAlgorithm::Adler32 => format!("{:08X}", self.adler32),
-            ChecksumAlgorithm::Crc16Ccitt => format!("{:04X}", self.crc16_ccitt),
-            ChecksumAlgorithm::Crc16Arc => format!("{:04X}", self.crc16_arc),
-            ChecksumAlgorithm::Crc32 => format!("{:08X}", self.crc32),
-            ChecksumAlgorithm::Md5 => self.md5.iter().map(|b| format!("{:02x}", b)).collect(),
-            ChecksumAlgorithm::Sha256 => self.sha256.iter().map(|b| format!("{:02x}", b)).collect(),
-        }
+        self.format_raw_hex_with_case(algo, HexCase::Lower)
     }
 
     /// Compares a user-provided query string against all computed algorithms.
@@ -401,8 +418,8 @@ impl ChecksumResults {
         }
     }
 
-    /// Formats all checksum results as a multi-line report.
-    pub fn format_all(&self) -> String {
+    /// Formats all checksum results as a multi-line report with a given HexCase.
+    pub fn format_all_with_case(&self, hex_case: HexCase) -> String {
         format!(
             "Sum 8-bit:       {}\n\
              Sum 16-bit:      {}\n\
@@ -414,17 +431,22 @@ impl ChecksumResults {
              CRC-32:          {}\n\
              MD5:             {}\n\
              SHA-256:         {}",
-            self.format_display(ChecksumAlgorithm::Sum8),
-            self.format_display(ChecksumAlgorithm::Sum16),
-            self.format_display(ChecksumAlgorithm::Sum32),
-            self.format_display(ChecksumAlgorithm::Sum64),
-            self.format_display(ChecksumAlgorithm::Adler32),
-            self.format_display(ChecksumAlgorithm::Crc16Ccitt),
-            self.format_display(ChecksumAlgorithm::Crc16Arc),
-            self.format_display(ChecksumAlgorithm::Crc32),
-            self.format_hex(ChecksumAlgorithm::Md5),
-            self.format_hex(ChecksumAlgorithm::Sha256)
+            self.format_display_with_case(ChecksumAlgorithm::Sum8, hex_case),
+            self.format_display_with_case(ChecksumAlgorithm::Sum16, hex_case),
+            self.format_display_with_case(ChecksumAlgorithm::Sum32, hex_case),
+            self.format_display_with_case(ChecksumAlgorithm::Sum64, hex_case),
+            self.format_display_with_case(ChecksumAlgorithm::Adler32, hex_case),
+            self.format_display_with_case(ChecksumAlgorithm::Crc16Ccitt, hex_case),
+            self.format_display_with_case(ChecksumAlgorithm::Crc16Arc, hex_case),
+            self.format_display_with_case(ChecksumAlgorithm::Crc32, hex_case),
+            self.format_hex_with_case(ChecksumAlgorithm::Md5, hex_case),
+            self.format_hex_with_case(ChecksumAlgorithm::Sha256, hex_case)
         )
+    }
+
+    /// Formats all checksum results as a multi-line report.
+    pub fn format_all(&self) -> String {
+        self.format_all_with_case(HexCase::Lower)
     }
 }
 

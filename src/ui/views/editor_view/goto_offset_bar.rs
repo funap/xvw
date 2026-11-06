@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use crate::core::address_map::AddressMap;
+use crate::core::format::HexCase;
 use crate::core::goto::{GotoParseError, GotoRadix, ParsedGotoOffset, parse_goto_offset_with_map};
 use crate::ui::components::EventInterceptionExt;
 use crate::ui::icon::IconName;
@@ -108,6 +109,7 @@ impl Render for GotoOffsetBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
 
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let bottom_info = match &self.parsed_result {
             None => div()
                 .px_1()
@@ -119,20 +121,27 @@ impl Render for GotoOffsetBar {
                     let len = range.len();
                     let byte_word = if len == 1 { "byte" } else { "bytes" };
                     if len == 0 {
-                        format!("Range: 0x{:X}..0x{:X} (0 bytes)", parsed.target_offset, parsed.target_offset)
+                        format!("Range: {}..{} (0 bytes)", hex_case.format_prefixed(parsed.target_offset), hex_case.format_prefixed(parsed.target_offset))
                     } else {
                         let start_addr = self.address_map.offset_to_address(range.start);
                         let end_addr = self.address_map.offset_to_address(range.end.saturating_sub(1));
-                        format!("Range: 0x{:X}..0x{:X} (0x{:X} | {} {})", start_addr, end_addr, len, len, byte_word)
+                        format!(
+                            "Range: {}..{} ({} | {} {})",
+                            hex_case.format_prefixed(start_addr),
+                            hex_case.format_prefixed(end_addr),
+                            hex_case.format_prefixed(len),
+                            len,
+                            byte_word
+                        )
                     }
                 } else {
                     let target_addr = self.address_map.offset_to_address(parsed.target_offset);
-                    format!("Target: 0x{:X} ({} dec)", target_addr, target_addr)
+                    format!("Target: {} ({} dec)", hex_case.format_prefixed(target_addr), target_addr)
                 };
                 let max_offset = self.total_size.saturating_sub(1);
                 let max_addr = self.address_map.offset_to_address(max_offset);
                 let display_text = if parsed.is_out_of_bounds {
-                    format!("{text} ⚠ (max 0x{max_addr:X})")
+                    format!("{text} ⚠ (max {})", hex_case.format_prefixed(max_addr))
                 } else {
                     text
                 };

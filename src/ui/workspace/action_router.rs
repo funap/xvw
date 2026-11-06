@@ -7,6 +7,7 @@ use gpui_kit::*;
 use super::Workspace;
 use crate::actions::*;
 use crate::core::encoding::Encoding;
+use crate::core::format::HexCase;
 use crate::ui::pane::{SplitDirection, TabContent};
 use crate::ui::panels::left_panel::LeftPanelTab;
 use crate::ui::workspace::activity_bar::Activity;
@@ -1118,6 +1119,7 @@ impl Workspace {
             return;
         };
 
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let (inserted_text, label) = {
             let ed_view = editor_view.read(cx);
             let editor = ed_view.editor().read(cx);
@@ -1132,13 +1134,13 @@ impl Workspace {
                         let start_addr = doc.offset_to_address(range.start);
                         if range.len() > 1 {
                             let end_addr = doc.offset_to_address(range.end.saturating_sub(1));
-                            crate::core::offset_link::format_address_range_plain(start_addr, end_addr, total, crate::core::format::HexCase::Upper)
+                            crate::core::offset_link::format_address_range_plain(start_addr, end_addr, total, hex_case)
                         } else {
-                            crate::core::offset_link::format_address_plain(start_addr, total, crate::core::format::HexCase::Upper)
+                            crate::core::offset_link::format_address_plain(start_addr, total, hex_case)
                         }
                     } else {
                         let addr = doc.offset_to_address(cursor);
-                        crate::core::offset_link::format_address_plain(addr, total, crate::core::format::HexCase::Upper)
+                        crate::core::offset_link::format_address_plain(addr, total, hex_case)
                     };
                     (formatted, "offset")
                 }
@@ -1175,7 +1177,7 @@ impl Workspace {
                         String::new()
                     } else {
                         let slice = doc.buffer.get_range(start, len);
-                        crate::core::format::format_hex_spaces(slice, crate::core::format::HexCase::Lower)
+                        crate::core::format::format_hex_spaces(slice, hex_case)
                     };
                     (text, "hex bytes")
                 }
