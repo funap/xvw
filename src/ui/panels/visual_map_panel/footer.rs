@@ -430,12 +430,11 @@ pub fn render_footer(
                         .child(hex_case.format_prefixed_pad(display_addr, 8)),
                 )
                 .child(div().text_color(muted_color).child("|"))
-                .child(
-                    div()
-                        .font_family(font_family.clone())
-                        .text_color(theme.foreground)
-                        .child(format!("{} ({})", hex_case.format_prefixed_pad(byte as usize, 2), byte)),
-                )
+                .child(div().font_family(font_family.clone()).text_color(theme.foreground).child(format!(
+                    "{} ({})",
+                    hex_case.format_prefixed_pad(byte as usize, 2),
+                    byte
+                )))
                 .child(
                     div()
                         .px_1()

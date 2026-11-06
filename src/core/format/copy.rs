@@ -99,7 +99,13 @@ pub fn format_cpp_array(bytes: &[u8], hex_case: HexCase) -> String {
     let digits = hex_case.digits();
     let len = bytes.len();
     let mut result = String::with_capacity(64 + len * 6);
-    let _ = write!(result, "/* Length: {} ({}) bytes */\nconst unsigned char data[{}] = {{\n", len, hex_case.format_prefixed(len), len);
+    let _ = write!(
+        result,
+        "/* Length: {} ({}) bytes */\nconst unsigned char data[{}] = {{\n",
+        len,
+        hex_case.format_prefixed(len),
+        len
+    );
     for (chunk_idx, chunk) in bytes.chunks(12).enumerate() {
         result.push_str("    ");
         for (i, &b) in chunk.iter().enumerate() {
@@ -260,7 +266,10 @@ mod tests {
         assert_eq!(format_bytes(&[], 0, CopyFormat::EscapedString, enc, HexCase::Lower), "");
         assert_eq!(format_bytes(&[], 0, CopyFormat::Binary, enc, HexCase::Lower), "");
         assert_eq!(format_bytes(&[], 0, CopyFormat::JsonArray, enc, HexCase::Lower), "[]");
-        assert_eq!(format_bytes(&[], 0, CopyFormat::CppArray, enc, HexCase::Lower), "const unsigned char data[0] = {};");
+        assert_eq!(
+            format_bytes(&[], 0, CopyFormat::CppArray, enc, HexCase::Lower),
+            "const unsigned char data[0] = {};"
+        );
         assert_eq!(format_bytes(&[], 0, CopyFormat::RustArray, enc, HexCase::Lower), "const DATA: [u8; 0] = [];");
     }
 

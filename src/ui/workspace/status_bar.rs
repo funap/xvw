@@ -122,11 +122,17 @@ impl Render for StatusBar {
                     (text, copy_val)
                 } else {
                     let cur_addr = editor.cursor_address();
-                    (format!("{} ({})", hex_case.format_prefixed(cur_addr), cur_addr), hex_case.format_prefixed(cur_addr))
+                    (
+                        format!("{} ({})", hex_case.format_prefixed(cur_addr), cur_addr),
+                        hex_case.format_prefixed(cur_addr),
+                    )
                 }
             } else {
                 let cur_addr = editor.cursor_address();
-                (format!("{} ({})", hex_case.format_prefixed(cur_addr), cur_addr), hex_case.format_prefixed(cur_addr))
+                (
+                    format!("{} ({})", hex_case.format_prefixed(cur_addr), cur_addr),
+                    hex_case.format_prefixed(cur_addr),
+                )
             }
         } else {
             (format!("{} (0)", hex_case.format_prefixed(0)), hex_case.format_prefixed(0))

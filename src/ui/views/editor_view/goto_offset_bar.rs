@@ -121,7 +121,11 @@ impl Render for GotoOffsetBar {
                     let len = range.len();
                     let byte_word = if len == 1 { "byte" } else { "bytes" };
                     if len == 0 {
-                        format!("Range: {}..{} (0 bytes)", hex_case.format_prefixed(parsed.target_offset), hex_case.format_prefixed(parsed.target_offset))
+                        format!(
+                            "Range: {}..{} (0 bytes)",
+                            hex_case.format_prefixed(parsed.target_offset),
+                            hex_case.format_prefixed(parsed.target_offset)
+                        )
                     } else {
                         let start_addr = self.address_map.offset_to_address(range.start);
                         let end_addr = self.address_map.offset_to_address(range.end.saturating_sub(1));

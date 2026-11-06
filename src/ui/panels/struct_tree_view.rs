@@ -2025,7 +2025,10 @@ mod tests {
             is_instance: false,
             children: vec![field_int, field_enum],
         };
-        assert_eq!(categorize_field_value(&field_struct, DisplayRadix::Decimal, HexCase::Lower), StructValueStyle::StructSummary(2));
+        assert_eq!(
+            categorize_field_value(&field_struct, DisplayRadix::Decimal, HexCase::Lower),
+            StructValueStyle::StructSummary(2)
+        );
     }
 
     #[test]

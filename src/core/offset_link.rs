@@ -194,7 +194,11 @@ pub fn format_address_plain(addr: usize, total_size: usize, hex_case: HexCase) -
 /// Formats an inclusive physical memory address range `[start_addr..end_addr]` as plain text.
 pub fn format_address_range_plain(start_addr: usize, end_addr: usize, total_size: usize, hex_case: HexCase) -> String {
     let pad = hex_padding(total_size, start_addr.max(end_addr));
-    format!("{}..{}", hex_case.format_prefixed_pad(start_addr, pad), hex_case.format_prefixed_pad(end_addr, pad))
+    format!(
+        "{}..{}",
+        hex_case.format_prefixed_pad(start_addr, pad),
+        hex_case.format_prefixed_pad(end_addr, pad)
+    )
 }
 
 /// Formats an offset or range as plain text (e.g. `0x00001040` or `0x00001000..0x0000103F`).
@@ -218,8 +222,14 @@ mod tests {
     fn test_format_address_plain_respects_hex_case() {
         assert_eq!(format_address_plain(0x00FD_0000, 256, HexCase::Lower), "0x00fd0000");
         assert_eq!(format_address_plain(0x00FD_0000, 256, HexCase::Upper), "0x00FD0000");
-        assert_eq!(format_address_range_plain(0x00FD_0000, 0x00FD_001F, 256, HexCase::Lower), "0x00fd0000..0x00fd001f");
-        assert_eq!(format_address_range_plain(0x00FD_0000, 0x00FD_001F, 256, HexCase::Upper), "0x00FD0000..0x00FD001F");
+        assert_eq!(
+            format_address_range_plain(0x00FD_0000, 0x00FD_001F, 256, HexCase::Lower),
+            "0x00fd0000..0x00fd001f"
+        );
+        assert_eq!(
+            format_address_range_plain(0x00FD_0000, 0x00FD_001F, 256, HexCase::Upper),
+            "0x00FD0000..0x00FD001F"
+        );
     }
 
     #[test]
@@ -231,7 +241,10 @@ mod tests {
     #[test]
     fn test_format_address_plain_and_range() {
         assert_eq!(format_address_plain(0x00FD_0000, 256, HexCase::Upper), "0x00FD0000");
-        assert_eq!(format_address_range_plain(0x00FD_0000, 0x00FD_001F, 256, HexCase::Upper), "0x00FD0000..0x00FD001F");
+        assert_eq!(
+            format_address_range_plain(0x00FD_0000, 0x00FD_001F, 256, HexCase::Upper),
+            "0x00FD0000..0x00FD001F"
+        );
         assert_eq!(format_address_plain(0x1000, 0x100, HexCase::Upper), "0x1000");
         assert_eq!(format_address_range_plain(0x1000, 0x100F, 0x100, HexCase::Upper), "0x1000..0x100F");
     }

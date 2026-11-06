@@ -333,6 +333,7 @@ impl ChecksumResults {
     }
 
     /// Formats the result of a specific algorithm for UI display (hexadecimal representation).
+    #[allow(dead_code)]
     pub fn format_display(&self, algo: ChecksumAlgorithm) -> String {
         self.format_display_with_case(algo, HexCase::Lower)
     }
@@ -354,6 +355,7 @@ impl ChecksumResults {
     }
 
     /// Formats the hex value of a specific algorithm (with `0x` prefix for integer sums/CRCs, lowercase hex for hashes).
+    #[allow(dead_code)]
     pub fn format_hex(&self, algo: ChecksumAlgorithm) -> String {
         self.format_hex_with_case(algo, HexCase::Lower)
     }
@@ -445,6 +447,7 @@ impl ChecksumResults {
     }
 
     /// Formats all checksum results as a multi-line report.
+    #[allow(dead_code)]
     pub fn format_all(&self) -> String {
         self.format_all_with_case(HexCase::Lower)
     }

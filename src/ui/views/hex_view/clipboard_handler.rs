@@ -91,7 +91,10 @@ impl ClipboardHandler {
             } else {
                 let clamped_range = range.start..range.end.min(total);
                 let slice = doc.buffer.get_range(clamped_range.start, clamped_range.len());
-                (format_bytes(slice, clamped_range.start, format, editor.options.encoding, hex_case), slice.to_vec())
+                (
+                    format_bytes(slice, clamped_range.start, format, editor.options.encoding, hex_case),
+                    slice.to_vec(),
+                )
             }
         };
 
@@ -131,7 +134,15 @@ impl ClipboardHandler {
                 let line_starts = editor.line_starts();
                 let slice = doc.buffer.get_range(clamped_range.start, clamped_range.len());
                 (
-                    crate::core::radix::format_display_content_with_lines(doc.buffer.data(), clamped_range, &line_starts, radix, group_size, is_big_endian, hex_case),
+                    crate::core::radix::format_display_content_with_lines(
+                        doc.buffer.data(),
+                        clamped_range,
+                        &line_starts,
+                        radix,
+                        group_size,
+                        is_big_endian,
+                        hex_case,
+                    ),
                     slice.to_vec(),
                 )
             }

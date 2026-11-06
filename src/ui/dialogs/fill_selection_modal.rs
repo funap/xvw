@@ -312,7 +312,10 @@ impl FillSelectionModal {
                 } else {
                     "non-printable".to_string()
                 };
-                format!("Hex: {} | Dec: {b} | Bin: 0b{b:08b} | ASCII: {ascii}", hex_case.format_prefixed_pad(*b as usize, 2))
+                format!(
+                    "Hex: {} | Dec: {b} | Bin: 0b{b:08b} | ASCII: {ascii}",
+                    hex_case.format_prefixed_pad(*b as usize, 2)
+                )
             }
             Err(e) => format!("Error: {e}"),
         };
