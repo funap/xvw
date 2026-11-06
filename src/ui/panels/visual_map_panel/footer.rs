@@ -2,6 +2,7 @@
 
 use super::legend::ByteCategoryExt;
 use crate::core::editor::Editor;
+use crate::core::format::HexCase;
 use crate::core::visual_map::{ByteCategory, HoveredPixel, VisualMapColorMode as ColorMode};
 use crate::ui::appearance::Appearance;
 use gpui_kit::component::{StyledExt, h_flex};
@@ -27,6 +28,7 @@ pub fn render_footer(
     let border_color = theme.border;
     let muted_color = theme.muted_foreground;
     let font_family = cx.global::<Appearance>().font_family.clone();
+    let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
 
     let (left, right): (AnyElement, AnyElement) = match hovered_info {
         Some(HoveredPixel::SubByte {
@@ -83,14 +85,14 @@ pub fn render_footer(
                     div()
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
-                        .child(format!("0x{:08X}", display_addr)),
+                        .child(hex_case.format_prefixed_pad(display_addr, 8)),
                 )
                 .child(div().text_color(muted_color).child("|"))
                 .child(
                     div()
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
-                        .child(format!("0x{:02X}", byte_val)),
+                        .child(hex_case.format_prefixed_pad(byte_val as usize, 2)),
                 )
                 .child(
                     div()
@@ -146,7 +148,7 @@ pub fn render_footer(
                     div()
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
-                        .child(format!("0x{:08X}", display_addr)),
+                        .child(hex_case.format_prefixed_pad(display_addr, 8)),
                 )
                 .child(div().text_color(muted_color).child("|"))
                 .child(
@@ -163,7 +165,13 @@ pub fn render_footer(
                         .bg(theme.muted)
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
-                        .child(format!("BP:[{bp0:02X} {bp1:02X} {bp2:02X} {bp3:02X}]")),
+                        .child(format!(
+                            "BP:[{} {} {} {}]",
+                            hex_case.format_byte(bp0),
+                            hex_case.format_byte(bp1),
+                            hex_case.format_byte(bp2),
+                            hex_case.format_byte(bp3)
+                        )),
                 )
                 .into_any_element();
 
@@ -219,14 +227,14 @@ pub fn render_footer(
                     div()
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
-                        .child(format!("0x{:08X}", display_addr)),
+                        .child(hex_case.format_prefixed_pad(display_addr, 8)),
                 )
                 .child(div().text_color(muted_color).child("|"))
                 .child(
                     div()
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
-                        .child(format!("0x{:04X}", raw_val)),
+                        .child(hex_case.format_prefixed_pad(raw_val as usize, 4)),
                 )
                 .child(
                     div()
@@ -236,7 +244,7 @@ pub fn render_footer(
                         .bg(theme.muted)
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
-                        .child(format!("[{:02X} {:02X}]", b0, b1)),
+                        .child(format!("[{} {}]", hex_case.format_byte(b0), hex_case.format_byte(b1))),
                 )
                 .into_any_element();
 
@@ -290,14 +298,14 @@ pub fn render_footer(
                     div()
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
-                        .child(format!("0x{:08X}", display_addr)),
+                        .child(hex_case.format_prefixed_pad(display_addr, 8)),
                 )
                 .child(div().text_color(muted_color).child("|"))
                 .child(
                     div()
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
-                        .child(format!("0x{:06X}", raw_val)),
+                        .child(hex_case.format_prefixed_pad(raw_val as usize, 6)),
                 )
                 .child(
                     div()
@@ -307,7 +315,12 @@ pub fn render_footer(
                         .bg(theme.muted)
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
-                        .child(format!("[{:02X} {:02X} {:02X}]", b0, b1, b2)),
+                        .child(format!(
+                            "[{} {} {}]",
+                            hex_case.format_byte(b0),
+                            hex_case.format_byte(b1),
+                            hex_case.format_byte(b2)
+                        )),
                 )
                 .into_any_element();
 
@@ -353,14 +366,14 @@ pub fn render_footer(
                     div()
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
-                        .child(format!("0x{:08X}", display_addr)),
+                        .child(hex_case.format_prefixed_pad(display_addr, 8)),
                 )
                 .child(div().text_color(muted_color).child("|"))
                 .child(
                     div()
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
-                        .child(format!("0x{:08X}", raw_val)),
+                        .child(hex_case.format_prefixed_pad(raw_val as usize, 8)),
                 )
                 .child(
                     div()
@@ -370,7 +383,13 @@ pub fn render_footer(
                         .bg(theme.muted)
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
-                        .child(format!("[{:02X} {:02X} {:02X} {:02X}]", b0, b1, b2, b3)),
+                        .child(format!(
+                            "[{} {} {} {}]",
+                            hex_case.format_byte(b0),
+                            hex_case.format_byte(b1),
+                            hex_case.format_byte(b2),
+                            hex_case.format_byte(b3)
+                        )),
                 )
                 .into_any_element();
 
@@ -408,15 +427,14 @@ pub fn render_footer(
                     div()
                         .font_family(font_family.clone())
                         .text_color(theme.foreground)
-                        .child(format!("0x{:08X}", display_addr)),
+                        .child(hex_case.format_prefixed_pad(display_addr, 8)),
                 )
                 .child(div().text_color(muted_color).child("|"))
-                .child(
-                    div()
-                        .font_family(font_family.clone())
-                        .text_color(theme.foreground)
-                        .child(format!("0x{:02X} ({})", byte, byte)),
-                )
+                .child(div().font_family(font_family.clone()).text_color(theme.foreground).child(format!(
+                    "{} ({})",
+                    hex_case.format_prefixed_pad(byte as usize, 2),
+                    byte
+                )))
                 .child(
                     div()
                         .px_1()
@@ -432,7 +450,7 @@ pub fn render_footer(
                         } else if byte == 0 {
                             "NUL".to_string()
                         } else {
-                            format!("0x{:02X}", byte)
+                            hex_case.format_prefixed_pad(byte as usize, 2)
                         }),
                 )
                 .into_any_element();
@@ -505,7 +523,7 @@ pub fn render_footer(
         None => {
             let cursor_str = editor.map(|ed| {
                 let cur = ed.read(cx).cursor_address();
-                format!("Cursor: 0x{:08X}", cur)
+                format!("Cursor: {}", hex_case.format_prefixed_pad(cur, 8))
             });
 
             let extra_spec = if color_mode == ColorMode::Entropy {

@@ -1,6 +1,6 @@
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
-use crate::core::radix::{ByteCategory, ByteCategoryColors, ByteColoring, ByteGroupSize, ByteOrder, CategoryColor, DisplayRadix};
+use crate::core::radix::{ByteCategory, ByteCategoryColors, ByteColoring, ByteGroupSize, ByteOrder, CategoryColor, DisplayRadix, HexCase};
 use crate::core::structure::{StructureYamlIncludeOffsets, StructureYamlShaThreshold};
 use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::ui::icon::IconName;
@@ -820,6 +820,51 @@ impl Render for SettingsView {
                             })
                     })
                     .child({
+                        let hex_case = *cx.global::<HexCase>();
+                        let is_modified = hex_case != HexCase::default();
+
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(row_gap)
+                            .child(div().w(label_width).flex_shrink_0().whitespace_nowrap().child("Hex Case"))
+                            .child(
+                                div().w(control_width).child(
+                                    Button::new("hex-case")
+                                        .label(hex_case.label())
+                                        .outline()
+                                        .dropdown_caret(true)
+                                        .with_size(Size::Small)
+                                        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
+                                            HexCase::ALL.iter().copied().fold(menu, |menu, case| {
+                                                menu.item(PopupMenuItem::new(case.label()).checked(case == hex_case).on_click(move |_, _, cx| {
+                                                    cx.update_global::<HexCase, _>(|current, _| {
+                                                        *current = case;
+                                                    });
+                                                    crate::settings::save_current(cx);
+                                                }))
+                                            })
+                                        }),
+                                ),
+                            )
+                            .when(is_modified, |row| {
+                                row.child(
+                                    Button::new("reset-hex-case")
+                                        .icon(IconName::Undo2)
+                                        .ghost()
+                                        .with_size(Size::Small)
+                                        .tooltip("Reset to default")
+                                        .on_click(cx.listener(|_, _, window, cx| {
+                                            cx.update_global::<HexCase, _>(|current, _| {
+                                                *current = HexCase::default();
+                                            });
+                                            crate::settings::save_current(cx);
+                                            window.push_notification(Notification::info("Reset Hex Case to default"), cx);
+                                        })),
+                                )
+                            })
+                    })
+                    .child({
                         let default_group_size = *cx.global::<ByteGroupSize>();
                         let is_modified = default_group_size != ByteGroupSize::default();
 
@@ -1269,6 +1314,14 @@ impl crate::ui::pane::WorkspaceTab for Entity<SettingsView> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_hex_case_dropdown_options() {
+        assert_eq!(HexCase::ALL.len(), 2);
+        assert_eq!(HexCase::Lower.label(), "Lowercase (a-f)");
+        assert_eq!(HexCase::Upper.label(), "Uppercase (A-F)");
+        assert_eq!(HexCase::default(), HexCase::Lower);
+    }
 
     #[test]
     fn test_theme_preview_state_start_and_cancel_reverts_to_origin() {

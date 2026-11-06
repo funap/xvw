@@ -1,6 +1,6 @@
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
-use crate::core::radix::{ByteCategoryColors, ByteColoring, ByteGroupSize, ByteOrder, DisplayRadix};
+use crate::core::radix::{ByteCategoryColors, ByteColoring, ByteGroupSize, ByteOrder, DisplayRadix, HexCase};
 pub use crate::core::structure::{DEFAULT_STRUCTURE_YAML_INCLUDE_OFFSETS, DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD, MAX_STRUCTURE_YAML_SHA_THRESHOLD};
 use crate::core::structure::{DefinitionHistory, FileHistory, RecentFileEntry};
 use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
@@ -107,6 +107,8 @@ pub struct Settings {
         deserialize_with = "deserialize_structure_yaml_include_offsets"
     )]
     pub structure_yaml_include_offsets: bool,
+    #[serde(default, deserialize_with = "deserialize_or_default")]
+    pub hex_case: HexCase,
     #[serde(default, deserialize_with = "deserialize_or_default")]
     pub recent_definition_paths: Vec<PathBuf>,
     #[serde(default, deserialize_with = "deserialize_or_default")]
@@ -255,6 +257,7 @@ impl Default for Settings {
             byte_category_colors: ByteCategoryColors::default(),
             structure_yaml_sha_threshold: DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD,
             structure_yaml_include_offsets: true,
+            hex_case: HexCase::default(),
             recent_definition_paths: Vec::new(),
             recent_file_paths: Vec::new(),
             recent_files: Vec::new(),
@@ -321,6 +324,7 @@ impl Settings {
             byte_category_colors: *cx.global::<ByteCategoryColors>(),
             structure_yaml_sha_threshold: cx.global::<crate::core::structure::StructureYamlShaThreshold>().0,
             structure_yaml_include_offsets: cx.global::<crate::core::structure::StructureYamlIncludeOffsets>().0,
+            hex_case: cx.try_global::<HexCase>().copied().unwrap_or_default(),
             recent_definition_paths: recent_history.definitions.paths().to_vec(),
             recent_file_paths: recent_history.files.paths(),
             recent_files: recent_history.files.entries().to_vec(),
@@ -549,6 +553,7 @@ mod tests {
             },
             structure_yaml_sha_threshold: 64,
             structure_yaml_include_offsets: false,
+            hex_case: HexCase::Upper,
             recent_definition_paths: vec![PathBuf::from("definition.ksy")],
             recent_file_paths: vec![PathBuf::from("binary.bin")],
             recent_files: vec![RecentFileEntry::new(PathBuf::from("binary.bin"), None)],
@@ -619,6 +624,7 @@ mod tests {
         assert_eq!(settings.bytes_per_row, DEFAULT_BYTES_PER_ROW);
         assert_eq!(settings.structure_yaml_sha_threshold, DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD);
         assert!(settings.structure_yaml_include_offsets);
+        assert_eq!(settings.hex_case, HexCase::Lower);
     }
 
     #[test]

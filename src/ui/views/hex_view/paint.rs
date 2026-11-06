@@ -5,7 +5,7 @@ use crate::core::bookmark::BookmarkItem;
 use crate::core::document::Document;
 use crate::core::editor::LineMap;
 use crate::core::encoding::Encoding;
-use crate::core::radix::{ByteGroupSize, DisplayRadix, byte_category, digit_count, group_category};
+use crate::core::radix::{ByteGroupSize, DisplayRadix, HexCase, byte_category, digit_count, group_category};
 use crate::core::structure::{IndexedField, ParseResult};
 use crate::ui::color::BookmarkColorExt;
 use crate::ui::icon::IconName;
@@ -337,15 +337,15 @@ pub fn paint_centered_ascii_glyphs(shaped: &ShapedLine, entries: &[AsciiCellEntr
 }
 
 #[inline]
-pub fn format_offset_08(offset: usize) -> SharedString {
+pub fn format_offset_08(offset: usize, hex_case: HexCase) -> SharedString {
     if offset > 0xFFFF_FFFF {
-        SharedString::from(format!("{:016x}", offset))
+        SharedString::from(hex_case.format_offset(offset, 16))
     } else {
-        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        let digits = hex_case.digits();
         let mut buf = [b'0'; 8];
         let mut val = offset;
         for i in (0..8).rev() {
-            buf[i] = DIGITS[val & 0xf];
+            buf[i] = digits[val & 0xf];
             val >>= 4;
         }
         SharedString::from(std::str::from_utf8(&buf).expect("valid ascii utf8").to_string())
@@ -376,6 +376,7 @@ pub struct RowPaintParams<'a> {
     pub radix: DisplayRadix,
     pub group_size: ByteGroupSize,
     pub is_big_endian: bool,
+    pub hex_case: HexCase,
     pub category_palette: ByteCategoryPalette,
     pub cursor_offset: usize,
     pub insert_cursor_offset: usize,
@@ -732,7 +733,13 @@ pub fn build_leaf_field_runs(field: &IndexedField, font: Font, palette: &Descrip
 }
 
 /// Builds continuation runs for fields spanning across multiple 16-byte rows.
-pub fn build_continuation_field_runs(field_id: &str, relative_offset: usize, font: Font, palette: &DescriptionPalette) -> (String, Vec<TextRun>) {
+pub fn build_continuation_field_runs(
+    field_id: &str,
+    relative_offset: usize,
+    font: Font,
+    palette: &DescriptionPalette,
+    hex_case: HexCase,
+) -> (String, Vec<TextRun>) {
     let mut text = String::with_capacity(32);
     let mut runs = Vec::new();
 
@@ -759,7 +766,7 @@ pub fn build_continuation_field_runs(field_id: &str, relative_offset: usize, fon
     });
 
     let off_start = text.len();
-    text.push_str(&format!(" (+0x{:X})", relative_offset));
+    text.push_str(&format!(" (+{})", hex_case.format_prefixed(relative_offset)));
     runs.push(TextRun {
         len: text.len() - off_start,
         font: font.clone(),
@@ -911,7 +918,7 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
 
     // Address column
     let shaped_addr = if is_struct_mode || params.show_offset {
-        let addr_str = format_offset_08(physical_address);
+        let addr_str = format_offset_08(physical_address, params.hex_case);
         let addr_color = params.theme_colors.muted_color;
         let run = TextRun {
             len: addr_str.len(),
@@ -928,7 +935,7 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
 
     // Hex column
     let hex_chunk = if is_structure_header_row || is_collapsed_struct_row { &[] } else { chunk };
-    let hex_source = build_hex_text_source(hex_chunk, offset, params.radix, params.group_size, params.is_big_endian);
+    let hex_source = build_hex_text_source(hex_chunk, offset, params.radix, params.group_size, params.is_big_endian, params.hex_case);
     let shaped_hex = if !hex_source.text.is_empty() {
         let run = TextRun {
             len: hex_source.text.len(),
@@ -1072,7 +1079,7 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
         }
         if let Some(ref leaf) = continuation_leaf {
             let rel_offset = offset.saturating_sub(leaf.offset);
-            let (c_text, c_runs) = build_continuation_field_runs(&leaf.id, rel_offset, font.clone(), &params.desc_palette);
+            let (c_text, c_runs) = build_continuation_field_runs(&leaf.id, rel_offset, font.clone(), &params.desc_palette, params.hex_case);
             desc_full_text.push_str(&c_text);
             desc_runs.extend(c_runs);
         } else if !is_collapsed {
@@ -1221,7 +1228,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         if is_struct_mode || params.show_offset {
             let is_cursor_in_fold = active_cursor_offset >= offset && active_cursor_offset < fold_end;
             let addr_color = if is_cursor_in_fold { fg_color } else { muted_color };
-            let addr_str = format_offset_08(fold_start_addr);
+            let addr_str = format_offset_08(fold_start_addr, params.hex_case);
             let run = TextRun {
                 len: addr_str.len(),
                 font: font.clone(),
@@ -1250,8 +1257,11 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         let fold_size = fold_end.saturating_sub(offset);
         let fold_label = if is_unbookmarked {
             format!(
-                "── Unbookmarked: 0x{:08X} - 0x{:08X} (0x{:X} / {} bytes) ──",
-                fold_start_addr, fold_end_addr, fold_size, fold_size
+                "── Unbookmarked: {} - {} ({} / {} bytes) ──",
+                params.hex_case.format_prefixed_pad(fold_start_addr, 8),
+                params.hex_case.format_prefixed_pad(fold_end_addr, 8),
+                params.hex_case.format_prefixed(fold_size),
+                fold_size
             )
         } else if !comment.is_empty() {
             let clean_comment = if comment.contains('\n') || comment.contains('\r') {
@@ -1260,13 +1270,20 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 comment.as_str()
             };
             format!(
-                "── {}: 0x{:08X} - 0x{:08X} (0x{:X} / {} bytes) ──",
-                clean_comment, fold_start_addr, fold_end_addr, fold_size, fold_size
+                "── {}: {} - {} ({} / {} bytes) ──",
+                clean_comment,
+                params.hex_case.format_prefixed_pad(fold_start_addr, 8),
+                params.hex_case.format_prefixed_pad(fold_end_addr, 8),
+                params.hex_case.format_prefixed(fold_size),
+                fold_size
             )
         } else {
             format!(
-                "── 0x{:08X} - 0x{:08X} (0x{:X} / {} bytes) ──",
-                fold_start_addr, fold_end_addr, fold_size, fold_size
+                "── {} - {} ({} / {} bytes) ──",
+                params.hex_case.format_prefixed_pad(fold_start_addr, 8),
+                params.hex_case.format_prefixed_pad(fold_end_addr, 8),
+                params.hex_case.format_prefixed(fold_size),
+                fold_size
             )
         };
         let theme = cx.theme();
@@ -1344,8 +1361,11 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
         let gap_size = gap_end.saturating_sub(gap_start);
         let gap_label = format!(
-            "── Address Gap: 0x{:08X} - 0x{:08X} (0x{:X} / {} bytes unmapped) ──",
-            gap_start, gap_end, gap_size, gap_size
+            "── Address Gap: {} - {} ({} / {} bytes unmapped) ──",
+            params.hex_case.format_prefixed_pad(gap_start, 8),
+            params.hex_case.format_prefixed_pad(gap_end, 8),
+            params.hex_case.format_prefixed(gap_size),
+            gap_size
         );
         let run = TextRun {
             len: gap_label.len(),
@@ -1395,7 +1415,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let (offset_w, gap) = if is_struct_mode {
         let addr_pos = point(params.bounds.left() + px(8.0), params.bounds.top() + px(2.0));
         if is_cursor_row {
-            let addr_str = format_offset_08(physical_address);
+            let addr_str = format_offset_08(physical_address, params.hex_case);
             let run = TextRun {
                 len: addr_str.len(),
                 font: font.clone(),
@@ -1414,7 +1434,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         if params.show_offset {
             let offset_pos = point(params.bounds.left() + px(8.0), params.bounds.top() + px(2.0));
             if is_cursor_row {
-                let offset_str = format_offset_08(physical_address);
+                let offset_str = format_offset_08(physical_address, params.hex_case);
                 let run = TextRun {
                     len: offset_str.len(),
                     font: font.clone(),
@@ -1520,7 +1540,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         && ((pending_pos >= offset && pending_pos < next_offset) || (is_eof_on_this_row && pending_pos == total_size))
     {
         let hex_chunk = if is_structure_header_row || is_collapsed_struct_row { &[] } else { chunk };
-        let mut dyn_source = build_hex_text_source(hex_chunk, offset, params.radix, params.group_size, params.is_big_endian);
+        let mut dyn_source = build_hex_text_source(hex_chunk, offset, params.radix, params.group_size, params.is_big_endian, params.hex_case);
         let mut hex_shared_text = dyn_source.text.clone();
         let mut pending_byte_char_start: Option<usize> = None;
         if pending_pos >= offset && pending_pos < next_offset {
@@ -1535,7 +1555,11 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 };
                 let char_start = group.text_start + visual_byte * 2;
                 if char_start + 1 < hex_shared_text.len() {
-                    let digit_char = char::from_digit(pending_digit as u32, 16).unwrap_or('?');
+                    let digit_char = if (pending_digit as usize) < 16 {
+                        params.hex_case.digits()[pending_digit as usize] as char
+                    } else {
+                        '?'
+                    };
                     let mut bytes = hex_shared_text.to_string().into_bytes();
                     bytes[char_start] = digit_char as u8;
                     bytes[char_start + 1] = b'_';
@@ -1544,7 +1568,11 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 }
             }
         } else if is_eof_on_this_row && pending_pos == total_size {
-            let digit_char = char::from_digit(pending_digit as u32, 16).unwrap_or('?');
+            let digit_char = if (pending_digit as usize) < 16 {
+                params.hex_case.digits()[pending_digit as usize] as char
+            } else {
+                '?'
+            };
             let group_bytes = params.group_size.byte_count();
             if dyn_source.groups.is_empty() {
                 hex_shared_text = SharedString::from(format!("{}_", digit_char));
@@ -2204,7 +2232,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         }
                         if let Some(ref leaf) = desc.continuation_leaf {
                             let rel_offset = offset.saturating_sub(leaf.offset);
-                            let (c_text, c_runs) = build_continuation_field_runs(&leaf.id, rel_offset, font.clone(), &desc_palette);
+                            let (c_text, c_runs) = build_continuation_field_runs(&leaf.id, rel_offset, font.clone(), &desc_palette, params.hex_case);
                             active_full_text.push_str(&c_text);
                             active_runs.extend(c_runs);
                         } else {
@@ -2717,9 +2745,12 @@ mod tests {
         let (_act_text, act_runs) = build_leaf_field_runs(&field, font.clone(), &palette, true, true);
         assert!(act_runs[0].background_color.is_some());
 
-        let (cont_text, cont_runs) = build_continuation_field_runs("body", 0x10, font.clone(), &palette);
+        let (cont_text, cont_runs) = build_continuation_field_runs("body", 0x10, font.clone(), &palette, HexCase::Lower);
         assert_eq!(cont_text, "↳ body (+0x10)");
         assert_eq!(cont_runs.iter().map(|r| r.len).sum::<usize>(), cont_text.len());
+
+        let (cont_text_upper, _) = build_continuation_field_runs("body", 0x1a, font.clone(), &palette, HexCase::Upper);
+        assert_eq!(cont_text_upper, "↳ body (+0x1A)");
 
         // Test multi-line doc comment and values with newlines are sanitized and single-line
         let multiline_field = IndexedField {

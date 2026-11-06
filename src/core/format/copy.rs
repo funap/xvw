@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+use crate::core::format::hex_case::HexCase;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyFormat {
@@ -48,10 +48,11 @@ pub fn to_base64(bytes: &[u8]) -> String {
 ///
 /// Output format:
 /// `00000000  50 4b 03 04 14 00 00 00  08 00 84 8b 5b 58 21 82  |PK..........[X!.|`
-pub fn format_hexdump(bytes: &[u8], start_offset: usize) -> String {
+pub fn format_hexdump(bytes: &[u8], start_offset: usize, hex_case: HexCase) -> String {
     if bytes.is_empty() {
         return String::new();
     }
+    let digits = hex_case.digits();
     let line_count = bytes.len().div_ceil(16);
     let mut result = String::with_capacity(line_count * 78);
     for (chunk_idx, chunk) in bytes.chunks(16).enumerate() {
@@ -59,14 +60,14 @@ pub fn format_hexdump(bytes: &[u8], start_offset: usize) -> String {
             result.push('\n');
         }
         let line_offset = start_offset + chunk_idx * 16;
-        let _ = write!(result, "{:08x}  ", line_offset);
+        let _ = write!(result, "{}  ", hex_case.format_offset(line_offset, 8));
 
         // Hex representation (16 bytes, split into two 8-byte groups)
         for i in 0..16 {
             if i < chunk.len() {
                 let b = chunk[i];
-                result.push(HEX_CHARS[(b >> 4) as usize] as char);
-                result.push(HEX_CHARS[(b & 0x0F) as usize] as char);
+                result.push(digits[(b >> 4) as usize] as char);
+                result.push(digits[(b & 0x0F) as usize] as char);
             } else {
                 result.push_str("  ");
             }
@@ -91,19 +92,26 @@ pub fn format_hexdump(bytes: &[u8], start_offset: usize) -> String {
 }
 
 /// Format bytes as a C/C++ array declaration.
-pub fn format_cpp_array(bytes: &[u8]) -> String {
+pub fn format_cpp_array(bytes: &[u8], hex_case: HexCase) -> String {
     if bytes.is_empty() {
         return "const unsigned char data[0] = {};".to_string();
     }
+    let digits = hex_case.digits();
     let len = bytes.len();
     let mut result = String::with_capacity(64 + len * 6);
-    let _ = write!(result, "/* Length: {} (0x{:X}) bytes */\nconst unsigned char data[{}] = {{\n", len, len, len);
+    let _ = write!(
+        result,
+        "/* Length: {} ({}) bytes */\nconst unsigned char data[{}] = {{\n",
+        len,
+        hex_case.format_prefixed(len),
+        len
+    );
     for (chunk_idx, chunk) in bytes.chunks(12).enumerate() {
         result.push_str("    ");
         for (i, &b) in chunk.iter().enumerate() {
             result.push_str("0x");
-            result.push(HEX_CHARS[(b >> 4) as usize] as char);
-            result.push(HEX_CHARS[(b & 0x0F) as usize] as char);
+            result.push(digits[(b >> 4) as usize] as char);
+            result.push(digits[(b & 0x0F) as usize] as char);
             let is_last_byte = chunk_idx * 12 + i + 1 == len;
             if !is_last_byte {
                 result.push_str(", ");
@@ -118,10 +126,11 @@ pub fn format_cpp_array(bytes: &[u8]) -> String {
 }
 
 /// Format bytes as a Rust array declaration.
-pub fn format_rust_array(bytes: &[u8]) -> String {
+pub fn format_rust_array(bytes: &[u8], hex_case: HexCase) -> String {
     if bytes.is_empty() {
         return "const DATA: [u8; 0] = [];".to_string();
     }
+    let digits = hex_case.digits();
     let len = bytes.len();
     let mut result = String::with_capacity(32 + len * 6);
     let _ = writeln!(result, "const DATA: [u8; {}] = [", len);
@@ -129,8 +138,8 @@ pub fn format_rust_array(bytes: &[u8]) -> String {
         result.push_str("    ");
         for (i, &b) in chunk.iter().enumerate() {
             result.push_str("0x");
-            result.push(HEX_CHARS[(b >> 4) as usize] as char);
-            result.push(HEX_CHARS[(b & 0x0F) as usize] as char);
+            result.push(digits[(b >> 4) as usize] as char);
+            result.push(digits[(b & 0x0F) as usize] as char);
             let is_last_byte = chunk_idx * 12 + i + 1 == len;
             if !is_last_byte {
                 result.push_str(", ");
@@ -145,24 +154,26 @@ pub fn format_rust_array(bytes: &[u8]) -> String {
 }
 
 /// Format bytes as raw continuous hex stream (e.g. `504b0304...`).
-pub fn format_hex_stream(bytes: &[u8]) -> String {
+pub fn format_hex_stream(bytes: &[u8], hex_case: HexCase) -> String {
+    let digits = hex_case.digits();
     let mut result = String::with_capacity(bytes.len() * 2);
     for &b in bytes {
-        result.push(HEX_CHARS[(b >> 4) as usize] as char);
-        result.push(HEX_CHARS[(b & 0x0F) as usize] as char);
+        result.push(digits[(b >> 4) as usize] as char);
+        result.push(digits[(b & 0x0F) as usize] as char);
     }
     result
 }
 
 /// Format bytes as space-separated hex bytes (e.g. `50 4b 03 04...`).
-pub fn format_hex_spaces(bytes: &[u8]) -> String {
+pub fn format_hex_spaces(bytes: &[u8], hex_case: HexCase) -> String {
+    let digits = hex_case.digits();
     let mut result = String::with_capacity(bytes.len().saturating_mul(3));
     for (i, &b) in bytes.iter().enumerate() {
         if i > 0 {
             result.push(' ');
         }
-        result.push(HEX_CHARS[(b >> 4) as usize] as char);
-        result.push(HEX_CHARS[(b & 0x0F) as usize] as char);
+        result.push(digits[(b >> 4) as usize] as char);
+        result.push(digits[(b & 0x0F) as usize] as char);
     }
     result
 }
@@ -173,12 +184,13 @@ pub fn format_printable_text(bytes: &[u8], encoding: crate::core::encoding::Enco
 }
 
 /// Format bytes as escaped string (e.g. `\x50\x4b\x03\x04...`).
-pub fn format_escaped_string(bytes: &[u8]) -> String {
+pub fn format_escaped_string(bytes: &[u8], hex_case: HexCase) -> String {
+    let digits = hex_case.digits();
     let mut result = String::with_capacity(bytes.len() * 4);
     for &b in bytes {
         result.push_str("\\x");
-        result.push(HEX_CHARS[(b >> 4) as usize] as char);
-        result.push(HEX_CHARS[(b & 0x0F) as usize] as char);
+        result.push(digits[(b >> 4) as usize] as char);
+        result.push(digits[(b & 0x0F) as usize] as char);
     }
     result
 }
@@ -210,17 +222,17 @@ pub fn format_json_array(bytes: &[u8]) -> String {
 }
 
 /// General entry point to format bytes in any supported `CopyFormat`.
-pub fn format_bytes(bytes: &[u8], start_offset: usize, format: CopyFormat, encoding: crate::core::encoding::Encoding) -> String {
+pub fn format_bytes(bytes: &[u8], start_offset: usize, format: CopyFormat, encoding: crate::core::encoding::Encoding, hex_case: HexCase) -> String {
     match format {
-        CopyFormat::HexDump => format_hexdump(bytes, start_offset),
-        CopyFormat::CppArray => format_cpp_array(bytes),
-        CopyFormat::HexStream => format_hex_stream(bytes),
-        CopyFormat::HexWithSpaces => format_hex_spaces(bytes),
+        CopyFormat::HexDump => format_hexdump(bytes, start_offset, hex_case),
+        CopyFormat::CppArray => format_cpp_array(bytes, hex_case),
+        CopyFormat::HexStream => format_hex_stream(bytes, hex_case),
+        CopyFormat::HexWithSpaces => format_hex_spaces(bytes, hex_case),
         CopyFormat::PrintableText => format_printable_text(bytes, encoding),
         CopyFormat::Base64 => to_base64(bytes),
-        CopyFormat::EscapedString => format_escaped_string(bytes),
+        CopyFormat::EscapedString => format_escaped_string(bytes, hex_case),
         CopyFormat::Binary => format_binary(bytes),
-        CopyFormat::RustArray => format_rust_array(bytes),
+        CopyFormat::RustArray => format_rust_array(bytes, hex_case),
         CopyFormat::JsonArray => format_json_array(bytes),
     }
 }
@@ -228,26 +240,43 @@ pub fn format_bytes(bytes: &[u8], start_offset: usize, format: CopyFormat, encod
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::format::hex_case::HexCase;
+
+    #[test]
+    fn test_copy_formats_respect_hex_case() {
+        let sample = &[0xAB, 0xCD];
+        assert_eq!(format_hex_stream(sample, HexCase::Lower), "abcd");
+        assert_eq!(format_hex_stream(sample, HexCase::Upper), "ABCD");
+        assert_eq!(format_hex_spaces(sample, HexCase::Lower), "ab cd");
+        assert_eq!(format_hex_spaces(sample, HexCase::Upper), "AB CD");
+        assert_eq!(format_escaped_string(sample, HexCase::Lower), "\\xab\\xcd");
+        assert_eq!(format_escaped_string(sample, HexCase::Upper), "\\xAB\\xCD");
+        assert!(format_cpp_array(sample, HexCase::Upper).contains("0xAB, 0xCD"));
+        assert!(format_rust_array(sample, HexCase::Upper).contains("0xAB, 0xCD,"));
+    }
 
     #[test]
     fn test_format_empty() {
         let enc = crate::core::encoding::Encoding::Ascii;
-        assert_eq!(format_bytes(&[], 0, CopyFormat::HexDump, enc), "");
-        assert_eq!(format_bytes(&[], 0, CopyFormat::HexStream, enc), "");
-        assert_eq!(format_bytes(&[], 0, CopyFormat::HexWithSpaces, enc), "");
-        assert_eq!(format_bytes(&[], 0, CopyFormat::PrintableText, enc), "");
-        assert_eq!(format_bytes(&[], 0, CopyFormat::Base64, enc), "");
-        assert_eq!(format_bytes(&[], 0, CopyFormat::EscapedString, enc), "");
-        assert_eq!(format_bytes(&[], 0, CopyFormat::Binary, enc), "");
-        assert_eq!(format_bytes(&[], 0, CopyFormat::JsonArray, enc), "[]");
-        assert_eq!(format_bytes(&[], 0, CopyFormat::CppArray, enc), "const unsigned char data[0] = {};");
-        assert_eq!(format_bytes(&[], 0, CopyFormat::RustArray, enc), "const DATA: [u8; 0] = [];");
+        assert_eq!(format_bytes(&[], 0, CopyFormat::HexDump, enc, HexCase::Lower), "");
+        assert_eq!(format_bytes(&[], 0, CopyFormat::HexStream, enc, HexCase::Lower), "");
+        assert_eq!(format_bytes(&[], 0, CopyFormat::HexWithSpaces, enc, HexCase::Lower), "");
+        assert_eq!(format_bytes(&[], 0, CopyFormat::PrintableText, enc, HexCase::Lower), "");
+        assert_eq!(format_bytes(&[], 0, CopyFormat::Base64, enc, HexCase::Lower), "");
+        assert_eq!(format_bytes(&[], 0, CopyFormat::EscapedString, enc, HexCase::Lower), "");
+        assert_eq!(format_bytes(&[], 0, CopyFormat::Binary, enc, HexCase::Lower), "");
+        assert_eq!(format_bytes(&[], 0, CopyFormat::JsonArray, enc, HexCase::Lower), "[]");
+        assert_eq!(
+            format_bytes(&[], 0, CopyFormat::CppArray, enc, HexCase::Lower),
+            "const unsigned char data[0] = {};"
+        );
+        assert_eq!(format_bytes(&[], 0, CopyFormat::RustArray, enc, HexCase::Lower), "const DATA: [u8; 0] = [];");
     }
 
     #[test]
     fn test_hexdump_formatting() {
         let sample = b"Hello, World!\x00\x01\x02\x03\x04";
-        let out = format_hexdump(sample, 0x10);
+        let out = format_hexdump(sample, 0x10, HexCase::Lower);
         let expected_line1 = "00000010  48 65 6c 6c 6f 2c 20 57  6f 72 6c 64 21 00 01 02  |Hello, World!...|";
         let expected_line2 = "00000020  03 04                                             |..|";
         assert_eq!(out, format!("{}\n{}", expected_line1, expected_line2));
@@ -256,7 +285,7 @@ mod tests {
     #[test]
     fn test_cpp_array_formatting() {
         let sample = [0x50, 0x4B, 0x03, 0x04];
-        let out = format_cpp_array(&sample);
+        let out = format_cpp_array(&sample, HexCase::Lower);
         assert!(out.contains("const unsigned char data[4] = {"));
         assert!(out.contains("0x50, 0x4b, 0x03, 0x04"));
         assert!(out.ends_with("\n};"));
@@ -265,7 +294,7 @@ mod tests {
     #[test]
     fn test_rust_array_formatting() {
         let sample = [0x50, 0x4B, 0x03, 0x04];
-        let out = format_rust_array(&sample);
+        let out = format_rust_array(&sample, HexCase::Lower);
         assert!(out.contains("const DATA: [u8; 4] = ["));
         assert!(out.contains("0x50, 0x4b, 0x03, 0x04,"));
         assert!(out.ends_with("];"));
@@ -274,13 +303,13 @@ mod tests {
     #[test]
     fn test_hex_stream() {
         let sample = [0xDE, 0xAD, 0xBE, 0xEF];
-        assert_eq!(format_hex_stream(&sample), "deadbeef");
+        assert_eq!(format_hex_stream(&sample, HexCase::Lower), "deadbeef");
     }
 
     #[test]
     fn test_hex_spaces() {
         let sample = [0xDE, 0xAD, 0xBE, 0xEF];
-        assert_eq!(format_hex_spaces(&sample), "de ad be ef");
+        assert_eq!(format_hex_spaces(&sample, HexCase::Lower), "de ad be ef");
     }
 
     #[test]
@@ -310,7 +339,7 @@ mod tests {
     #[test]
     fn test_escaped_string() {
         let sample = [0x00, 0xFF, 0x41];
-        assert_eq!(format_escaped_string(&sample), "\\x00\\xff\\x41");
+        assert_eq!(format_escaped_string(&sample, HexCase::Lower), "\\x00\\xff\\x41");
     }
 
     #[test]

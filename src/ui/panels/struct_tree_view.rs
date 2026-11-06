@@ -1,6 +1,6 @@
 use crate::core::editor::Editor;
 use crate::core::format::{format_size_friendly, format_with_commas};
-use crate::core::radix::DisplayRadix;
+use crate::core::radix::{DisplayRadix, HexCase};
 use crate::core::structure::{
     FieldValue, ParseResult, ParsedField, StructureYamlIncludeOffsets, StructureYamlShaThreshold, YamlExportOptions, format_parse_result_as_text,
     format_parse_result_as_yaml_with_options,
@@ -144,7 +144,7 @@ fn estimated_text_width(text: &str) -> f32 {
         .sum()
 }
 
-fn value_text(parsed_field: &ParsedField, radix: DisplayRadix) -> String {
+fn value_text(parsed_field: &ParsedField, radix: DisplayRadix, hex_case: HexCase) -> String {
     if parsed_field.is_struct() {
         format!(
             "{} child{}",
@@ -152,9 +152,9 @@ fn value_text(parsed_field: &ParsedField, radix: DisplayRadix) -> String {
             if parsed_field.children.len() == 1 { "" } else { "ren" }
         )
     } else if let Some(label) = &parsed_field.enum_label {
-        format!("{} ({})", parsed_field.value.format_with_radix(radix), label)
+        format!("{} ({})", parsed_field.value.format_with_radix_and_case(radix, hex_case), label)
     } else {
-        parsed_field.value.format_with_radix(radix)
+        parsed_field.value.format_with_radix_and_case(radix, hex_case)
     }
 }
 
@@ -167,16 +167,16 @@ pub(crate) enum StructValueStyle {
     Bytes(String),
 }
 
-pub(crate) fn categorize_field_value(parsed_field: &ParsedField, radix: DisplayRadix) -> StructValueStyle {
+pub(crate) fn categorize_field_value(parsed_field: &ParsedField, radix: DisplayRadix, hex_case: HexCase) -> StructValueStyle {
     if parsed_field.is_struct() {
         StructValueStyle::StructSummary(parsed_field.children.len())
     } else if let Some(label) = &parsed_field.enum_label {
         StructValueStyle::Enum {
-            value: parsed_field.value.format_with_radix(radix),
+            value: parsed_field.value.format_with_radix_and_case(radix, hex_case),
             label: label.clone(),
         }
     } else {
-        let val_str = parsed_field.value.format_with_radix(radix);
+        let val_str = parsed_field.value.format_with_radix_and_case(radix, hex_case);
         match &parsed_field.value {
             FieldValue::String(_) => StructValueStyle::String(val_str),
             FieldValue::Bytes(_) => StructValueStyle::Bytes(val_str),
@@ -299,6 +299,7 @@ impl TableDelegate for StructTreeTableDelegate {
             max_width += TREE_INDICATOR_WIDTH + COLUMN_GAP;
         }
 
+        let hex_case = _cx.try_global::<HexCase>().copied().unwrap_or_default();
         for field in self.flattened_fields.iter().take(128) {
             let Some(parsed_field) = self.field_at_path(&field.path) else {
                 continue;
@@ -306,7 +307,7 @@ impl TableDelegate for StructTreeTableDelegate {
 
             let text = match col {
                 StructColumn::Field => parsed_field.id.clone(),
-                StructColumn::Address => format!("0x{:X}", parsed_field.offset),
+                StructColumn::Address => hex_case.format_prefixed(parsed_field.offset),
                 StructColumn::Type => {
                     if parsed_field.field_type.is_empty() {
                         if field.has_children { "struct".to_string() } else { "value".to_string() }
@@ -315,7 +316,7 @@ impl TableDelegate for StructTreeTableDelegate {
                     }
                 }
                 StructColumn::Size => format!("{} B", format_with_commas(field.size)),
-                StructColumn::Value => value_text(parsed_field, self.value_radix),
+                StructColumn::Value => value_text(parsed_field, self.value_radix, hex_case),
             };
             let mut text_width = estimated_text_width(&text);
             if *col == StructColumn::Field {
@@ -380,11 +381,12 @@ impl TableDelegate for StructTreeTableDelegate {
         let Some(parsed_field) = self.field_at_path(&field.path) else {
             return menu;
         };
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let field_id = parsed_field.id.clone();
         let field_offset = parsed_field.offset;
-        let field_value = value_text(parsed_field, self.value_radix);
+        let field_value = value_text(parsed_field, self.value_radix, hex_case);
         let value_radix = self.value_radix;
-        let offset_hex = format!("0x{:08X}", field_offset);
+        let offset_hex = hex_case.format_prefixed_pad(field_offset, 8);
         let context_focus = self.focus_handle.clone();
 
         let value_format_submenu = PopupMenu::build(window, cx, move |menu, _window, _cx| {
@@ -451,6 +453,7 @@ impl TableDelegate for StructTreeTableDelegate {
         let theme = cx.theme();
         let palette = DescriptionPalette::from_theme(theme);
         let font_family = cx.global::<Appearance>().font_family.clone();
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let is_selected = self.selected_index == Some(row_ix);
 
         match col {
@@ -521,7 +524,7 @@ impl TableDelegate for StructTreeTableDelegate {
                     .text_color(if is_selected { theme.accent_foreground } else { theme.muted_foreground })
                     .truncate()
                     .whitespace_nowrap()
-                    .child(format!("0x{:X}", field_offset))
+                    .child(hex_case.format_prefixed(field_offset))
                     .into_any_element()
             }
             StructColumn::Type => {
@@ -548,7 +551,7 @@ impl TableDelegate for StructTreeTableDelegate {
                 .whitespace_nowrap()
                 .child(format!("{} B", format_with_commas(field.size)))
                 .into_any_element(),
-            StructColumn::Value => match categorize_field_value(parsed_field, self.value_radix) {
+            StructColumn::Value => match categorize_field_value(parsed_field, self.value_radix, hex_case) {
                 StructValueStyle::StructSummary(count) => {
                     let text = format!("{} child{}", count, if count == 1 { "" } else { "ren" });
                     div()
@@ -1852,6 +1855,7 @@ mod tests {
         estimated_text_width, resolve_field_at_path, value_text,
     };
     use crate::core::color::RgbaColor;
+    use crate::core::format::HexCase;
     use crate::core::radix::DisplayRadix;
     use crate::core::structure::types::FieldValue;
     use crate::core::structure::{ParseResult, ParsedField};
@@ -1895,10 +1899,11 @@ mod tests {
             children: Vec::new(),
         };
 
-        assert_eq!(value_text(&field_int, DisplayRadix::Decimal), "255");
-        assert_eq!(value_text(&field_int, DisplayRadix::Hexadecimal), "0xFF");
-        assert_eq!(value_text(&field_int, DisplayRadix::Octal), "0o377");
-        assert_eq!(value_text(&field_int, DisplayRadix::Binary), "0b11111111");
+        assert_eq!(value_text(&field_int, DisplayRadix::Decimal, HexCase::Lower), "255");
+        assert_eq!(value_text(&field_int, DisplayRadix::Hexadecimal, HexCase::Lower), "0xff");
+        assert_eq!(value_text(&field_int, DisplayRadix::Hexadecimal, HexCase::Upper), "0xFF");
+        assert_eq!(value_text(&field_int, DisplayRadix::Octal, HexCase::Lower), "0o377");
+        assert_eq!(value_text(&field_int, DisplayRadix::Binary, HexCase::Lower), "0b11111111");
 
         let field_with_enum = ParsedField {
             id: "kind".to_string(),
@@ -1913,7 +1918,7 @@ mod tests {
             children: Vec::new(),
         };
 
-        assert_eq!(value_text(&field_with_enum, DisplayRadix::Decimal), "1 (HEADER)");
+        assert_eq!(value_text(&field_with_enum, DisplayRadix::Decimal, HexCase::Lower), "1 (HEADER)");
 
         let field_struct = ParsedField {
             id: "header".to_string(),
@@ -1928,7 +1933,7 @@ mod tests {
             children: vec![field_int, field_with_enum],
         };
 
-        assert_eq!(value_text(&field_struct, DisplayRadix::Decimal), "2 children");
+        assert_eq!(value_text(&field_struct, DisplayRadix::Decimal, HexCase::Lower), "2 children");
     }
 
     #[test]
@@ -1946,7 +1951,11 @@ mod tests {
             children: Vec::new(),
         };
         assert_eq!(
-            categorize_field_value(&field_int, DisplayRadix::Hexadecimal),
+            categorize_field_value(&field_int, DisplayRadix::Hexadecimal, HexCase::Lower),
+            StructValueStyle::Number("0xff".to_string())
+        );
+        assert_eq!(
+            categorize_field_value(&field_int, DisplayRadix::Hexadecimal, HexCase::Upper),
             StructValueStyle::Number("0xFF".to_string())
         );
 
@@ -1963,7 +1972,7 @@ mod tests {
             children: Vec::new(),
         };
         assert_eq!(
-            categorize_field_value(&field_str, DisplayRadix::Decimal),
+            categorize_field_value(&field_str, DisplayRadix::Decimal, HexCase::Lower),
             StructValueStyle::String("\"PNG\"".to_string())
         );
 
@@ -1980,7 +1989,7 @@ mod tests {
             children: Vec::new(),
         };
         assert_eq!(
-            categorize_field_value(&field_bytes, DisplayRadix::Decimal),
+            categorize_field_value(&field_bytes, DisplayRadix::Decimal, HexCase::Lower),
             StructValueStyle::Bytes("[4 bytes]".to_string())
         );
 
@@ -1997,7 +2006,7 @@ mod tests {
             children: Vec::new(),
         };
         assert_eq!(
-            categorize_field_value(&field_enum, DisplayRadix::Decimal),
+            categorize_field_value(&field_enum, DisplayRadix::Decimal, HexCase::Lower),
             StructValueStyle::Enum {
                 value: "1".to_string(),
                 label: "HEADER".to_string(),
@@ -2016,7 +2025,10 @@ mod tests {
             is_instance: false,
             children: vec![field_int, field_enum],
         };
-        assert_eq!(categorize_field_value(&field_struct, DisplayRadix::Decimal), StructValueStyle::StructSummary(2));
+        assert_eq!(
+            categorize_field_value(&field_struct, DisplayRadix::Decimal, HexCase::Lower),
+            StructValueStyle::StructSummary(2)
+        );
     }
 
     #[test]

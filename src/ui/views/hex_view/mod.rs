@@ -42,7 +42,7 @@ use crate::core::bookmark::{BookmarkColor, BookmarkItem};
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::format::CopyFormat;
-use crate::core::radix::{ByteCategoryColors, ByteColoring, ByteGroupSize, DisplayRadix};
+use crate::core::radix::{ByteCategoryColors, ByteColoring, ByteGroupSize, DisplayRadix, HexCase};
 use crate::ui::color::BookmarkColorExt;
 
 use crate::core::structure::{IndexedField, ParseResult};
@@ -181,6 +181,7 @@ pub struct HexView {
     _window_activation_subscription: Subscription,
     _byte_coloring_subscription: Subscription,
     _byte_category_colors_subscription: Subscription,
+    _hex_case_subscription: Subscription,
 }
 
 impl EventEmitter<HexViewEvent> for HexView {}
@@ -318,6 +319,11 @@ impl HexView {
             cx.notify();
         });
 
+        let _hex_case_subscription = cx.observe_global::<HexCase>(|this, cx| {
+            this.row_cache.borrow_mut().clear();
+            cx.notify();
+        });
+
         Self {
             editor,
             focus_handle,
@@ -364,6 +370,7 @@ impl HexView {
             _window_activation_subscription,
             _byte_coloring_subscription,
             _byte_category_colors_subscription,
+            _hex_case_subscription,
         }
     }
 
@@ -2392,12 +2399,14 @@ impl HexView {
             return None;
         }
 
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let source = build_hex_text_source(
             doc.buffer.get_range(line_offset, chunk_len),
             line_offset,
             self.radix,
             self.group_size,
             self.is_big_endian,
+            hex_case,
         );
         let cell_width = px(self.hex_cell_width.max(1.0));
         let origin_x = px(base_x + layout.hex.start - self.scroll.outer_scroll_x - self.scroll.hex_scroll_x);
@@ -2538,12 +2547,14 @@ impl HexView {
             let char_range = self.encoding.char_range_at(doc.buffer.data(), abs_offset);
             char_range.start.saturating_sub(line_offset)
         } else {
+            let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
             let source = build_hex_text_source(
                 doc.buffer.get_range(line_offset, chunk_len),
                 line_offset,
                 self.radix,
                 self.group_size,
                 self.is_big_endian,
+                hex_case,
             );
             let cell_width = px(self.hex_cell_width.max(1.0));
             let origin_x = px(base_x + layout.hex.start - self.scroll.outer_scroll_x - self.scroll.hex_scroll_x);
@@ -2640,11 +2651,12 @@ impl Render for HexView {
         };
         const ZERO_BUFFER: [u8; 512] = [0u8; 512];
         let probe_len = items_in_row * group_bytes;
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let probe_source = if probe_len <= ZERO_BUFFER.len() {
-            build_hex_text_source(&ZERO_BUFFER[..probe_len], 0, self.radix, self.group_size, self.is_big_endian)
+            build_hex_text_source(&ZERO_BUFFER[..probe_len], 0, self.radix, self.group_size, self.is_big_endian, hex_case)
         } else {
             let probe_bytes = vec![0u8; probe_len];
-            build_hex_text_source(&probe_bytes, 0, self.radix, self.group_size, self.is_big_endian)
+            build_hex_text_source(&probe_bytes, 0, self.radix, self.group_size, self.is_big_endian, hex_case)
         };
         let total_data_width = f32::from(hex_grid_width(probe_source.text.len(), hex_cell_width));
         self.hex_content_width = total_data_width;
@@ -2683,6 +2695,7 @@ impl Render for HexView {
                             self.radix,
                             self.group_size,
                             self.is_big_endian,
+                            hex_case,
                         );
                         (reveal_cursor_offset.saturating_sub(line_offset), source, total_size, next_offset)
                     })
@@ -2743,7 +2756,7 @@ impl Render for HexView {
             let mut hex_cols = Vec::with_capacity(items_in_row);
             for (i, group) in probe_source.groups.iter().enumerate() {
                 let byte_offset = i * group_bytes;
-                let label = SharedString::from(format!("+{:X}", byte_offset));
+                let label = SharedString::from(format!("+{}", hex_case.format_offset(byte_offset, 1)));
                 let group_start = f32::from(hex_grid_x(group.text_start, hex_cell_width));
                 let group_end = f32::from(hex_grid_x(group.text_end, hex_cell_width));
                 let is_cursor_col = is_cursor_header_column(cursor_in_row, i, *group, total_groups);
@@ -3853,6 +3866,7 @@ impl Render for HexView {
                         let theme_colors = RowThemeColors::from_theme(theme, is_focused);
                         let collapsed_ptr = Arc::as_ptr(&collapsed_structs) as usize;
                         let parse_result_ptr = parse_result.as_ref().map(|p| Arc::as_ptr(p) as usize).unwrap_or(0);
+                        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
                         let mut cache_borrow = row_cache.borrow_mut();
                         cache_borrow.validate(
                             doc.history.state_id(),
@@ -3865,6 +3879,7 @@ impl Render for HexView {
                             radix,
                             group_size,
                             is_big_endian,
+                            hex_case,
                             encoding,
                             theme_colors.bg_color_theme,
                             theme_colors.fg_color,
@@ -3889,6 +3904,7 @@ impl Render for HexView {
                                     radix,
                                     group_size,
                                     is_big_endian,
+                                    hex_case,
                                     category_palette,
                                     cursor_offset,
                                     insert_cursor_offset,

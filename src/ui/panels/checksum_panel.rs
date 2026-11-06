@@ -1,5 +1,6 @@
 use crate::core::checksum::{ChecksumAlgorithm, ChecksumCategory, ChecksumCompareStatus, ChecksumResults};
 use crate::core::editor::Editor;
+use crate::core::format::HexCase;
 use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 use gpui_kit::component::clipboard::Clipboard;
@@ -375,7 +376,8 @@ impl ChecksumPanel {
         let Some(res) = &self.results else {
             return;
         };
-        let value = res.format_hex(algo);
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
+        let value = res.format_hex_with_case(algo, hex_case);
         self.perform_copy_algorithm_value(algo, value, window, cx);
     }
 
@@ -502,8 +504,8 @@ impl ChecksumPanel {
         self.calculation_task = Some(task);
     }
 
-    fn format_all_results(&self) -> Option<String> {
-        self.results.as_ref().map(|res| res.format_all())
+    fn format_all_results(&self, hex_case: HexCase) -> Option<String> {
+        self.results.as_ref().map(|res| res.format_all_with_case(hex_case))
     }
 
     fn perform_copy_algorithm_value(&mut self, algo: ChecksumAlgorithm, value: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -560,6 +562,7 @@ impl ChecksumPanel {
         &self,
         algo: ChecksumAlgorithm,
         res: &ChecksumResults,
+        hex_case: HexCase,
         is_matched: bool,
         font_family: &str,
         view: &Entity<Self>,
@@ -567,7 +570,7 @@ impl ChecksumPanel {
         theme: &gpui_kit::component::Theme,
     ) -> Stateful<Div> {
         let label = algo.label();
-        let val_str = res.format_hex(algo);
+        let val_str = res.format_hex_with_case(algo, hex_case);
         let copy_val_for_btn = val_str.clone();
         let copy_val_for_dblclick = val_str.clone();
         let is_selected = self.selected_algorithm == Some(algo);
@@ -681,6 +684,7 @@ impl ChecksumPanel {
         &self,
         algo: ChecksumAlgorithm,
         res: &ChecksumResults,
+        hex_case: HexCase,
         is_matched: bool,
         font_family: &str,
         view: &Entity<Self>,
@@ -688,7 +692,7 @@ impl ChecksumPanel {
         theme: &gpui_kit::component::Theme,
     ) -> Stateful<Div> {
         let label = algo.label();
-        let copy_str = res.format_hex(algo);
+        let copy_str = res.format_hex_with_case(algo, hex_case);
         let copy_val_for_btn = copy_str.clone();
         let copy_val_for_dblclick = copy_str.clone();
         let is_selected = self.selected_algorithm == Some(algo);
@@ -966,6 +970,7 @@ impl ChecksumPanel {
         cx: &mut Context<Self>,
     ) -> Div {
         let data_len = target_range.len();
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let primary_card = if self.editor.is_none() {
             h_flex()
                 .w_full()
@@ -1056,7 +1061,11 @@ impl ChecksumPanel {
                                 .whitespace_nowrap()
                                 .overflow_hidden()
                                 .text_ellipsis()
-                                .child(format!("0x{:08X} .. 0x{:08X}", start_addr, end_addr)),
+                                .child(format!(
+                                    "{} .. {}",
+                                    hex_case.format_prefixed_pad(start_addr, 8),
+                                    hex_case.format_prefixed_pad(end_addr, 8)
+                                )),
                         ),
                 )
                 .child(
@@ -1114,7 +1123,12 @@ impl ChecksumPanel {
                             .font_family(font_family.to_string())
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child(format!("Showing 0x{:08X}..0x{:08X} ({})", res_start_addr, res_end_addr, res_size)),
+                            .child(format!(
+                                "Showing {}..{} ({})",
+                                hex_case.format_prefixed_pad(res_start_addr, 8),
+                                hex_case.format_prefixed_pad(res_end_addr, 8),
+                                res_size
+                            )),
                     )
                     .child(div().flex_shrink_0().text_xs().font_medium().text_color(theme.accent).child("Jump")),
             );
@@ -1276,8 +1290,9 @@ impl Render for ChecksumPanel {
         let data_len = target_range.len();
         let current_sig = self.current_signature(cx);
         let is_outdated = self.is_results_outdated(current_sig.as_ref());
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
 
-        let all_formatted = self.format_all_results();
+        let all_formatted = self.format_all_results(hex_case);
         let header = self.render_header(is_focused, is_outdated, all_formatted, &theme, cx);
         let font_family = cx.global::<Appearance>().font_family.clone();
 
@@ -1332,9 +1347,9 @@ impl Render for ChecksumPanel {
                 for algo in cat_algos {
                     let is_matched = matched_algos.contains(&algo);
                     if cat == ChecksumCategory::Crypto {
-                        rows = rows.child(self.render_crypto_card(algo, res, is_matched, &font_family, &view, window, &theme));
+                        rows = rows.child(self.render_crypto_card(algo, res, hex_case, is_matched, &font_family, &view, window, &theme));
                     } else {
-                        rows = rows.child(self.render_row(algo, res, is_matched, &font_family, &view, window, &theme));
+                        rows = rows.child(self.render_row(algo, res, hex_case, is_matched, &font_family, &view, window, &theme));
                     }
                 }
             }
@@ -1405,10 +1420,11 @@ impl Render for ChecksumPanel {
                 let (Some(algo), Some(res)) = (selected_algo, results_opt) else {
                     return menu;
                 };
+                let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
                 let label = algo.label();
-                let copy_val = res.format_hex(algo);
-                let raw_hex = res.format_raw_hex(algo);
-                let all_text = res.format_all();
+                let copy_val = res.format_hex_with_case(algo, hex_case);
+                let raw_hex = res.format_raw_hex_with_case(algo, hex_case);
+                let all_text = res.format_all_with_case(hex_case);
                 let val_preview = truncate_menu_preview(&copy_val, 20);
                 let row_copy = format!("{}: {}", label, copy_val);
 

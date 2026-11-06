@@ -1,5 +1,6 @@
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
+use crate::core::format::HexCase;
 use crate::core::strings::{DEFAULT_MIN_STRING_LENGTH, StringMatch, find_strings_segmented_limited};
 use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
@@ -142,6 +143,7 @@ impl TableDelegate for StringsTableDelegate {
             .as_ref()
             .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
             .unwrap_or_default();
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
 
         let max_len = self
             .visible_indices
@@ -149,7 +151,7 @@ impl TableDelegate for StringsTableDelegate {
             .take(128)
             .filter_map(|&index| {
                 self.results.get(index).map(|item| match col_ix {
-                    0 => format!("0x{:08X}", address_map.offset_to_address(item.offset)).chars().count(),
+                    0 => hex_case.format_prefixed_pad(address_map.offset_to_address(item.offset), 8).chars().count(),
                     1 => item.byte_len.to_string().chars().count(),
                     2 => preview_text(&item.text).chars().count(),
                     _ => 0,
@@ -173,7 +175,8 @@ impl TableDelegate for StringsTableDelegate {
             .as_ref()
             .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
             .unwrap_or_default();
-        let offset_value = format!("0x{:08X}", address_map.offset_to_address(item.offset));
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
+        let offset_value = hex_case.format_prefixed_pad(address_map.offset_to_address(item.offset), 8);
         let text_value = item.text.clone();
 
         menu.action_context(self.focus_handle.clone())
@@ -196,8 +199,9 @@ impl TableDelegate for StringsTableDelegate {
             .as_ref()
             .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
             .unwrap_or_default();
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
 
-        let offset_value = format!("0x{:08X}", address_map.offset_to_address(item.offset));
+        let offset_value = hex_case.format_prefixed_pad(address_map.offset_to_address(item.offset), 8);
         let preview = preview_text(&item.text);
 
         let is_selected = self.selected_index == Some(index);

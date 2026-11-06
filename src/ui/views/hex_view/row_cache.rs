@@ -1,5 +1,5 @@
 use crate::core::encoding::Encoding;
-use crate::core::radix::{ByteGroupSize, DisplayRadix};
+use crate::core::radix::{ByteGroupSize, DisplayRadix, HexCase};
 use crate::core::structure::IndexedField;
 use crate::ui::views::hex_view::types::HexTextSource;
 use gpui_kit::*;
@@ -66,6 +66,7 @@ pub struct RowRenderCache {
     radix: DisplayRadix,
     group_size: ByteGroupSize,
     is_big_endian: bool,
+    hex_case: HexCase,
     encoding: Encoding,
     theme_bg: Hsla,
     theme_fg: Hsla,
@@ -88,6 +89,7 @@ impl RowRenderCache {
         radix: DisplayRadix,
         group_size: ByteGroupSize,
         is_big_endian: bool,
+        hex_case: HexCase,
         encoding: Encoding,
         theme_bg: Hsla,
         theme_fg: Hsla,
@@ -102,6 +104,7 @@ impl RowRenderCache {
             || self.radix != radix
             || self.group_size != group_size
             || self.is_big_endian != is_big_endian
+            || self.hex_case != hex_case
             || self.encoding != encoding
             || self.theme_bg != theme_bg
             || self.theme_fg != theme_fg
@@ -116,6 +119,7 @@ impl RowRenderCache {
             self.radix = radix;
             self.group_size = group_size;
             self.is_big_endian = is_big_endian;
+            self.hex_case = hex_case;
             self.encoding = encoding;
             self.theme_bg = theme_bg;
             self.theme_fg = theme_fg;

@@ -90,6 +90,7 @@ impl AppState {
         cx.set_global(crate::core::layout::BytesPerRow(settings.bytes_per_row));
         cx.set_global(crate::core::structure::StructureYamlShaThreshold(settings.structure_yaml_sha_threshold));
         cx.set_global(crate::core::structure::StructureYamlIncludeOffsets(settings.structure_yaml_include_offsets));
+        cx.set_global(settings.hex_case);
         cx.set_global(crate::settings::RecentHistoryState::from_settings(settings));
         cx.set_global(settings.scratchpad.clone());
     }

@@ -1,3 +1,4 @@
+pub use crate::core::format::hex_case::HexCase;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -392,7 +393,7 @@ pub fn digit_count(radix: DisplayRadix, group_size: ByteGroupSize) -> usize {
 /// If `start_slot == 0 && bytes.len() == group_size.byte_count()`, the integer value is formatted with exact padding (space padding for decimal, zero padding for hex/octal/binary).
 /// If `bytes.len() < group_size.byte_count()` or `start_slot > 0` (e.g. midway line break), each byte slot `k` (0..group_size)
 /// is formatted at its exact positional offset, with missing slots padded with '.' so byte position can be identified.
-pub fn format_group(bytes: &[u8], start_slot: usize, radix: DisplayRadix, group_size: ByteGroupSize, is_big_endian: bool) -> String {
+pub fn format_group(bytes: &[u8], start_slot: usize, radix: DisplayRadix, group_size: ByteGroupSize, is_big_endian: bool, hex_case: HexCase) -> String {
     let expected = group_size.byte_count();
     let total_digits = digit_count(radix, group_size);
 
@@ -452,13 +453,13 @@ pub fn format_group(bytes: &[u8], start_slot: usize, radix: DisplayRadix, group_
 
     if start_slot == 0 && bytes.len() >= expected {
         match (group_size, radix) {
-            (ByteGroupSize::One, DisplayRadix::Hexadecimal) => format!("{:02x}", bytes[0]),
+            (ByteGroupSize::One, DisplayRadix::Hexadecimal) => hex_case.format_byte(bytes[0]),
             (ByteGroupSize::One, DisplayRadix::Binary) => format!("{:08b}", bytes[0]),
 
             (ByteGroupSize::Two, DisplayRadix::Hexadecimal) => {
                 let arr: [u8; 2] = [bytes[0], bytes[1]];
                 let val = if is_big_endian { u16::from_be_bytes(arr) } else { u16::from_le_bytes(arr) };
-                format!("{:04x}", val)
+                hex_case.format_u16(val)
             }
             (ByteGroupSize::Two, DisplayRadix::Binary) => {
                 let arr: [u8; 2] = [bytes[0], bytes[1]];
@@ -469,7 +470,7 @@ pub fn format_group(bytes: &[u8], start_slot: usize, radix: DisplayRadix, group_
             (ByteGroupSize::Four, DisplayRadix::Hexadecimal) => {
                 let arr: [u8; 4] = [bytes[0], bytes[1], bytes[2], bytes[3]];
                 let val = if is_big_endian { u32::from_be_bytes(arr) } else { u32::from_le_bytes(arr) };
-                format!("{:08x}", val)
+                hex_case.format_u32(val)
             }
             (ByteGroupSize::Four, DisplayRadix::Binary) => {
                 let arr: [u8; 4] = [bytes[0], bytes[1], bytes[2], bytes[3]];
@@ -480,7 +481,7 @@ pub fn format_group(bytes: &[u8], start_slot: usize, radix: DisplayRadix, group_
             (ByteGroupSize::Eight, DisplayRadix::Hexadecimal) => {
                 let arr: [u8; 8] = [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]];
                 let val = if is_big_endian { u64::from_be_bytes(arr) } else { u64::from_le_bytes(arr) };
-                format!("{:016x}", val)
+                hex_case.format_u64(val)
             }
             (ByteGroupSize::Eight, DisplayRadix::Binary) => {
                 let arr: [u8; 8] = [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]];
@@ -496,7 +497,7 @@ pub fn format_group(bytes: &[u8], start_slot: usize, radix: DisplayRadix, group_
             if k >= start_slot && (k - start_slot) < bytes.len() {
                 let b = bytes[k - start_slot];
                 match radix {
-                    DisplayRadix::Hexadecimal => formatted.push_str(&format!("{:02x}", b)),
+                    DisplayRadix::Hexadecimal => formatted.push_str(&hex_case.format_byte(b)),
                     DisplayRadix::Binary => formatted.push_str(&format!("{:08b}", b)),
                     _ => unreachable!(),
                 }
@@ -579,7 +580,14 @@ pub fn prev_visual_byte(pos: usize, total_len: usize, group_size: ByteGroupSize,
 }
 
 /// Formats a contiguous slice of bytes using the specified display radix, group size, and endianness.
-pub fn format_display_content(bytes: &[u8], start_offset: usize, radix: DisplayRadix, group_size: ByteGroupSize, is_big_endian: bool) -> String {
+pub fn format_display_content(
+    bytes: &[u8],
+    start_offset: usize,
+    radix: DisplayRadix,
+    group_size: ByteGroupSize,
+    is_big_endian: bool,
+    hex_case: HexCase,
+) -> String {
     if bytes.is_empty() {
         return String::new();
     }
@@ -595,7 +603,14 @@ pub fn format_display_content(bytes: &[u8], start_offset: usize, radix: DisplayR
         if !result.is_empty() {
             result.push(' ');
         }
-        let group_str = format_group(&bytes[chunk_idx..chunk_idx + item_slice_len], start_slot, radix, group_size, is_big_endian);
+        let group_str = format_group(
+            &bytes[chunk_idx..chunk_idx + item_slice_len],
+            start_slot,
+            radix,
+            group_size,
+            is_big_endian,
+            hex_case,
+        );
         if radix == DisplayRadix::Decimal {
             result.push_str(group_str.trim());
         } else {
@@ -615,6 +630,7 @@ pub fn format_display_content_with_lines(
     radix: DisplayRadix,
     group_size: ByteGroupSize,
     is_big_endian: bool,
+    hex_case: HexCase,
 ) -> String {
     if range.is_empty() || range.start >= buffer_data.len() {
         return String::new();
@@ -643,7 +659,7 @@ pub fn format_display_content_with_lines(
         }
 
         let slice = &buffer_data[seg_start..seg_end];
-        let line_text = format_display_content(slice, seg_start, radix, group_size, is_big_endian);
+        let line_text = format_display_content(slice, seg_start, radix, group_size, is_big_endian, hex_case);
         if !line_text.is_empty() {
             lines.push(line_text);
         }
@@ -651,7 +667,7 @@ pub fn format_display_content_with_lines(
 
     if lines.is_empty() {
         let slice = &buffer_data[range.start..clamped_end];
-        format_display_content(slice, range.start, radix, group_size, is_big_endian)
+        format_display_content(slice, range.start, radix, group_size, is_big_endian, hex_case)
     } else {
         lines.join("\n")
     }
@@ -685,12 +701,28 @@ mod tests {
     }
 
     #[test]
+    fn test_format_group_respects_hex_case() {
+        let b = &[0xAB];
+        assert_eq!(format_group(b, 0, DisplayRadix::Hexadecimal, ByteGroupSize::One, false, HexCase::Lower), "ab");
+        assert_eq!(format_group(b, 0, DisplayRadix::Hexadecimal, ByteGroupSize::One, false, HexCase::Upper), "AB");
+        let bytes = &[0x12, 0xAB];
+        assert_eq!(
+            format_group(bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Two, true, HexCase::Lower),
+            "12ab"
+        );
+        assert_eq!(
+            format_group(bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Two, true, HexCase::Upper),
+            "12AB"
+        );
+    }
+
+    #[test]
     fn test_format_group_one_byte() {
         let b = &[0x2a]; // 42 decimal, 052 octal, 00101010 binary
-        assert_eq!(format_group(b, 0, DisplayRadix::Hexadecimal, ByteGroupSize::One, false), "2a");
-        assert_eq!(format_group(b, 0, DisplayRadix::Decimal, ByteGroupSize::One, false), " 42");
-        assert_eq!(format_group(b, 0, DisplayRadix::Octal, ByteGroupSize::One, false), "052");
-        assert_eq!(format_group(b, 0, DisplayRadix::Binary, ByteGroupSize::One, false), "00101010");
+        assert_eq!(format_group(b, 0, DisplayRadix::Hexadecimal, ByteGroupSize::One, false, HexCase::Lower), "2a");
+        assert_eq!(format_group(b, 0, DisplayRadix::Decimal, ByteGroupSize::One, false, HexCase::Lower), " 42");
+        assert_eq!(format_group(b, 0, DisplayRadix::Octal, ByteGroupSize::One, false, HexCase::Lower), "052");
+        assert_eq!(format_group(b, 0, DisplayRadix::Binary, ByteGroupSize::One, false, HexCase::Lower), "00101010");
     }
 
     #[test]
@@ -699,17 +731,32 @@ mod tests {
         // LE: 0x3412 = 13330 = 032022 octal
         // BE: 0x1234 = 4660 = 011064 octal
         let bytes = &[0x12, 0x34];
-        assert_eq!(format_group(bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Two, false), "3412");
-        assert_eq!(format_group(bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Two, true), "1234");
+        assert_eq!(
+            format_group(bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Two, false, HexCase::Lower),
+            "3412"
+        );
+        assert_eq!(
+            format_group(bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Two, true, HexCase::Lower),
+            "1234"
+        );
 
-        assert_eq!(format_group(bytes, 0, DisplayRadix::Decimal, ByteGroupSize::Two, false), "13330");
-        assert_eq!(format_group(bytes, 0, DisplayRadix::Decimal, ByteGroupSize::Two, true), " 4660");
+        assert_eq!(
+            format_group(bytes, 0, DisplayRadix::Decimal, ByteGroupSize::Two, false, HexCase::Lower),
+            "13330"
+        );
+        assert_eq!(format_group(bytes, 0, DisplayRadix::Decimal, ByteGroupSize::Two, true, HexCase::Lower), " 4660");
 
-        assert_eq!(format_group(bytes, 0, DisplayRadix::Octal, ByteGroupSize::Two, false), "032022");
-        assert_eq!(format_group(bytes, 0, DisplayRadix::Octal, ByteGroupSize::Two, true), "011064");
+        assert_eq!(format_group(bytes, 0, DisplayRadix::Octal, ByteGroupSize::Two, false, HexCase::Lower), "032022");
+        assert_eq!(format_group(bytes, 0, DisplayRadix::Octal, ByteGroupSize::Two, true, HexCase::Lower), "011064");
 
-        assert_eq!(format_group(bytes, 0, DisplayRadix::Binary, ByteGroupSize::Two, false), "0011010000010010");
-        assert_eq!(format_group(bytes, 0, DisplayRadix::Binary, ByteGroupSize::Two, true), "0001001000110100");
+        assert_eq!(
+            format_group(bytes, 0, DisplayRadix::Binary, ByteGroupSize::Two, false, HexCase::Lower),
+            "0011010000010010"
+        );
+        assert_eq!(
+            format_group(bytes, 0, DisplayRadix::Binary, ByteGroupSize::Two, true, HexCase::Lower),
+            "0001001000110100"
+        );
     }
 
     #[test]
@@ -717,40 +764,64 @@ mod tests {
         let bytes = &[0x01, 0x02, 0x03, 0x04];
         // LE: 0x04030201 = 67305985
         // BE: 0x01020304 = 16909060
-        assert_eq!(format_group(bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Four, false), "04030201");
-        assert_eq!(format_group(bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Four, true), "01020304");
+        assert_eq!(
+            format_group(bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Four, false, HexCase::Lower),
+            "04030201"
+        );
+        assert_eq!(
+            format_group(bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Four, true, HexCase::Lower),
+            "01020304"
+        );
 
-        assert_eq!(format_group(bytes, 0, DisplayRadix::Decimal, ByteGroupSize::Four, false), "  67305985");
-        assert_eq!(format_group(bytes, 0, DisplayRadix::Decimal, ByteGroupSize::Four, true), "  16909060");
+        assert_eq!(
+            format_group(bytes, 0, DisplayRadix::Decimal, ByteGroupSize::Four, false, HexCase::Lower),
+            "  67305985"
+        );
+        assert_eq!(
+            format_group(bytes, 0, DisplayRadix::Decimal, ByteGroupSize::Four, true, HexCase::Lower),
+            "  16909060"
+        );
     }
 
     #[test]
     fn test_format_group_partial_positions_four_bytes() {
         // Line 1: offset 0, byte [00] -> slot 0 -> "00......"
         let b0 = &[0x00];
-        assert_eq!(format_group(b0, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Four, false), "00......");
+        assert_eq!(
+            format_group(b0, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Four, false, HexCase::Lower),
+            "00......"
+        );
 
         // Line 2: offset 1, byte [01] -> slot 1 -> "..01...."
         let b1 = &[0x01];
-        assert_eq!(format_group(b1, 1, DisplayRadix::Hexadecimal, ByteGroupSize::Four, false), "..01....");
+        assert_eq!(
+            format_group(b1, 1, DisplayRadix::Hexadecimal, ByteGroupSize::Four, false, HexCase::Lower),
+            "..01...."
+        );
 
         // Line 3: offset 2, bytes [03, 04] -> slot 2..4 -> "....0304"
         let b23 = &[0x03, 0x04];
-        assert_eq!(format_group(b23, 2, DisplayRadix::Hexadecimal, ByteGroupSize::Four, false), "....0304");
+        assert_eq!(
+            format_group(b23, 2, DisplayRadix::Hexadecimal, ByteGroupSize::Four, false, HexCase::Lower),
+            "....0304"
+        );
 
         // Single byte at slot 3 -> "......05"
         let b3 = &[0x05];
-        assert_eq!(format_group(b3, 3, DisplayRadix::Hexadecimal, ByteGroupSize::Four, false), "......05");
+        assert_eq!(
+            format_group(b3, 3, DisplayRadix::Hexadecimal, ByteGroupSize::Four, false, HexCase::Lower),
+            "......05"
+        );
     }
 
     #[test]
     fn test_format_group_partial_positions_two_bytes() {
         // Slot 0 in 2B -> "12.."
         let b = &[0x12];
-        assert_eq!(format_group(b, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Two, false), "12..");
+        assert_eq!(format_group(b, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Two, false, HexCase::Lower), "12..");
 
         // Slot 1 in 2B -> "..12"
-        assert_eq!(format_group(b, 1, DisplayRadix::Hexadecimal, ByteGroupSize::Two, false), "..12");
+        assert_eq!(format_group(b, 1, DisplayRadix::Hexadecimal, ByteGroupSize::Two, false, HexCase::Lower), "..12");
     }
 
     #[test]
@@ -758,7 +829,7 @@ mod tests {
         let bytes = &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
         // LE: 0x0807060504030201 = 578437695752307201
         assert_eq!(
-            format_group(bytes, 0, DisplayRadix::Decimal, ByteGroupSize::Eight, false),
+            format_group(bytes, 0, DisplayRadix::Decimal, ByteGroupSize::Eight, false, HexCase::Lower),
             "  578437695752307201"
         );
     }
@@ -767,22 +838,34 @@ mod tests {
     fn test_format_group_partial_decimal() {
         // 3 bytes in 8-byte group: 0x0000000000563412 = 5649426
         let b = &[0x12, 0x34, 0x56];
-        assert_eq!(format_group(b, 0, DisplayRadix::Decimal, ByteGroupSize::Eight, false), "             5649426");
-        assert_eq!(format_group(b, 0, DisplayRadix::Decimal, ByteGroupSize::Eight, false).len(), 20);
+        assert_eq!(
+            format_group(b, 0, DisplayRadix::Decimal, ByteGroupSize::Eight, false, HexCase::Lower),
+            "             5649426"
+        );
+        assert_eq!(format_group(b, 0, DisplayRadix::Decimal, ByteGroupSize::Eight, false, HexCase::Lower).len(), 20);
 
         // 1 byte in 8-byte group: 99
         let b1 = &[99];
-        assert_eq!(format_group(b1, 0, DisplayRadix::Decimal, ByteGroupSize::Eight, false), "                  99");
-        assert_eq!(format_group(b1, 0, DisplayRadix::Decimal, ByteGroupSize::Eight, false).len(), 20);
+        assert_eq!(
+            format_group(b1, 0, DisplayRadix::Decimal, ByteGroupSize::Eight, false, HexCase::Lower),
+            "                  99"
+        );
+        assert_eq!(
+            format_group(b1, 0, DisplayRadix::Decimal, ByteGroupSize::Eight, false, HexCase::Lower).len(),
+            20
+        );
 
         // 2 bytes in 4-byte group: 0x00003412 = 13330
         let b2 = &[0x12, 0x34];
-        assert_eq!(format_group(b2, 0, DisplayRadix::Decimal, ByteGroupSize::Four, false), "     13330");
-        assert_eq!(format_group(b2, 0, DisplayRadix::Decimal, ByteGroupSize::Four, false).len(), 10);
+        assert_eq!(
+            format_group(b2, 0, DisplayRadix::Decimal, ByteGroupSize::Four, false, HexCase::Lower),
+            "     13330"
+        );
+        assert_eq!(format_group(b2, 0, DisplayRadix::Decimal, ByteGroupSize::Four, false, HexCase::Lower).len(), 10);
 
         // 1 byte in 2-byte group: 99
-        assert_eq!(format_group(b1, 0, DisplayRadix::Decimal, ByteGroupSize::Two, false), "   99");
-        assert_eq!(format_group(b1, 0, DisplayRadix::Decimal, ByteGroupSize::Two, false).len(), 5);
+        assert_eq!(format_group(b1, 0, DisplayRadix::Decimal, ByteGroupSize::Two, false, HexCase::Lower), "   99");
+        assert_eq!(format_group(b1, 0, DisplayRadix::Decimal, ByteGroupSize::Two, false, HexCase::Lower).len(), 5);
     }
 
     #[test]
@@ -862,48 +945,51 @@ mod tests {
 
         // 1-byte Hex
         assert_eq!(
-            format_display_content(&bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::One, false),
+            format_display_content(&bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::One, false, HexCase::Lower),
             "12 34 56 78"
         );
 
         // 2-byte Hex LE
         assert_eq!(
-            format_display_content(&bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Two, false),
+            format_display_content(&bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Two, false, HexCase::Lower),
             "3412 7856"
         );
 
         // 2-byte Hex BE
         assert_eq!(
-            format_display_content(&bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Two, true),
+            format_display_content(&bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Two, true, HexCase::Lower),
             "1234 5678"
         );
 
         // 4-byte Hex LE
         assert_eq!(
-            format_display_content(&bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Four, false),
+            format_display_content(&bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Four, false, HexCase::Lower),
             "78563412"
         );
 
         // 4-byte Hex BE
         assert_eq!(
-            format_display_content(&bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Four, true),
+            format_display_content(&bytes, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Four, true, HexCase::Lower),
             "12345678"
         );
 
         // 1-byte Decimal
         assert_eq!(
-            format_display_content(&bytes, 0, DisplayRadix::Decimal, ByteGroupSize::One, false),
+            format_display_content(&bytes, 0, DisplayRadix::Decimal, ByteGroupSize::One, false, HexCase::Lower),
             "18 52 86 120"
         );
 
         // 2-byte Decimal LE
         assert_eq!(
-            format_display_content(&bytes, 0, DisplayRadix::Decimal, ByteGroupSize::Two, false),
+            format_display_content(&bytes, 0, DisplayRadix::Decimal, ByteGroupSize::Two, false, HexCase::Lower),
             "13330 30806"
         );
 
         // 2-byte Decimal BE
-        assert_eq!(format_display_content(&bytes, 0, DisplayRadix::Decimal, ByteGroupSize::Two, true), "4660 22136");
+        assert_eq!(
+            format_display_content(&bytes, 0, DisplayRadix::Decimal, ByteGroupSize::Two, true, HexCase::Lower),
+            "4660 22136"
+        );
     }
 
     #[test]

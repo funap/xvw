@@ -8,6 +8,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use crate::core::fill::{FillPattern, RandomMode, SequentialWidth, parse_pattern_hex, parse_pattern_text, parse_step_val, parse_u64_val};
+use crate::core::format::HexCase;
 use crate::core::new_file::parse_fill_byte;
 use crate::core::radix::ByteOrder;
 use crate::ui::appearance::Appearance;
@@ -303,6 +304,7 @@ impl FillSelectionModal {
     }
 
     fn render_single_byte_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let preview_text = match &self.parsed_byte {
             Ok(b) => {
                 let ascii = if b.is_ascii_graphic() || *b == b' ' {
@@ -310,7 +312,10 @@ impl FillSelectionModal {
                 } else {
                     "non-printable".to_string()
                 };
-                format!("Hex: 0x{b:02X} | Dec: {b} | Bin: 0b{b:08b} | ASCII: {ascii}")
+                format!(
+                    "Hex: {} | Dec: {b} | Bin: 0b{b:08b} | ASCII: {ascii}",
+                    hex_case.format_prefixed_pad(*b as usize, 2)
+                )
             }
             Err(e) => format!("Error: {e}"),
         };
@@ -372,10 +377,11 @@ impl FillSelectionModal {
 
     fn render_pattern_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let is_hex = self.pattern_format == PatternFormat::Hex;
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
 
         let preview_text = match &self.parsed_pattern {
             Ok(bytes) => {
-                let hex_repr: Vec<String> = bytes.iter().take(8).map(|b| format!("{b:02X}")).collect();
+                let hex_repr: Vec<String> = bytes.iter().take(8).map(|b| hex_case.format_byte(*b)).collect();
                 let dots = if bytes.len() > 8 { "..." } else { "" };
                 format!("Length: {} bytes | {}{dots}", bytes.len(), hex_repr.join(" "))
             }
@@ -809,6 +815,7 @@ impl FillSelectionModal {
             pattern.generate(preview_len)
         };
 
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let mut hex_parts = Vec::with_capacity(preview_len + 1);
         let mut text_parts = Vec::with_capacity(preview_len + 1);
 
@@ -817,7 +824,7 @@ impl FillSelectionModal {
                 hex_parts.push(String::new());
                 text_parts.push(" ".to_string());
             }
-            hex_parts.push(format!("{b:02X}"));
+            hex_parts.push(hex_case.format_byte(b));
             let ch = if b.is_ascii_graphic() || b == b' ' { b as char } else { '.' };
             text_parts.push(ch.to_string());
         }
@@ -846,9 +853,9 @@ impl FillSelectionModal {
                 format!("Sample of first 16 bytes (total: {total_len})")
             }
         } else if total_len <= 16 {
-            format!("{total_len} bytes (0x{total_len:X})")
+            format!("{total_len} bytes ({})", hex_case.format_prefixed(total_len))
         } else {
-            format!("First 16 of {total_len} bytes (0x{total_len:X})")
+            format!("First 16 of {total_len} bytes ({})", hex_case.format_prefixed(total_len))
         };
 
         let note = match &pattern {
@@ -858,7 +865,7 @@ impl FillSelectionModal {
                 } else {
                     String::new()
                 };
-                format!("Fills {total_len} bytes with 0x{b:02X}{ascii_repr}")
+                format!("Fills {total_len} bytes with {}{ascii_repr}", hex_case.format_prefixed_pad(*b as usize, 2))
             }
             FillPattern::Pattern(bytes) => {
                 format!("Repeats {}-byte pattern across {total_len} bytes", bytes.len())
@@ -963,6 +970,18 @@ impl Render for FillSelectionModal {
     }
 }
 
+/// Formats a byte range and length for display in the Fill Selection dialog.
+pub fn format_range_summary(range: &Range<usize>, hex_case: HexCase) -> String {
+    let range_len = range.len();
+    format!(
+        "{} .. {} ({} bytes / {})",
+        hex_case.format_prefixed_pad(range.start, 8),
+        hex_case.format_prefixed_pad(range.end, 8),
+        range_len,
+        hex_case.format_prefixed(range_len)
+    )
+}
+
 /// Displays the Fill Selection dialog.
 pub fn open_fill_selection_dialog(range: Range<usize>, window: &mut Window, cx: &mut App, on_confirm: impl Fn(FillPattern, &mut Window, &mut App) + 'static) {
     if window.has_active_dialog(cx) {
@@ -985,8 +1004,8 @@ pub fn open_fill_selection_dialog(range: Range<usize>, window: &mut Window, cx: 
     let view_for_content = view.clone();
     let view_for_ok = view.clone();
 
-    let range_len = range.len();
-    let range_str = format!("0x{:08X} .. 0x{:08X} ({} bytes / 0x{:X})", range.start, range.end, range_len, range_len);
+    let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
+    let range_str = format_range_summary(&range, hex_case);
 
     window.open_dialog(cx, move |dialog, _window, cx| {
         let theme = cx.theme();
@@ -1069,11 +1088,19 @@ pub fn open_fill_selection_dialog(range: Range<usize>, window: &mut Window, cx: 
 
 #[cfg(test)]
 mod tests {
+    use super::format_range_summary;
+    use crate::core::format::HexCase;
+
     #[test]
     fn test_fill_selection_format_range_str() {
         let range = 0..16;
-        let range_len = range.len();
-        let range_str = format!("0x{:08X} .. 0x{:08X} ({} bytes / 0x{:X})", range.start, range.end, range_len, range_len);
-        assert_eq!(range_str, "0x00000000 .. 0x00000010 (16 bytes / 0x10)");
+        let lower = format_range_summary(&range, HexCase::Lower);
+        let upper = format_range_summary(&range, HexCase::Upper);
+        assert_eq!(lower, "0x00000000 .. 0x00000010 (16 bytes / 0x10)");
+        assert_eq!(upper, "0x00000000 .. 0x00000010 (16 bytes / 0x10)");
+
+        let range_ab = 0xab..0xcd;
+        assert_eq!(format_range_summary(&range_ab, HexCase::Lower), "0x000000ab .. 0x000000cd (34 bytes / 0x22)");
+        assert_eq!(format_range_summary(&range_ab, HexCase::Upper), "0x000000AB .. 0x000000CD (34 bytes / 0x22)");
     }
 }

@@ -171,6 +171,8 @@ pub fn find_offset_token_at(text: &str, offset: usize) -> Option<(std::ops::Rang
     }
 }
 
+use crate::core::format::hex_case::HexCase;
+
 /// Determines hexadecimal padding width based on file size or offset.
 pub fn hex_padding(total_size: usize, offset: usize) -> usize {
     let max_val = total_size.max(offset);
@@ -184,45 +186,67 @@ pub fn hex_padding(total_size: usize, offset: usize) -> usize {
 }
 
 /// Formats a single physical memory address or offset as plain text with appropriate hex padding.
-pub fn format_address_plain(addr: usize, total_size: usize) -> String {
+pub fn format_address_plain(addr: usize, total_size: usize, hex_case: HexCase) -> String {
     let pad = hex_padding(total_size, addr);
-    format!("0x{:0width$X}", addr, width = pad)
+    hex_case.format_prefixed_pad(addr, pad)
 }
 
 /// Formats an inclusive physical memory address range `[start_addr..end_addr]` as plain text.
-pub fn format_address_range_plain(start_addr: usize, end_addr: usize, total_size: usize) -> String {
+pub fn format_address_range_plain(start_addr: usize, end_addr: usize, total_size: usize, hex_case: HexCase) -> String {
     let pad = hex_padding(total_size, start_addr.max(end_addr));
-    format!("0x{:0width$X}..0x{:0width$X}", start_addr, end_addr, width = pad)
+    format!(
+        "{}..{}",
+        hex_case.format_prefixed_pad(start_addr, pad),
+        hex_case.format_prefixed_pad(end_addr, pad)
+    )
 }
 
 /// Formats an offset or range as plain text (e.g. `0x00001040` or `0x00001000..0x0000103F`).
 #[allow(dead_code)]
-pub fn format_offset_plain(offset: usize, length: Option<usize>, total_size: usize) -> String {
+pub fn format_offset_plain(offset: usize, length: Option<usize>, total_size: usize, hex_case: HexCase) -> String {
     match length {
         Some(len) if len > 1 => {
             let end_inclusive = offset.saturating_add(len).saturating_sub(1);
-            format_address_range_plain(offset, end_inclusive, total_size)
+            format_address_range_plain(offset, end_inclusive, total_size, hex_case)
         }
-        _ => format_address_plain(offset, total_size),
+        _ => format_address_plain(offset, total_size, hex_case),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::format::hex_case::HexCase;
+
+    #[test]
+    fn test_format_address_plain_respects_hex_case() {
+        assert_eq!(format_address_plain(0x00FD_0000, 256, HexCase::Lower), "0x00fd0000");
+        assert_eq!(format_address_plain(0x00FD_0000, 256, HexCase::Upper), "0x00FD0000");
+        assert_eq!(
+            format_address_range_plain(0x00FD_0000, 0x00FD_001F, 256, HexCase::Lower),
+            "0x00fd0000..0x00fd001f"
+        );
+        assert_eq!(
+            format_address_range_plain(0x00FD_0000, 0x00FD_001F, 256, HexCase::Upper),
+            "0x00FD0000..0x00FD001F"
+        );
+    }
 
     #[test]
     fn test_format_offset_plain() {
-        assert_eq!(format_offset_plain(0x10, None, 0x100), "0x0010");
-        assert_eq!(format_offset_plain(0x10, Some(16), 0x100), "0x0010..0x001F");
+        assert_eq!(format_offset_plain(0x10, None, 0x100, HexCase::Upper), "0x0010");
+        assert_eq!(format_offset_plain(0x10, Some(16), 0x100, HexCase::Upper), "0x0010..0x001F");
     }
 
     #[test]
     fn test_format_address_plain_and_range() {
-        assert_eq!(format_address_plain(0x00FD_0000, 256), "0x00FD0000");
-        assert_eq!(format_address_range_plain(0x00FD_0000, 0x00FD_001F, 256), "0x00FD0000..0x00FD001F");
-        assert_eq!(format_address_plain(0x1000, 0x100), "0x1000");
-        assert_eq!(format_address_range_plain(0x1000, 0x100F, 0x100), "0x1000..0x100F");
+        assert_eq!(format_address_plain(0x00FD_0000, 256, HexCase::Upper), "0x00FD0000");
+        assert_eq!(
+            format_address_range_plain(0x00FD_0000, 0x00FD_001F, 256, HexCase::Upper),
+            "0x00FD0000..0x00FD001F"
+        );
+        assert_eq!(format_address_plain(0x1000, 0x100, HexCase::Upper), "0x1000");
+        assert_eq!(format_address_range_plain(0x1000, 0x100F, 0x100, HexCase::Upper), "0x1000..0x100F");
     }
 
     #[test]
