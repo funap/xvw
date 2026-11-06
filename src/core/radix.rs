@@ -1,3 +1,4 @@
+pub use crate::core::format::hex_case::HexCase;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
