@@ -5,6 +5,7 @@ use gpui_kit::{App, Entity, Task};
 use std::ops::Range;
 
 /// Pure helper executing segmented text or hex search queries on a byte buffer.
+#[allow(dead_code)]
 pub fn execute_search(data: &[u8], query: &str, options: &SearchOptions, segments: &[Range<usize>]) -> Vec<usize> {
     if query.is_empty() {
         return Vec::new();
@@ -32,7 +33,16 @@ pub fn execute_search(data: &[u8], query: &str, options: &SearchOptions, segment
 #[derive(Debug, Clone, Default)]
 pub struct SearchService;
 
-#[allow(dead_code)]
+/// Query parameters for searching with a limit.
+pub struct LimitedSearchQuery {
+    pub buffer: Buffer,
+    pub query: String,
+    pub mode: SearchMode,
+    pub encoding: crate::core::encoding::Encoding,
+    pub segments: Vec<Range<usize>>,
+    pub max_results: usize,
+}
+
 impl SearchService {
     /// Creates a new `SearchService` instance.
     pub fn new() -> Self {
@@ -41,17 +51,57 @@ impl SearchService {
 
     /// Searches for a query in the given buffer based on the search options.
     /// Returns a Task that executes the search in the background.
+    #[allow(dead_code)]
     pub fn search(&self, buffer: Buffer, query: String, options: SearchOptions, cx: &App) -> Task<Vec<usize>> {
         self.search_with_segments(buffer, query, options, Vec::new(), cx)
     }
 
     /// Searches for a query in the given buffer respecting memory segment boundaries.
+    #[allow(dead_code)]
     pub fn search_with_segments(&self, buffer: Buffer, query: String, options: SearchOptions, segments: Vec<Range<usize>>, cx: &App) -> Task<Vec<usize>> {
         cx.background_executor()
             .spawn(async move { execute_search(buffer.data(), &query, &options, &segments) })
     }
 
+    /// Searches for a query with truncation limit (e.g. for SearchPanel).
+    /// Returns a Task yielding `(offsets, is_truncated)`.
+    pub fn search_with_limit(&self, params: LimitedSearchQuery, cx: &App) -> Task<(Vec<usize>, bool)> {
+        cx.background_executor().spawn(async move {
+            let pattern = match params.mode {
+                SearchMode::Text => {
+                    if let Some(p) = search::parse_text_pattern(&params.query, params.encoding) {
+                        p
+                    } else {
+                        return (Vec::new(), false);
+                    }
+                }
+                SearchMode::Hex => {
+                    if let Some(p) = search::parse_hex_pattern(&params.query) {
+                        p
+                    } else {
+                        return (Vec::new(), false);
+                    }
+                }
+            };
+            let raw_offsets = crate::core::search::find_occurrences_segmented(
+                params.buffer.data(),
+                &pattern,
+                crate::core::search::SearchLimit::Count(params.max_results + 1),
+                &params.segments,
+                None,
+            );
+            let truncated = raw_offsets.len() > params.max_results;
+            let capped_offsets = if truncated {
+                raw_offsets.into_iter().take(params.max_results).collect()
+            } else {
+                raw_offsets
+            };
+            (capped_offsets, truncated)
+        })
+    }
+
     /// Performs a search and updates the provided Editor entity with the results.
+    #[allow(dead_code)]
     pub fn perform_search(&self, editor: Entity<Editor>, query: String, options: SearchOptions, generation: usize, is_full: bool, cx: &App) -> Task<()> {
         let (buffer_data, segments) = {
             let editor_read = editor.read(cx);
@@ -74,6 +124,7 @@ impl SearchService {
     }
 
     /// Performs an incremental search: immediate viewport search followed by background full search.
+    #[allow(dead_code)]
     pub fn incremental_search(&self, editor: Entity<Editor>, query: String, mode: SearchMode, viewport_range: Range<usize>, cx: &App) -> (Task<()>, Task<()>) {
         let (generation, encoding) = {
             let ed = editor.read(cx);

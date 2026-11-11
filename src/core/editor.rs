@@ -904,8 +904,9 @@ impl Editor {
         let pattern = self.find_pattern()?;
         let doc = self.document.read().ok()?;
         let data = doc.buffer.data();
+        let segments = doc.address_map.segment_ranges();
         let from_offset = self.cursor.offset.saturating_add(1);
-        let next_offset = crate::core::search::find_next_occurrence(data, &pattern, from_offset)?;
+        let next_offset = crate::core::search::find_next_occurrence_segmented(data, &pattern, from_offset, &segments)?;
         drop(doc);
         self.auto_unfold_if_needed(next_offset);
         self.cursor.offset = next_offset;
@@ -918,7 +919,8 @@ impl Editor {
         let pattern = self.find_pattern()?;
         let doc = self.document.read().ok()?;
         let data = doc.buffer.data();
-        let prev_offset = crate::core::search::find_prev_occurrence(data, &pattern, self.cursor.offset)?;
+        let segments = doc.address_map.segment_ranges();
+        let prev_offset = crate::core::search::find_prev_occurrence_segmented(data, &pattern, self.cursor.offset, &segments)?;
         drop(doc);
         self.auto_unfold_if_needed(prev_offset);
         self.cursor.offset = prev_offset;
@@ -932,8 +934,9 @@ impl Editor {
         let next_offset = {
             let doc = self.document.read().ok()?;
             let data = doc.buffer.data();
+            let segments = doc.address_map.segment_ranges();
             let from_offset = self.cursor.offset.saturating_add(1);
-            crate::core::search::find_next_occurrence(data, &pattern, from_offset)?
+            crate::core::search::find_next_occurrence_segmented(data, &pattern, from_offset, &segments)?
         };
         self.auto_unfold_if_needed(next_offset);
         self.cursor.offset = next_offset;
@@ -947,7 +950,8 @@ impl Editor {
         let prev_offset = {
             let doc = self.document.read().ok()?;
             let data = doc.buffer.data();
-            crate::core::search::find_prev_occurrence(data, &pattern, self.cursor.offset)?
+            let segments = doc.address_map.segment_ranges();
+            crate::core::search::find_prev_occurrence_segmented(data, &pattern, self.cursor.offset, &segments)?
         };
         self.auto_unfold_if_needed(prev_offset);
         self.cursor.offset = prev_offset;

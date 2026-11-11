@@ -443,41 +443,102 @@ fn find_single_backward(data: &[u8], pattern: &[PatternByte], start: usize, end:
 }
 
 /// Finds the next occurrence of `pattern` starting at `from_offset`, wrapping around to 0 if needed.
+#[allow(dead_code)]
 pub fn find_next_occurrence(data: &[u8], pattern: &[PatternByte], from_offset: usize) -> Option<usize> {
+    find_next_occurrence_segmented(data, pattern, from_offset, &[])
+}
+
+/// Finds the next occurrence of `pattern` starting at `from_offset` respecting segment boundaries, wrapping around if needed.
+pub fn find_next_occurrence_segmented(data: &[u8], pattern: &[PatternByte], from_offset: usize, segments: &[std::ops::Range<usize>]) -> Option<usize> {
     if data.is_empty() || pattern.is_empty() || pattern.len() > data.len() {
         return None;
     }
 
-    // 1. Search forward from `from_offset` to end of data
-    if let Some(pos) = find_single_forward(data, pattern, from_offset, data.len()) {
-        return Some(pos);
+    if segments.is_empty() {
+        // 1. Search forward from `from_offset` to end of data
+        if let Some(pos) = find_single_forward(data, pattern, from_offset, data.len()) {
+            return Some(pos);
+        }
+
+        // 2. Wrap-around: search from 0 to `from_offset`
+        if from_offset > 0 {
+            let wrap_end = (from_offset + pattern.len().saturating_sub(1)).min(data.len());
+            return find_single_forward(data, pattern, 0, wrap_end);
+        }
+        return None;
     }
 
-    // 2. Wrap-around: search from 0 to `from_offset`
-    if from_offset > 0 {
-        let wrap_end = (from_offset + pattern.len().saturating_sub(1)).min(data.len());
-        return find_single_forward(data, pattern, 0, wrap_end);
+    // 1. Search forward in segments starting at or after from_offset
+    for seg in segments {
+        if seg.end <= from_offset {
+            continue;
+        }
+        let seg_start = seg.start.max(from_offset);
+        if let Some(pos) = find_single_forward(data, pattern, seg_start, seg.end) {
+            return Some(pos);
+        }
+    }
+
+    // 2. Wrap around: search in segments up to from_offset
+    for seg in segments {
+        if seg.start >= from_offset {
+            break;
+        }
+        let seg_end = seg.end.min((from_offset + pattern.len().saturating_sub(1)).min(data.len()));
+        if let Some(pos) = find_single_forward(data, pattern, seg.start, seg_end) {
+            return Some(pos);
+        }
     }
 
     None
 }
 
 /// Finds the previous occurrence of `pattern` strictly starting before `before_offset`, wrapping around to the end of data if needed.
+#[allow(dead_code)]
 pub fn find_prev_occurrence(data: &[u8], pattern: &[PatternByte], before_offset: usize) -> Option<usize> {
+    find_prev_occurrence_segmented(data, pattern, before_offset, &[])
+}
+
+/// Finds the previous occurrence of `pattern` strictly before `before_offset` respecting segment boundaries, wrapping around if needed.
+pub fn find_prev_occurrence_segmented(data: &[u8], pattern: &[PatternByte], before_offset: usize, segments: &[std::ops::Range<usize>]) -> Option<usize> {
     if data.is_empty() || pattern.is_empty() || pattern.len() > data.len() {
         return None;
     }
 
-    // 1. Search backward strictly before `before_offset` if `before_offset > 0`
+    if segments.is_empty() {
+        // 1. Search backward strictly before `before_offset` if `before_offset > 0`
+        if before_offset > 0 {
+            let end = (before_offset + pattern.len().saturating_sub(1)).min(data.len());
+            if let Some(pos) = find_single_backward(data, pattern, 0, end) {
+                return Some(pos);
+            }
+        }
+
+        // 2. Wrap-around: search backward from end of data
+        return find_single_backward(data, pattern, 0, data.len());
+    }
+
+    // 1. Search backward in segments starting strictly before before_offset
     if before_offset > 0 {
-        let end = (before_offset + pattern.len().saturating_sub(1)).min(data.len());
-        if let Some(pos) = find_single_backward(data, pattern, 0, end) {
+        for seg in segments.iter().rev() {
+            if seg.start >= before_offset {
+                continue;
+            }
+            let seg_end = seg.end.min((before_offset + pattern.len().saturating_sub(1)).min(data.len()));
+            if let Some(pos) = find_single_backward(data, pattern, seg.start, seg_end) {
+                return Some(pos);
+            }
+        }
+    }
+
+    // 2. Wrap-around: search backward from highest segment
+    for seg in segments.iter().rev() {
+        if let Some(pos) = find_single_backward(data, pattern, seg.start, seg.end) {
             return Some(pos);
         }
     }
 
-    // 2. Wrap-around: search backward from end of data
-    find_single_backward(data, pattern, 0, data.len())
+    None
 }
 
 /// Finds all occurrences of `pattern` within the specified `range` of `data`.
@@ -561,6 +622,13 @@ mod tests {
         assert_eq!(find_prev_occurrence(data, &pattern, 8), Some(0));
         // Backward before 0 wraps to 16
         assert_eq!(find_prev_occurrence(data, &pattern, 0), Some(16));
+
+        // Segmented search: suppose only middle segment is active
+        let segments = [4..12, 14..18]; // includes "123 abc " and "456 "
+        assert_eq!(find_next_occurrence_segmented(data, &pattern, 0, &segments), Some(8));
+        assert_eq!(find_next_occurrence_segmented(data, &pattern, 9, &segments), Some(8));
+        assert_eq!(find_prev_occurrence_segmented(data, &pattern, 16, &segments), Some(8));
+        assert_eq!(find_prev_occurrence_segmented(data, &pattern, 8, &segments), Some(8));
     }
 
     #[test]
