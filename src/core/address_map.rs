@@ -1,6 +1,66 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+/// Strongly typed offset within a contiguous linear buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct BufferOffset(pub usize);
+
+impl BufferOffset {
+    #[inline]
+    pub const fn new(offset: usize) -> Self {
+        Self(offset)
+    }
+
+    #[inline]
+    pub const fn as_usize(self) -> usize {
+        self.0
+    }
+}
+
+impl From<usize> for BufferOffset {
+    #[inline]
+    fn from(offset: usize) -> Self {
+        Self(offset)
+    }
+}
+
+impl From<BufferOffset> for usize {
+    #[inline]
+    fn from(offset: BufferOffset) -> Self {
+        offset.0
+    }
+}
+
+/// Strongly typed physical/memory address mapped from an imported structure/object file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct PhysicalAddress(pub usize);
+
+impl PhysicalAddress {
+    #[inline]
+    pub const fn new(addr: usize) -> Self {
+        Self(addr)
+    }
+
+    #[inline]
+    pub const fn as_usize(self) -> usize {
+        self.0
+    }
+}
+
+impl From<usize> for PhysicalAddress {
+    #[inline]
+    fn from(addr: usize) -> Self {
+        Self(addr)
+    }
+}
+
+impl From<PhysicalAddress> for usize {
+    #[inline]
+    fn from(addr: PhysicalAddress) -> Self {
+        addr.0
+    }
+}
+
 /// Represents a contiguous range of memory from an imported object file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemorySegment {

@@ -272,10 +272,7 @@ impl<'a> CustomLayoutSessionRef<'a> {
     }
 
     pub fn count(&self, folded_count: usize) -> usize {
-        self.guard
-            .metadata
-            .custom_layout
-            .custom_layout_count(folded_count)
+        self.guard.metadata.custom_layout.custom_layout_count(folded_count)
     }
 }
 

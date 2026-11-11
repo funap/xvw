@@ -34,53 +34,70 @@ impl Default for DiffResult {
     }
 }
 
+/// Diff comparison mode specifying how positions are matched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiffAlignment {
+    /// Compares sequential offsets directly from 0 to max(len).
+    #[default]
+    LinearOffset,
+}
+
 pub fn compute_simple_diff(left: &[u8], right: &[u8]) -> DiffResult {
-    let mut result = DiffResult::new();
-    let min_len = cmp::min(left.len(), right.len());
-    let max_len = cmp::max(left.len(), right.len());
+    compute_aligned_diff(left, right, DiffAlignment::LinearOffset)
+}
 
-    let mut offset = 0;
-    while offset < max_len {
-        let mut equal_start = offset;
+/// Computes differences between two byte slices according to alignment mode.
+pub fn compute_aligned_diff(left: &[u8], right: &[u8], alignment: DiffAlignment) -> DiffResult {
+    match alignment {
+        DiffAlignment::LinearOffset => {
+            let mut result = DiffResult::new();
+            let min_len = cmp::min(left.len(), right.len());
+            let max_len = cmp::max(left.len(), right.len());
 
-        while equal_start < min_len && left[equal_start] == right[equal_start] {
-            equal_start += 1;
-        }
+            let mut offset = 0;
+            while offset < max_len {
+                let mut equal_start = offset;
 
-        if equal_start > offset {
-            result.add_chunk(DiffChunk::Equal {
-                offset,
-                length: equal_start - offset,
-            });
-            offset = equal_start;
-        }
+                while equal_start < min_len && left[equal_start] == right[equal_start] {
+                    equal_start += 1;
+                }
 
-        if offset >= min_len {
-            break;
-        }
+                if equal_start > offset {
+                    result.add_chunk(DiffChunk::Equal {
+                        offset,
+                        length: equal_start - offset,
+                    });
+                    offset = equal_start;
+                }
 
-        let mut modified_start = offset;
-        while modified_start < min_len && left[modified_start] != right[modified_start] {
-            modified_start += 1;
-        }
+                if offset >= min_len {
+                    break;
+                }
 
-        if modified_start > offset {
-            result.add_chunk(DiffChunk::Modified {
-                offset,
-                length: modified_start - offset,
-            });
-            offset = modified_start;
+                let mut modified_start = offset;
+                while modified_start < min_len && left[modified_start] != right[modified_start] {
+                    modified_start += 1;
+                }
+
+                if modified_start > offset {
+                    result.add_chunk(DiffChunk::Modified {
+                        offset,
+                        length: modified_start - offset,
+                    });
+                    offset = modified_start;
+                }
+            }
+
+            if left.len() != right.len() {
+                result.add_chunk(DiffChunk::Modified {
+                    offset: min_len,
+                    length: max_len - min_len,
+                });
+            }
+
+            result
         }
     }
-
-    if left.len() != right.len() {
-        result.add_chunk(DiffChunk::Modified {
-            offset: min_len,
-            length: max_len - min_len,
-        });
-    }
-
-    result
 }
 
 #[cfg(test)]
