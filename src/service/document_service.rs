@@ -10,25 +10,12 @@ use std::sync::{Arc, RwLock};
 
 /// Determines the target file format for saving, preferring file extensions if applicable.
 pub fn determine_export_format(path: &Path, fallback_format: FileFormat) -> FileFormat {
-    if crate::core::hex_import::is_mot_extension(path) {
-        FileFormat::MotorolaSrec
-    } else if crate::core::hex_import::is_hex_extension(path) {
-        FileFormat::IntelHex
-    } else if crate::core::format::is_base64_extension(path) {
-        FileFormat::Base64
-    } else {
-        fallback_format
-    }
+    FileFormat::from_path(path).unwrap_or(fallback_format)
 }
 
 /// Serializes raw buffer bytes and address map into the bytes corresponding to the target format.
 pub fn export_document_bytes(contents: &[u8], address_map: &AddressMap, format: FileFormat) -> Vec<u8> {
-    match format {
-        FileFormat::MotorolaSrec | FileFormat::HexOrMot => crate::core::hex_import::export_motorola_srec(contents, address_map).into_bytes(),
-        FileFormat::IntelHex => crate::core::hex_import::export_intel_hex(contents, address_map).into_bytes(),
-        FileFormat::Binary => crate::core::hex_import::export_raw_binary(contents, address_map, 0x00),
-        FileFormat::Base64 => crate::core::format::export_base64(contents, address_map).into_bytes(),
-    }
+    format.encode_bytes(contents, address_map)
 }
 
 /// Result of opening or importing a document through DocumentService.
