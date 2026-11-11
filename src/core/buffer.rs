@@ -2,7 +2,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub enum BufferData {
+enum BufferData {
     Memory(Arc<Vec<u8>>),
     Mmap(Arc<memmap2::Mmap>),
 }
