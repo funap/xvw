@@ -43,54 +43,48 @@ pub struct Editor {
 
 /// Read-only session providing scoped queries into document bookmarks and visibility.
 pub struct BookmarkSessionRef<'a> {
-    document: &'a Arc<RwLock<Document>>,
+    guard: std::sync::RwLockReadGuard<'a, Document>,
 }
 
 impl<'a> BookmarkSessionRef<'a> {
     pub fn version(&self) -> u64 {
-        self.document.read().expect("document read lock").metadata.bookmarks.version()
+        self.guard.metadata.bookmarks.version()
     }
 
     pub fn snapshot(&self) -> Vec<BookmarkItem> {
-        self.document.read().expect("document read lock").metadata.bookmarks.snapshot()
+        self.guard.metadata.bookmarks.snapshot()
     }
 
     pub fn snapshot_arc(&self) -> Arc<Vec<BookmarkItem>> {
-        self.document.read().expect("document read lock").metadata.bookmarks.snapshot_arc()
+        self.guard.metadata.bookmarks.snapshot_arc()
     }
 
     pub fn by_id(&self, id: &str) -> Option<BookmarkItem> {
-        self.document.read().expect("document read lock").metadata.bookmarks.by_id_cloned(id)
+        self.guard.metadata.bookmarks.by_id_cloned(id)
     }
 
     pub fn custom_bookmarks_for_rendering(&self) -> Vec<(Range<usize>, RgbaColor)> {
-        self.document
-            .read()
-            .expect("document read lock")
-            .metadata
-            .bookmarks
-            .custom_bookmarks_for_rendering()
+        self.guard.metadata.bookmarks.custom_bookmarks_for_rendering()
     }
 
     pub fn to_yaml(&self) -> anyhow::Result<String> {
-        let doc = self.document.read().expect("document read lock");
-        doc.metadata.bookmarks.to_yaml(Some(doc.path()))
+        self.guard.metadata.bookmarks.to_yaml(Some(self.guard.path()))
     }
 
     pub fn is_color_hidden(&self, color: BookmarkColor) -> bool {
-        self.document.read().expect("document read lock").metadata.bookmarks.is_color_hidden(color)
+        self.guard.metadata.bookmarks.is_color_hidden(color)
     }
 
     pub fn is_id_hidden(&self, id: &str) -> bool {
-        self.document.read().expect("document read lock").metadata.bookmarks.is_id_hidden(id)
+        self.guard.metadata.bookmarks.is_id_hidden(id)
     }
 
     pub fn is_item_hidden(&self, item: &BookmarkItem) -> bool {
-        self.document.read().expect("document read lock").metadata.bookmarks.is_item_hidden(item)
+        self.guard.metadata.bookmarks.is_item_hidden(item)
     }
 
     pub fn is_hide_unbookmarked(&self) -> bool {
-        self.document.read().expect("document read lock").metadata.bookmarks.is_hide_unbookmarked()
+        self.guard.metadata.bookmarks.is_hide_unbookmarked()
     }
 }
 
@@ -253,34 +247,32 @@ impl<'a> BookmarkSessionMut<'a> {
 
 /// Read-only session providing scoped queries into custom layout rules (breaks, joins, empty lines).
 pub struct CustomLayoutSessionRef<'a> {
-    document: &'a Arc<RwLock<Document>>,
+    guard: std::sync::RwLockReadGuard<'a, Document>,
 }
 
 impl<'a> CustomLayoutSessionRef<'a> {
     pub fn has_break(&self, offset: usize) -> bool {
-        self.document.read().expect("document read lock").metadata.custom_layout.has_break(offset)
+        self.guard.metadata.custom_layout.has_break(offset)
     }
 
     pub fn breaks_count(&self) -> usize {
-        self.document.read().expect("document read lock").metadata.custom_layout.breaks_count()
+        self.guard.metadata.custom_layout.breaks_count()
     }
 
     pub fn breaks_snapshot(&self) -> BTreeSet<usize> {
-        self.document.read().expect("document read lock").metadata.custom_layout.breaks_snapshot()
+        self.guard.metadata.custom_layout.breaks_snapshot()
     }
 
     pub fn has_join(&self, offset: usize) -> bool {
-        self.document.read().expect("document read lock").metadata.custom_layout.has_join(offset)
+        self.guard.metadata.custom_layout.has_join(offset)
     }
 
     pub fn empty_lines_at(&self, offset: usize) -> usize {
-        self.document.read().expect("document read lock").metadata.custom_layout.empty_lines_at(offset)
+        self.guard.metadata.custom_layout.empty_lines_at(offset)
     }
 
     pub fn count(&self, folded_count: usize) -> usize {
-        self.document
-            .read()
-            .expect("document read lock")
+        self.guard
             .metadata
             .custom_layout
             .custom_layout_count(folded_count)
@@ -401,7 +393,9 @@ impl Editor {
 
     /// Read-only session for querying bookmarks and bookmark visibility.
     pub fn bookmarks(&self) -> BookmarkSessionRef<'_> {
-        BookmarkSessionRef { document: &self.document }
+        BookmarkSessionRef {
+            guard: self.document.read().expect("document read lock"),
+        }
     }
 
     /// Mutable session for bookmark mutations, automatically updating layout cache.
@@ -414,7 +408,9 @@ impl Editor {
 
     /// Read-only session for querying custom breaks, joins, and empty lines.
     pub fn custom_layout(&self) -> CustomLayoutSessionRef<'_> {
-        CustomLayoutSessionRef { document: &self.document }
+        CustomLayoutSessionRef {
+            guard: self.document.read().expect("document read lock"),
+        }
     }
 
     /// Mutable session for custom layout mutations, automatically updating layout cache.
