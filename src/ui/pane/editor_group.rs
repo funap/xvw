@@ -273,13 +273,10 @@ impl EditorGroup {
                     }
 
                     let _ = window.update(|window, cx| {
-                        let unchanged_since_save = document.read().map(|document| document.history.state_id() == state_id).unwrap_or(false);
-                        if unchanged_since_save {
-                            document.write().expect("document write lock").mark_as_saved();
-                            let _ = group.update(cx, |group, cx| {
-                                group.close_tab_now(tab_id, window, cx);
-                            });
-                        }
+                        let _ = service.finalize_save_state(&document, state_id, cx);
+                        let _ = group.update(cx, |group, cx| {
+                            group.close_tab_now(tab_id, window, cx);
+                        });
                     });
                 }
                 1 => {
