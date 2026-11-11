@@ -224,6 +224,7 @@ pub fn export_intel_hex(data: &[u8], address_map: &AddressMap) -> String {
 }
 
 /// Checks if the file path has an Intel HEX extension.
+#[allow(dead_code)]
 pub fn is_hex_extension(path: &Path) -> bool {
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
     matches!(ext.as_str(), "hex" | "ihex" | "ihx")

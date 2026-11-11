@@ -181,22 +181,7 @@ impl CursorModel {
 
     /// Adjusts cursor offset and selection boundaries after an edit.
     pub fn adjust_after_edit(&mut self, start: usize, old_len: usize, new_len: usize, total_size: usize) {
-        let old_end = start.saturating_add(old_len);
-        let shift = |offset: usize| {
-            if old_len == 0 {
-                if offset >= start { offset.saturating_add(new_len) } else { offset }
-            } else if offset <= start {
-                offset
-            } else if offset >= old_end {
-                if new_len >= old_len {
-                    offset.saturating_add(new_len - old_len)
-                } else {
-                    offset.saturating_sub(old_len - new_len)
-                }
-            } else {
-                start.saturating_add(new_len)
-            }
-        };
+        let shift = |offset: usize| crate::core::document::shift_offset_after_edit(offset, start, old_len, new_len);
 
         self.offset = shift(self.offset).min(total_size);
         self.selection = Selection::new(shift(self.selection.anchor()), shift(self.selection.active())).clamped(total_size);

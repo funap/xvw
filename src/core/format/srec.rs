@@ -337,6 +337,7 @@ pub fn export_motorola_srec(data: &[u8], address_map: &AddressMap) -> String {
 }
 
 /// Checks if the file path has a Motorola S-Record extension.
+#[allow(dead_code)]
 pub fn is_mot_extension(path: &Path) -> bool {
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
     matches!(ext.as_str(), "mot" | "srec" | "s19" | "s28" | "s37")

@@ -22,6 +22,7 @@ pub mod layout;
 pub mod new_file;
 pub mod offset_link;
 pub mod radix;
+pub mod scratch;
 pub mod search;
 pub mod selection;
 pub mod strings;

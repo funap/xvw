@@ -1,6 +1,6 @@
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
-use crate::core::search::{SearchLimit, SearchMode, find_occurrences_segmented, parse_hex_pattern, parse_text_pattern};
+use crate::core::search::{SearchMode, parse_hex_pattern, parse_text_pattern};
 use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -360,42 +360,22 @@ impl SearchPanel {
         };
 
         let task = cx.spawn(async move |this, cx| {
-            let buffer_for_search = buffer_data.clone();
-            let (offsets, is_truncated) = cx
-                .background_executor()
-                .spawn(async move {
-                    let pattern = match mode {
-                        SearchMode::Text => {
-                            if let Some(p) = parse_text_pattern(&query, encoding) {
-                                p
-                            } else {
-                                return (Vec::new(), false);
-                            }
-                        }
-                        SearchMode::Hex => {
-                            if let Some(p) = parse_hex_pattern(&query) {
-                                p
-                            } else {
-                                return (Vec::new(), false);
-                            }
-                        }
-                    };
-                    let raw_offsets = find_occurrences_segmented(
-                        buffer_for_search.data(),
-                        &pattern,
-                        SearchLimit::Count(MAX_SEARCH_RESULTS + 1),
-                        &segment_ranges,
-                        None,
-                    );
-                    let truncated = raw_offsets.len() > MAX_SEARCH_RESULTS;
-                    let capped_offsets = if truncated {
-                        raw_offsets.into_iter().take(MAX_SEARCH_RESULTS).collect()
-                    } else {
-                        raw_offsets
-                    };
-                    (capped_offsets, truncated)
-                })
-                .await;
+            let search_task = cx.update(|cx| {
+                let service = crate::app_state::AppState::global(cx).search_service.clone();
+                service.search_with_limit(
+                    crate::service::search_service::LimitedSearchQuery {
+                        buffer: buffer_data,
+                        query,
+                        mode,
+                        encoding,
+                        segments: segment_ranges,
+                        max_results: MAX_SEARCH_RESULTS,
+                    },
+                    cx,
+                )
+            });
+
+            let (offsets, is_truncated) = search_task.await;
 
             let items: Vec<SearchResultItem> = offsets.iter().map(|&offset| SearchResultItem { offset }).collect();
 

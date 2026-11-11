@@ -168,6 +168,7 @@ pub fn export_base64(data: &[u8], address_map: &AddressMap) -> String {
 }
 
 /// Checks if the file path has a Base64 extension (`.b64` or `.base64`).
+#[allow(dead_code)]
 pub fn is_base64_extension(path: &Path) -> bool {
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
     matches!(ext.as_str(), "b64" | "base64")

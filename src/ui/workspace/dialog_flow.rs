@@ -397,83 +397,34 @@ impl Workspace {
     ) {
         let view = cx.entity().clone();
         cx.spawn_in(window, async move |_, window| {
-            let content_res = tokio::fs::read_to_string(&path).await;
-            match content_res {
-                Ok(content) => {
-                    if format == Some(crate::core::format::FileFormat::Base64) {
-                        match crate::core::format::parse_base64(&content) {
-                            Ok(data) => {
-                                window
-                                    .update(|window, cx| {
-                                        view.update(cx, |this, cx| {
-                                            let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
-                                            let detected_format = crate::core::format::FileFormat::Base64;
-                                            if record_recent {
-                                                this.record_recent_file(canonical_path.clone(), Some(detected_format), cx);
-                                            }
-                                            let buffer = crate::core::buffer::Buffer::new(data);
-                                            let doc = crate::core::document::Document::new_read_only(canonical_path, buffer).with_format(detected_format);
-                                            let doc_arc = std::sync::Arc::new(std::sync::RwLock::new(doc));
-                                            this.open_editor_view(doc_arc, window, cx);
-                                            window.push_notification(notification::info("Imported Base64 successfully"), cx);
-                                        });
-                                    })
-                                    .ok();
-                            }
-                            Err(e) => {
-                                let _ = window.update(|window, cx| {
-                                    window.push_notification(notification::error(format!("Failed to parse Base64 file: {}", e)), cx);
-                                });
-                            }
-                        }
-                        return;
-                    }
+            let document_service = window.update(|_, cx| AppState::global(cx).document_service.clone()).ok();
+            let Some(document_service) = document_service else {
+                return;
+            };
 
-                    let parse_result = match format {
-                        Some(crate::core::format::FileFormat::IntelHex) => crate::core::hex_import::parse_intel_hex(&content),
-                        Some(crate::core::format::FileFormat::MotorolaSrec) => crate::core::hex_import::parse_motorola_srec(&content),
-                        _ => crate::core::hex_import::parse_hex_or_mot(&content),
-                    };
-
-                    match parse_result {
-                        Ok(import_result) => {
-                            window
-                                .update(|window, cx| {
-                                    view.update(cx, |this, cx| {
-                                        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
-                                        let detected_format = crate::core::format::FileFormat::from(import_result.format);
-                                        if record_recent {
-                                            this.record_recent_file(canonical_path.clone(), Some(detected_format), cx);
-                                        }
-                                        let buffer = crate::core::buffer::Buffer::new(import_result.data);
-                                        let doc = crate::core::document::Document::new_read_only(canonical_path, buffer)
-                                            .with_address_map(import_result.address_map.clone())
-                                            .with_format(detected_format);
-                                        let doc_arc = std::sync::Arc::new(std::sync::RwLock::new(doc));
-                                        this.open_editor_view(doc_arc, window, cx);
-                                        let gap_msg = if import_result.address_map.has_gaps() {
-                                            format!(" ({} segments with address gaps)", import_result.address_map.segments.len())
-                                        } else {
-                                            String::new()
-                                        };
-                                        window.push_notification(
-                                            notification::info(format!("Imported {} successfully{}", import_result.format.label(), gap_msg)),
-                                            cx,
-                                        );
-                                    });
-                                })
-                                .ok();
-                        }
-                        Err(e) => {
-                            let _ = window.update(|window, cx| {
-                                window.push_notification(notification::error(format!("Failed to parse hex/mot file: {}", e)), cx);
+            match document_service.open_or_import_file(path.clone(), format).await {
+                Ok(opened) => {
+                    window
+                        .update(|window, cx| {
+                            view.update(cx, |this, cx| {
+                                let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+                                if record_recent {
+                                    this.record_recent_file(canonical_path, Some(opened.detected_format), cx);
+                                }
+                                this.open_editor_view(opened.document, window, cx);
+                                let gap_msg = if opened.address_gaps_count > 0 {
+                                    format!(" ({} segments with address gaps)", opened.address_gaps_count)
+                                } else {
+                                    String::new()
+                                };
+                                window.push_notification(notification::info(format!("Imported {} successfully{gap_msg}", opened.format_label)), cx);
                             });
-                        }
-                    }
+                        })
+                        .ok();
                 }
                 Err(e) => {
                     let _ = window.update(|window, cx| {
-                        window.push_notification(notification::error(format!("Failed to read file: {}", e)), cx);
+                        window.push_notification(notification::error(format!("Failed to import file: {e}")), cx);
                     });
                 }
             }
@@ -571,13 +522,18 @@ impl Workspace {
                 path.set_extension(default_ext);
             }
 
-            let (contents, address_map) = {
-                let doc = document.read().expect("document read lock");
-                (doc.buffer.data().to_vec(), doc.address_map.clone())
+            let task_opt = window
+                .update(|_, cx| {
+                    let service = AppState::global(cx).document_service.clone();
+                    service.export_document_to_path(document, path.clone(), export_fn, cx)
+                })
+                .ok();
+
+            let Some(task) = task_opt else {
+                return;
             };
 
-            let bytes = export_fn(&contents, &address_map);
-            match tokio::fs::write(&path, bytes).await {
+            match task.await {
                 Ok(()) => {
                     let _ = window.update(|window, cx| {
                         window.push_notification(
@@ -824,10 +780,7 @@ impl Workspace {
                 workspace.update(cx, |_, cx| {
                     match result {
                         Ok(()) => {
-                            let should_mark_saved = document.read().map(|document| document.history.state_id() == state_id).unwrap_or(false);
-                            if should_mark_saved {
-                                document.write().expect("document write lock").mark_as_saved();
-                            }
+                            let _ = service.finalize_save_state(&document, state_id, cx);
                             let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
                             window.push_notification(notification::info(format!("Saved {}", file_name)), cx);
                             editor.update(cx, |_, cx| cx.notify());
@@ -899,9 +852,7 @@ impl Workspace {
                         return;
                     }
 
-                    let unchanged_since_save = document.read().map(|document| document.history.state_id() == state_id).unwrap_or(false);
-                    if unchanged_since_save {
-                        document.write().expect("document write lock").mark_as_saved();
+                    if service.finalize_save_state(&document, state_id, cx) {
                         workspace.set_editor_read_only(&editor, true, cx);
                     }
                 });
@@ -981,13 +932,7 @@ impl Workspace {
                 workspace.update(cx, |this, cx| {
                     match result {
                         Ok(()) => {
-                            let mut document_write = document.write().expect("document write lock");
-                            document_write.set_path(path.clone());
-                            if document_write.history.state_id() == state_id {
-                                document_write.mark_as_saved();
-                            }
-                            drop(document_write);
-                            service.notify_document_changed(&path, cx);
+                            service.finalize_save_as_state(&document, path.clone(), state_id, cx);
                             for group in this.pane_tree.read(cx).all_groups() {
                                 group.update(cx, |_, cx| cx.notify());
                             }
@@ -1239,16 +1184,7 @@ async fn save_single_dirty_document(
         }
 
         let _ = window.update(|_, cx| {
-            let mut doc_write = match doc.write() {
-                Ok(guard) => guard,
-                Err(p) => p.into_inner(),
-            };
-            doc_write.set_path(new_path.clone());
-            if doc_write.history.state_id() == state_id {
-                doc_write.mark_as_saved();
-            }
-            drop(doc_write);
-            service.notify_document_changed(&new_path, cx);
+            service.finalize_save_as_state(&doc, new_path.clone(), state_id, cx);
         });
     } else {
         let Some(save_task) = window.update(|_, cx| service.save_document(doc.clone(), cx)).ok() else {
@@ -1262,15 +1198,8 @@ async fn save_single_dirty_document(
             return Err(());
         }
 
-        let _ = window.update(|_, _| {
-            let unchanged_since_save = doc.read().map(|d| d.history.state_id() == state_id).unwrap_or(false);
-            if unchanged_since_save {
-                let mut doc_write = match doc.write() {
-                    Ok(guard) => guard,
-                    Err(p) => p.into_inner(),
-                };
-                doc_write.mark_as_saved();
-            }
+        let _ = window.update(|_, cx| {
+            let _ = service.finalize_save_state(&doc, state_id, cx);
         });
     }
 

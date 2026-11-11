@@ -38,6 +38,25 @@ impl DocumentMetadata {
     }
 }
 
+/// Pure helper calculating shifted offset after byte range replacement.
+#[inline]
+pub fn shift_offset_after_edit(offset: usize, start: usize, old_len: usize, new_len: usize) -> usize {
+    let old_end = start.saturating_add(old_len);
+    if old_len == 0 {
+        if offset >= start { offset.saturating_add(new_len) } else { offset }
+    } else if offset <= start {
+        offset
+    } else if offset >= old_end {
+        if new_len >= old_len {
+            offset.saturating_add(new_len - old_len)
+        } else {
+            offset.saturating_sub(old_len - new_len)
+        }
+    } else {
+        start.saturating_add(new_len)
+    }
+}
+
 /// Represents a document processing unit that bundles a file buffer, edit history, and metadata.
 pub struct Document {
     pub path: PathBuf,
@@ -221,22 +240,7 @@ impl Document {
 
     /// Adjusts layout breaks, joins, empty lines, and bookmarks after a byte range edit.
     pub fn adjust_metadata_after_edit(&mut self, start: usize, old_len: usize, new_len: usize) {
-        let old_end = start.saturating_add(old_len);
-        let shift = |offset: usize| {
-            if old_len == 0 {
-                if offset >= start { offset.saturating_add(new_len) } else { offset }
-            } else if offset <= start {
-                offset
-            } else if offset >= old_end {
-                if new_len >= old_len {
-                    offset.saturating_add(new_len - old_len)
-                } else {
-                    offset.saturating_sub(old_len - new_len)
-                }
-            } else {
-                start.saturating_add(new_len)
-            }
-        };
+        let shift = |offset: usize| shift_offset_after_edit(offset, start, old_len, new_len);
 
         self.bump_layout_version();
         self.metadata.custom_layout.adjust_after_edit(start, old_len, new_len, shift);

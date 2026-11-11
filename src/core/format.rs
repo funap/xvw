@@ -42,6 +42,73 @@ impl FileFormat {
         matches!(self, Self::IntelHex | Self::MotorolaSrec | Self::HexOrMot | Self::Base64)
     }
 
+    /// Returns the default file extension associated with this format.
+    #[allow(dead_code)]
+    pub fn default_extension(&self) -> &'static str {
+        match self {
+            Self::Binary => "bin",
+            Self::IntelHex => "hex",
+            Self::MotorolaSrec => "mot",
+            Self::HexOrMot => "hex",
+            Self::Base64 => "b64",
+        }
+    }
+
+    /// Attempts to determine the format from a file path or extension.
+    pub fn from_path(path: &std::path::Path) -> Option<Self> {
+        let ext = path.extension()?.to_str()?;
+        if ext.eq_ignore_ascii_case("hex") || ext.eq_ignore_ascii_case("ihex") {
+            Some(Self::IntelHex)
+        } else if ext.eq_ignore_ascii_case("mot")
+            || ext.eq_ignore_ascii_case("srec")
+            || ext.eq_ignore_ascii_case("s19")
+            || ext.eq_ignore_ascii_case("s28")
+            || ext.eq_ignore_ascii_case("s37")
+            || ext.eq_ignore_ascii_case("s")
+        {
+            Some(Self::MotorolaSrec)
+        } else if ext.eq_ignore_ascii_case("b64") || ext.eq_ignore_ascii_case("base64") {
+            Some(Self::Base64)
+        } else if ext.eq_ignore_ascii_case("bin") {
+            Some(Self::Binary)
+        } else {
+            None
+        }
+    }
+
+    /// Decodes textual content into binary data and address map according to format.
+    #[allow(dead_code)]
+    pub fn decode_text(&self, content: &str) -> anyhow::Result<(Vec<u8>, AddressMap, Self)> {
+        match self {
+            Self::Base64 => {
+                let data = parse_base64(content).map_err(|e| anyhow::anyhow!("Base64 parse error: {e}"))?;
+                Ok((data, AddressMap::default(), Self::Base64))
+            }
+            Self::IntelHex => {
+                let res = parse_intel_hex(content).map_err(|e| anyhow::anyhow!("Intel HEX parse error: {e}"))?;
+                Ok((res.data, res.address_map, Self::IntelHex))
+            }
+            Self::MotorolaSrec => {
+                let res = parse_motorola_srec(content).map_err(|e| anyhow::anyhow!("SREC parse error: {e}"))?;
+                Ok((res.data, res.address_map, Self::from(res.format)))
+            }
+            Self::HexOrMot | Self::Binary => {
+                let res = crate::core::hex_import::parse_hex_or_mot(content).map_err(|e| anyhow::anyhow!("Hex/SREC parse error: {e}"))?;
+                Ok((res.data, res.address_map, Self::from(res.format)))
+            }
+        }
+    }
+
+    /// Encodes binary data and address map into bytes for export.
+    pub fn encode_bytes(&self, data: &[u8], address_map: &AddressMap) -> Vec<u8> {
+        match self {
+            Self::MotorolaSrec | Self::HexOrMot => export_motorola_srec(data, address_map).into_bytes(),
+            Self::IntelHex => export_intel_hex(data, address_map).into_bytes(),
+            Self::Binary => export_raw_binary(data, address_map, 0x00),
+            Self::Base64 => export_base64(data, address_map).into_bytes(),
+        }
+    }
+
     /// Short badge label for displaying in lists (e.g. Recents).
     pub fn badge_text(&self) -> &'static str {
         match self {

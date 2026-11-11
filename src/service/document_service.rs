@@ -10,25 +10,20 @@ use std::sync::{Arc, RwLock};
 
 /// Determines the target file format for saving, preferring file extensions if applicable.
 pub fn determine_export_format(path: &Path, fallback_format: FileFormat) -> FileFormat {
-    if crate::core::hex_import::is_mot_extension(path) {
-        FileFormat::MotorolaSrec
-    } else if crate::core::hex_import::is_hex_extension(path) {
-        FileFormat::IntelHex
-    } else if crate::core::format::is_base64_extension(path) {
-        FileFormat::Base64
-    } else {
-        fallback_format
-    }
+    FileFormat::from_path(path).unwrap_or(fallback_format)
 }
 
 /// Serializes raw buffer bytes and address map into the bytes corresponding to the target format.
 pub fn export_document_bytes(contents: &[u8], address_map: &AddressMap, format: FileFormat) -> Vec<u8> {
-    match format {
-        FileFormat::MotorolaSrec | FileFormat::HexOrMot => crate::core::hex_import::export_motorola_srec(contents, address_map).into_bytes(),
-        FileFormat::IntelHex => crate::core::hex_import::export_intel_hex(contents, address_map).into_bytes(),
-        FileFormat::Binary => crate::core::hex_import::export_raw_binary(contents, address_map, 0x00),
-        FileFormat::Base64 => crate::core::format::export_base64(contents, address_map).into_bytes(),
-    }
+    format.encode_bytes(contents, address_map)
+}
+
+/// Result of opening or importing a document through DocumentService.
+pub struct OpenedDocument {
+    pub document: Arc<RwLock<Document>>,
+    pub detected_format: FileFormat,
+    pub format_label: &'static str,
+    pub address_gaps_count: usize,
 }
 
 /// A service for managing file buffers, documents, and synchronization across open views.
@@ -89,6 +84,55 @@ impl DocumentService {
         }
     }
 
+    /// Updates the document cache key when a document is renamed / saved-as.
+    pub fn retarget_document_cache(&self, old_path: &Path, new_path: PathBuf) {
+        let old_path = old_path.canonicalize().unwrap_or_else(|_| old_path.to_path_buf());
+        let new_path = new_path.canonicalize().unwrap_or(new_path);
+        if old_path == new_path {
+            return;
+        }
+
+        let mut documents = self.documents.write().expect("documents write lock");
+        if let Some(doc) = documents.remove(&old_path) {
+            documents.insert(new_path.clone(), doc);
+        }
+
+        let mut editors = self.editors.write().expect("editors write lock");
+        if let Some(list) = editors.remove(&old_path) {
+            editors.insert(new_path, list);
+        }
+    }
+
+    /// Finalizes saving a document by verifying that history state has not changed,
+    /// marking it as saved, and notifying observers.
+    pub fn finalize_save_state(&self, document: &Arc<RwLock<Document>>, expected_state_id: usize, cx: &mut App) -> bool {
+        let should_mark = document.read().map(|doc| doc.history.state_id() == expected_state_id).unwrap_or(false);
+        if should_mark {
+            if let Ok(mut doc_write) = document.write() {
+                doc_write.mark_as_saved();
+            }
+            let path = document.read().map(|doc| doc.path().to_path_buf()).unwrap_or_default();
+            self.notify_document_changed(&path, cx);
+        }
+        should_mark
+    }
+
+    /// Finalizes retargeting a document path (Save As), updating cache keys,
+    /// updating document path, marking as saved if state matches, and notifying observers.
+    pub fn finalize_save_as_state(&self, document: &Arc<RwLock<Document>>, new_path: PathBuf, expected_state_id: usize, cx: &mut App) {
+        let old_path = document.read().map(|doc| doc.path().to_path_buf()).unwrap_or_default();
+
+        if let Ok(mut doc_write) = document.write() {
+            doc_write.set_path(new_path.clone());
+            if doc_write.history.state_id() == expected_state_id {
+                doc_write.mark_as_saved();
+            }
+        }
+
+        self.retarget_document_cache(&old_path, new_path.clone());
+        self.notify_document_changed(&new_path, cx);
+    }
+
     /// Notifies all active editors viewing the document at `path` to invalidate layout and repaint.
     pub fn notify_document_changed(&self, path: &Path, cx: &mut App) {
         let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -115,40 +159,110 @@ impl DocumentService {
     /// Otherwise, it reads the file from disk, adds it to the cache, and returns it.
     /// This operation is thread-safe.
     pub async fn open_file(&self, path: PathBuf) -> anyhow::Result<Arc<RwLock<Document>>> {
+        let opened = self.open_or_import_file(path, None).await?;
+        Ok(opened.document)
+    }
+
+    /// Opens or imports a file asynchronously according to optional format instructions.
+    /// Caches the resulting document in `documents`.
+    pub async fn open_or_import_file(&self, path: PathBuf, format_hint: Option<FileFormat>) -> anyhow::Result<OpenedDocument> {
         let path = path.canonicalize().unwrap_or(path);
-        // First, check if the document is already in the cache with a read lock.
+
         if let Some(document) = self.documents.read().expect("documents read lock").get(&path) {
-            return Ok(document.clone());
+            let doc_read = document.read().expect("document read lock");
+            let detected_format = doc_read.format;
+            let format_label = match detected_format {
+                FileFormat::Base64 => "Base64",
+                FileFormat::IntelHex => "Intel HEX",
+                FileFormat::MotorolaSrec => "Motorola S-Record",
+                FileFormat::HexOrMot => "Intel HEX or Motorola S-Record",
+                FileFormat::Binary => "Binary",
+            };
+            let address_gaps_count = if doc_read.address_map.has_gaps() {
+                doc_read.address_map.segments.len()
+            } else {
+                0
+            };
+            return Ok(OpenedDocument {
+                document: document.clone(),
+                detected_format,
+                format_label,
+                address_gaps_count,
+            });
         }
 
-        // If not in the cache, read the file using memory mapping without holding any lock.
+        let is_import = format_hint.map(|f| f.is_import()).unwrap_or(false);
         let path_clone = path.clone();
-        let buffer = tokio::task::spawn_blocking(move || -> anyhow::Result<Buffer> {
-            let file = std::fs::File::open(&path_clone)?;
-            if file.metadata()?.len() == 0 {
-                return Ok(Buffer::empty());
-            }
-            // SAFETY: Memory mapping the opened file is safe as long as the file is not
-            // concurrently truncated or modified outside this process. Buffer encapsulates
-            // read-only access to this memory mapping.
-            let mmap = unsafe { memmap2::MmapOptions::new().map(&file)? };
-            Ok(Buffer::from_mmap(mmap))
-        })
-        .await??;
-        let mut doc = Document::new_read_only(path.clone(), buffer);
-        doc.format = crate::core::format::FileFormat::Binary;
+
+        let (doc, detected_format, format_label, address_gaps_count) = if is_import {
+            tokio::task::spawn_blocking(move || -> anyhow::Result<(Document, FileFormat, &'static str, usize)> {
+                let content = std::fs::read_to_string(&path_clone)?;
+                if format_hint == Some(FileFormat::Base64) {
+                    let data = crate::core::format::parse_base64(&content).map_err(|e| anyhow::anyhow!("Failed to parse Base64 file: {e}"))?;
+                    let buffer = Buffer::new(data);
+                    let doc = Document::new_read_only(path_clone, buffer).with_format(FileFormat::Base64);
+                    Ok((doc, FileFormat::Base64, "Base64", 0))
+                } else {
+                    let parse_result = match format_hint {
+                        Some(FileFormat::IntelHex) => crate::core::hex_import::parse_intel_hex(&content),
+                        Some(FileFormat::MotorolaSrec) => crate::core::hex_import::parse_motorola_srec(&content),
+                        _ => crate::core::hex_import::parse_hex_or_mot(&content),
+                    }
+                    .map_err(|e| anyhow::anyhow!("Failed to parse hex/mot file: {e}"))?;
+
+                    let format = FileFormat::from(parse_result.format);
+                    let format_label = parse_result.format.label();
+                    let gaps = if parse_result.address_map.has_gaps() {
+                        parse_result.address_map.segments.len()
+                    } else {
+                        0
+                    };
+                    let buffer = Buffer::new(parse_result.data);
+                    let doc = Document::new_read_only(path_clone, buffer)
+                        .with_address_map(parse_result.address_map)
+                        .with_format(format);
+                    Ok((doc, format, format_label, gaps))
+                }
+            })
+            .await??
+        } else {
+            tokio::task::spawn_blocking(move || -> anyhow::Result<(Document, FileFormat, &'static str, usize)> {
+                let file = std::fs::File::open(&path_clone)?;
+                let buffer = if file.metadata()?.len() == 0 {
+                    Buffer::empty()
+                } else {
+                    // SAFETY: Memory mapping the opened file is safe as long as the file is not
+                    // concurrently truncated or modified outside this process. Buffer encapsulates
+                    // read-only access to this memory mapping.
+                    let mmap = unsafe { memmap2::MmapOptions::new().map(&file)? };
+                    Buffer::from_mmap(mmap)
+                };
+                let mut doc = Document::new_read_only(path_clone, buffer);
+                doc.format = FileFormat::Binary;
+                Ok((doc, FileFormat::Binary, "Binary", 0))
+            })
+            .await??
+        };
+
         let new_document = Arc::new(RwLock::new(doc));
 
-        // Acquire a write lock to insert the new document into the cache.
         let mut documents = self.documents.write().expect("documents write lock");
-
-        // Before inserting, check again if another thread has inserted it in the meantime.
-        if let Some(document) = documents.get(&path) {
-            return Ok(document.clone());
+        if let Some(existing) = documents.get(&path) {
+            return Ok(OpenedDocument {
+                document: existing.clone(),
+                detected_format,
+                format_label,
+                address_gaps_count,
+            });
         }
 
         documents.insert(path, new_document.clone());
-        Ok(new_document)
+        Ok(OpenedDocument {
+            document: new_document,
+            detected_format,
+            format_label,
+            address_gaps_count,
+        })
     }
 
     /// Closes a file by removing it from the document cache.
@@ -192,6 +306,25 @@ impl DocumentService {
         cx.background_executor().spawn(async move {
             let bytes_to_write = export_document_bytes(buffer.data(), &address_map, format);
             std::fs::write(path, bytes_to_write)?;
+            Ok(())
+        })
+    }
+
+    /// Exports raw bytes with custom formatting function to target path on background executor.
+    pub fn export_document_to_path(
+        &self,
+        document: Arc<RwLock<Document>>,
+        path: PathBuf,
+        export_fn: fn(&[u8], &AddressMap) -> Vec<u8>,
+        cx: &App,
+    ) -> Task<anyhow::Result<()>> {
+        let (contents, address_map) = {
+            let doc = document.read().expect("document read lock");
+            (doc.buffer.data().to_vec(), doc.address_map.clone())
+        };
+        cx.background_executor().spawn(async move {
+            let bytes = export_fn(&contents, &address_map);
+            std::fs::write(path, bytes)?;
             Ok(())
         })
     }
@@ -362,5 +495,41 @@ mod tests {
         let b64_str = String::from_utf8(b64).expect("valid utf-8 base64");
         let decoded = crate::core::format::parse_base64(&b64_str).expect("decode base64");
         assert_eq!(decoded, contents);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn open_or_import_file_caches_imported_hex() {
+        let hex_content = ":020000040000FA\n:0400000001020304F2\n:00000001FF\n";
+        let file = TestFile::create("import_cache.hex", hex_content.as_bytes());
+
+        let service = DocumentService::new();
+        let opened = service
+            .open_or_import_file(file.path().to_path_buf(), Some(FileFormat::IntelHex))
+            .await
+            .expect("import hex file");
+
+        assert_eq!(opened.detected_format, FileFormat::IntelHex);
+        assert_eq!(opened.document.read().unwrap().buffer.data(), &[1, 2, 3, 4]);
+
+        let second = service
+            .open_or_import_file(file.path().to_path_buf(), Some(FileFormat::IntelHex))
+            .await
+            .expect("re-open imported hex file");
+        assert!(Arc::ptr_eq(&opened.document, &second.document));
+    }
+
+    #[test]
+    fn test_retarget_document_cache_updates_keys() {
+        let service = DocumentService::new();
+        let old_path = PathBuf::from("/tmp/xvw_test_old.bin");
+        let new_path = PathBuf::from("/tmp/xvw_test_new.bin");
+        let doc = Arc::new(RwLock::new(Document::new(old_path.clone(), Buffer::new(vec![1, 2, 3]))));
+
+        service.documents.write().unwrap().insert(old_path.clone(), doc.clone());
+        assert!(service.documents.read().unwrap().contains_key(&old_path));
+
+        service.retarget_document_cache(&old_path, new_path.clone());
+        assert!(!service.documents.read().unwrap().contains_key(&old_path));
+        assert!(service.documents.read().unwrap().contains_key(&new_path));
     }
 }

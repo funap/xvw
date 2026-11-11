@@ -97,6 +97,9 @@ impl InsertCharCommand {
 
 impl Command for InsertCharCommand {
     fn execute(&mut self, doc: &mut Document) -> Option<EditDelta> {
+        if doc.is_read_only() {
+            return None;
+        }
         if self.position <= doc.buffer.len() {
             doc.buffer.insert(self.position, self.c);
             doc.address_map.adjust_after_edit(self.position, 0, 1);
@@ -114,6 +117,9 @@ impl Command for InsertCharCommand {
     }
 
     fn undo(&mut self, doc: &mut Document) -> Option<EditDelta> {
+        if doc.is_read_only() {
+            return None;
+        }
         if self.inserted && self.position < doc.buffer.len() {
             if doc.buffer.remove(self.position).is_some() {
                 doc.address_map.adjust_after_edit(self.position, 1, 0);
@@ -150,6 +156,9 @@ impl DeleteCharCommand {
 
 impl Command for DeleteCharCommand {
     fn execute(&mut self, doc: &mut Document) -> Option<EditDelta> {
+        if doc.is_read_only() {
+            return None;
+        }
         if self.position < doc.buffer.len() {
             let ch = doc.buffer.remove(self.position);
             if let Some(c) = ch {
@@ -170,6 +179,9 @@ impl Command for DeleteCharCommand {
     }
 
     fn undo(&mut self, doc: &mut Document) -> Option<EditDelta> {
+        if doc.is_read_only() {
+            return None;
+        }
         if let Some(c) = self.deleted_char {
             if self.position <= doc.buffer.len() {
                 doc.buffer.insert(self.position, c);
