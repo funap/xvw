@@ -191,8 +191,6 @@ impl ByteColoring {
     }
 }
 
-impl gpui_kit::Global for ByteColoring {}
-
 /// Semantic byte classification for category-based coloring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ByteCategory {
@@ -302,8 +300,6 @@ impl Default for ByteCategoryColors {
         ByteColoring::Uniform.colors().expect("Uniform preset has explicit colors")
     }
 }
-
-impl gpui_kit::Global for ByteCategoryColors {}
 
 impl ByteCategoryColors {
     /// Resets all category colors to the default (`ByteColoring::Uniform`) mapping.
