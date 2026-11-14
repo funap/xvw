@@ -1,13 +1,53 @@
 use crate::core::document::Document;
 use crate::core::layout::{BYTES_PER_ROW, LayoutSegment, LineMap, SegmentKind, SparseLineMap};
+use crate::core::structure::ParseResult;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LayoutCacheKey {
+    layout_version: usize,
+    bookmarks_version: u64,
+    bytes_per_row: usize,
+    total_size: usize,
+    show_inline_structure_view: bool,
+    is_parsing_structure: bool,
+    parse_result_identity: Option<(usize, usize, usize)>,
+    collapsed_struct_ids: HashSet<String>,
+}
+
+impl LayoutCacheKey {
+    fn parse_identity(parse_result: &Option<Arc<ParseResult>>) -> Option<(usize, usize, usize)> {
+        parse_result
+            .as_ref()
+            .map(|res| (Arc::as_ptr(res) as usize, res.total_parsed_bytes, res.fields.len()))
+    }
+
+    fn matches(
+        &self,
+        doc: &Document,
+        bytes_per_row: usize,
+        show_inline_structure_view: bool,
+        is_parsing_structure: bool,
+        collapsed_struct_ids: &HashSet<String>,
+    ) -> bool {
+        self.layout_version == doc.layout_version()
+            && self.bookmarks_version == doc.metadata.bookmarks.version()
+            && self.bytes_per_row == bytes_per_row
+            && self.total_size == doc.buffer.len()
+            && self.show_inline_structure_view == show_inline_structure_view
+            && self.is_parsing_structure == is_parsing_structure
+            && self.parse_result_identity == Self::parse_identity(&doc.metadata.parse_result)
+            && &self.collapsed_struct_ids == collapsed_struct_ids
+    }
+}
 
 /// Caches and computes layout mapping from buffer offsets to visual lines.
 #[derive(Debug)]
 pub struct LayoutEngine {
     cached_line_map: RefCell<Option<LineMap>>,
+    cached_key: RefCell<Option<LayoutCacheKey>>,
     cached_layout_version: Cell<usize>,
     bytes_per_row: Cell<usize>,
 }
@@ -23,6 +63,7 @@ impl LayoutEngine {
     pub fn new(initial_layout_version: usize) -> Self {
         Self {
             cached_line_map: RefCell::new(None),
+            cached_key: RefCell::new(None),
             cached_layout_version: Cell::new(initial_layout_version),
             bytes_per_row: Cell::new(BYTES_PER_ROW),
         }
@@ -32,6 +73,7 @@ impl LayoutEngine {
     pub fn with_bytes_per_row(initial_layout_version: usize, bytes_per_row: usize) -> Self {
         Self {
             cached_line_map: RefCell::new(None),
+            cached_key: RefCell::new(None),
             cached_layout_version: Cell::new(initial_layout_version),
             bytes_per_row: Cell::new(bytes_per_row.max(1)),
         }
@@ -54,6 +96,7 @@ impl LayoutEngine {
     /// Invalidates the cached line map.
     pub fn invalidate(&self) {
         self.cached_line_map.replace(None);
+        self.cached_key.replace(None);
     }
 
     /// Returns the active layout version cached by this engine.
@@ -138,40 +181,44 @@ impl LayoutEngine {
     /// Computes or retrieves the cached line mapping for `doc`.
     pub fn line_starts(&self, doc: &Document, show_inline_structure_view: bool, is_parsing_structure: bool, collapsed_struct_ids: &HashSet<String>) -> LineMap {
         let current_layout_version = doc.layout_version();
-        if self.cached_layout_version.get() != current_layout_version {
-            self.cached_line_map.replace(None);
-            self.cached_layout_version.set(current_layout_version);
-        }
+        let bytes_per_row = self.bytes_per_row.get();
+        let total_size = doc.buffer.len();
 
-        if let Some(cached) = self.cached_line_map.borrow().as_ref() {
+        let cache_hit = self
+            .cached_key
+            .borrow()
+            .as_ref()
+            .is_some_and(|key| key.matches(doc, bytes_per_row, show_inline_structure_view, is_parsing_structure, collapsed_struct_ids));
+
+        if cache_hit && let Some(cached) = self.cached_line_map.borrow().as_ref() {
             return cached.clone();
         }
 
-        let bytes_per_row = self.bytes_per_row.get();
+        self.cached_line_map.replace(None);
+        self.cached_key.replace(None);
+        self.cached_layout_version.set(current_layout_version);
+
         let meta = &doc.metadata;
 
         // The parser prepares the default expanded structure layout before it
         // publishes the 100% result. Reuse it directly on the UI thread; the
         // dynamic builder below remains the compatibility path for custom
         // joins/breaks and collapsed structures.
-        if show_inline_structure_view
+        let map = if show_inline_structure_view
             && !is_parsing_structure
             && collapsed_struct_ids.is_empty()
             && meta.custom_layout.is_empty()
             && meta.bookmarks.hidden_colors.is_empty()
             && meta.bookmarks.hidden_ids.is_empty()
+            && !meta.bookmarks.hide_unbookmarked
             && !doc.address_map.has_gaps()
             && let Some(parse_res) = &meta.parse_result
             && let Some(line_map) = &parse_res.structure_line_map
             && line_map.bytes_per_row() == bytes_per_row
+            && line_map.total_size() == total_size
         {
-            let map = (**line_map).clone();
-            *self.cached_line_map.borrow_mut() = Some(map.clone());
-            return map;
-        }
-
-        let total_size = doc.buffer.len();
-        let map = if !Self::has_custom_layout(doc, show_inline_structure_view, is_parsing_structure) {
+            (**line_map).clone()
+        } else if !Self::has_custom_layout(doc, show_inline_structure_view, is_parsing_structure) {
             LineMap::Standard { total_size, bytes_per_row }
         } else {
             let mut folded_regions = (*doc.computed_folded_regions()).clone();
@@ -218,8 +265,12 @@ impl LayoutEngine {
                 break_events.extend(segment_breaks.iter().copied());
                 break_events.extend(empty_line_counts.keys().copied());
                 for (&s, &e) in folded_regions.iter() {
-                    break_events.push(s);
-                    break_events.push(e);
+                    let s = s.min(total_size);
+                    let e = e.min(total_size);
+                    if s < e {
+                        break_events.push(s);
+                        break_events.push(e);
+                    }
                 }
                 break_events.extend_from_slice(&field_breaks);
                 break_events.sort_unstable();
@@ -236,7 +287,8 @@ impl LayoutEngine {
 
                 while current < total_size {
                     // Check if current is a fold start
-                    if let Some(&fold_end) = folded_regions.get(&current) {
+                    if let Some(&raw_fold_end) = folded_regions.get(&current) {
+                        let fold_end = raw_fold_end.min(total_size);
                         if fold_end <= current {
                             current += 1;
                             continue;
@@ -315,7 +367,8 @@ impl LayoutEngine {
 
                     while current < total_size {
                         // If current is a fold start, finish this segment if not empty, or handle fold
-                        if let Some(&fold_end) = folded_regions.get(&current) {
+                        if let Some(&raw_fold_end) = folded_regions.get(&current) {
+                            let fold_end = raw_fold_end.min(total_size);
                             if !starts.is_empty() {
                                 break;
                             }
@@ -436,6 +489,16 @@ impl LayoutEngine {
             }))
         };
 
+        *self.cached_key.borrow_mut() = Some(LayoutCacheKey {
+            layout_version: current_layout_version,
+            bookmarks_version: doc.metadata.bookmarks.version(),
+            bytes_per_row,
+            total_size,
+            show_inline_structure_view,
+            is_parsing_structure,
+            parse_result_identity: LayoutCacheKey::parse_identity(&doc.metadata.parse_result),
+            collapsed_struct_ids: collapsed_struct_ids.clone(),
+        });
         *self.cached_line_map.borrow_mut() = Some(map.clone());
         map
     }
@@ -492,5 +555,110 @@ mod tests {
         assert_eq!(map2.get(0), Some(0));
         assert_eq!(map2.get(1), Some(24));
         assert_eq!(map2.bytes_per_row(), 24);
+    }
+
+    #[test]
+    fn test_layout_engine_fast_path_respects_hide_unbookmarked() {
+        use crate::core::bookmark::{BookmarkColor, BookmarkItem};
+        use crate::core::color::RgbaColor;
+        use crate::core::structure::{FieldValue, ParsedField};
+
+        let mut doc = Document::new(PathBuf::from("test.bin"), Buffer::new(vec![0; 64]));
+        let field = ParsedField {
+            id: "magic".into(),
+            field_type: "u4be".into(),
+            offset: 0,
+            size: 4,
+            value: FieldValue::U32(0),
+            color: RgbaColor::default(),
+            description: None,
+            children: Vec::new(),
+            enum_label: None,
+            is_instance: false,
+        };
+        let parse_res = ParseResult::new("test".into(), vec![field], 4, Vec::new()).with_structure_line_map(64);
+        doc.metadata.parse_result = Some(Arc::new(parse_res));
+
+        doc.metadata.bookmarks.add(BookmarkItem::new(16, 16, BookmarkColor::Red, "Marked"), 64);
+        doc.metadata.bookmarks.set_hide_unbookmarked(true);
+
+        let engine = LayoutEngine::new(doc.layout_version());
+        let map = engine.line_starts(&doc, true, false, &HashSet::new());
+
+        // Unbookmarked gaps [0..16) and [32..64) must remain folded even when structure_line_map exists.
+        assert_eq!(map, vec![0, 16, 32]);
+    }
+
+    #[test]
+    fn test_layout_engine_cache_tracks_structure_and_bookmark_inputs() {
+        use crate::core::bookmark::{BookmarkColor, BookmarkItem};
+        use crate::core::color::RgbaColor;
+        use crate::core::structure::{FieldValue, ParsedField};
+
+        let mut doc = Document::new(PathBuf::from("test.bin"), Buffer::new(vec![0; 48]));
+        let header = ParsedField {
+            id: "header".into(),
+            field_type: "header_t".into(),
+            offset: 0,
+            size: 16,
+            value: FieldValue::Struct,
+            color: RgbaColor::default(),
+            description: None,
+            children: vec![
+                ParsedField {
+                    id: "magic".into(),
+                    field_type: "u8".into(),
+                    offset: 0,
+                    size: 8,
+                    value: FieldValue::U64(1),
+                    color: RgbaColor::default(),
+                    description: None,
+                    children: Vec::new(),
+                    enum_label: None,
+                    is_instance: false,
+                },
+                ParsedField {
+                    id: "flags".into(),
+                    field_type: "u8".into(),
+                    offset: 8,
+                    size: 8,
+                    value: FieldValue::U64(2),
+                    color: RgbaColor::default(),
+                    description: None,
+                    children: Vec::new(),
+                    enum_label: None,
+                    is_instance: false,
+                },
+            ],
+            enum_label: None,
+            is_instance: false,
+        };
+        let parse_res = ParseResult::new("test".into(), vec![header], 16, Vec::new()).with_structure_line_map(48);
+        doc.metadata.parse_result = Some(Arc::new(parse_res));
+
+        let engine = LayoutEngine::new(doc.layout_version());
+        let mut collapsed = HashSet::new();
+
+        // Standard layout when inline structure view is off
+        assert_eq!(engine.line_starts(&doc, false, false, &collapsed), vec![0, 16, 32]);
+
+        // Enabling inline structure view must invalidate cache automatically
+        assert_eq!(engine.line_starts(&doc, true, false, &collapsed), vec![0, 0, 8, 16, 32]);
+
+        // Switching into active parse state must fall back to standard layout automatically
+        assert_eq!(engine.line_starts(&doc, true, true, &collapsed), vec![0, 16, 32]);
+
+        // Collapsing a structure ID must invalidate cache without manual engine.invalidate()
+        collapsed.insert("0:0:header".to_string());
+        assert_eq!(engine.line_starts(&doc, true, false, &collapsed), vec![0, 16, 32]);
+
+        // Bookmark state changes track bookmarks.version() even if layout_version wasn't bumped directly
+        doc.metadata.bookmarks.add(BookmarkItem::new(32, 16, BookmarkColor::Blue, "Tail"), 48);
+        doc.metadata.bookmarks.hide_color(BookmarkColor::Blue);
+        assert_eq!(engine.line_starts(&doc, false, false, &HashSet::new()), vec![0, 16, 32]);
+        assert!(engine.line_starts(&doc, false, false, &HashSet::new()).len() == 3);
+
+        doc.metadata.bookmarks.set_hide_unbookmarked(true);
+        assert_eq!(engine.line_starts(&doc, false, false, &HashSet::new()), vec![0, 32]);
     }
 }

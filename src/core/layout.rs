@@ -248,6 +248,13 @@ impl LineMap {
             LineMap::Sparse(sparse) => sparse.bytes_per_row,
         }
     }
+
+    pub fn total_size(&self) -> usize {
+        match self {
+            LineMap::Standard { total_size, .. } => *total_size,
+            LineMap::Sparse(sparse) => sparse.total_size,
+        }
+    }
 }
 
 /// Builds a line map when the layout and break events are already sorted and

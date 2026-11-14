@@ -2396,3 +2396,194 @@ fn test_custom_layout_remove_breaks_in_range() {
     assert!(!editor.custom_layout().has_break(30));
     assert_eq!(editor.line_starts(), vec![0, 16, 32, 48]);
 }
+
+#[test]
+fn test_auto_unfold_structure_on_navigation_and_search() {
+    use crate::core::color::RgbaColor;
+    use crate::core::structure::{FieldValue, ParsedField};
+
+    let mut content = vec![0u8; 64];
+    content[28..34].copy_from_slice(b"NEEDLE");
+    let mut editor = create_editor_with_content(&content);
+
+    let make_leaf = |id: &str, offset: usize, size: usize| ParsedField {
+        id: id.into(),
+        field_type: "u1".into(),
+        offset,
+        size,
+        value: FieldValue::U8(0),
+        color: RgbaColor::default(),
+        description: None,
+        children: Vec::new(),
+        enum_label: None,
+        is_instance: false,
+    };
+
+    let inner = ParsedField {
+        id: "inner".into(),
+        field_type: "inner_t".into(),
+        offset: 24,
+        size: 16,
+        value: FieldValue::Struct,
+        color: RgbaColor::default(),
+        description: None,
+        children: vec![make_leaf("payload", 24, 16)],
+        enum_label: None,
+        is_instance: false,
+    };
+    let outer = ParsedField {
+        id: "outer".into(),
+        field_type: "outer_t".into(),
+        offset: 16,
+        size: 32,
+        value: FieldValue::Struct,
+        color: RgbaColor::default(),
+        description: None,
+        children: vec![make_leaf("prefix", 16, 8), inner],
+        enum_label: None,
+        is_instance: false,
+    };
+    let tail = ParsedField {
+        id: "tail".into(),
+        field_type: "tail_t".into(),
+        offset: 48,
+        size: 16,
+        value: FieldValue::Struct,
+        color: RgbaColor::default(),
+        description: None,
+        children: vec![make_leaf("tail_bytes", 48, 16)],
+        enum_label: None,
+        is_instance: false,
+    };
+
+    editor.set_parse_result(ParseResult::new("test".into(), vec![outer, tail], 64, Vec::new()));
+    editor.toggle_struct_collapsed("16:0:outer");
+    editor.toggle_struct_collapsed("24:1:inner");
+    editor.toggle_struct_collapsed("48:0:tail");
+
+    assert!(editor.is_folded(28));
+    assert!(editor.is_folded(52));
+
+    // Jumping directly to offset 28 must unfold both outer and inner while preserving unrelated tail fold.
+    editor.go_to_offset(28, false);
+    assert_eq!(editor.cursor.offset, 28);
+    assert!(!editor.is_folded(28));
+    assert!(!editor.structure.is_collapsed("16:0:outer"));
+    assert!(!editor.structure.is_collapsed("24:1:inner"));
+    assert!(editor.structure.is_collapsed("48:0:tail"));
+    assert!(editor.is_folded(52));
+
+    // Line map must expose the newly unfolded interior break at 24 and trailing outer bytes at 40.
+    let lines = editor.line_starts();
+    assert_eq!(lines, vec![0, 16, 16, 24, 24, 40, 48]);
+
+    // Navigating via search into a re-collapsed structure must unfold it too.
+    editor.toggle_struct_collapsed("16:0:outer");
+    editor.toggle_struct_collapsed("24:1:inner");
+    editor.go_to_beginning();
+    editor
+        .search_state_mut()
+        .set_query_and_mode("NEEDLE".to_string(), crate::core::search::SearchMode::Text);
+    assert_eq!(editor.find_and_navigate_next(), Some(28));
+    assert!(!editor.is_folded(28));
+    assert!(editor.is_folded(52));
+
+    // Navigating via range selection into [50..54) unfolds tail as well.
+    editor.go_to_range(50..54);
+    assert!(!editor.is_folded(52));
+}
+
+#[test]
+fn test_overlapping_struct_and_bookmark_folds_keep_line_starts_consistent() {
+    use crate::core::bookmark::{BookmarkColor, BookmarkItem};
+    use crate::core::color::RgbaColor;
+    use crate::core::structure::{FieldValue, ParsedField};
+
+    let mut editor = create_editor_with_content(&[0u8; 64]);
+    let make_struct = |id: &str, offset: usize, size: usize| ParsedField {
+        id: id.into(),
+        field_type: "blk".into(),
+        offset,
+        size,
+        value: FieldValue::Struct,
+        color: RgbaColor::default(),
+        description: None,
+        children: vec![ParsedField {
+            id: "data".into(),
+            field_type: "u1".into(),
+            offset,
+            size,
+            value: FieldValue::U8(0),
+            color: RgbaColor::default(),
+            description: None,
+            children: Vec::new(),
+            enum_label: None,
+            is_instance: false,
+        }],
+        enum_label: None,
+        is_instance: false,
+    };
+
+    // Bookmark [16..40), same-start shorter struct [16..28), and trailing overlapping struct [36..52).
+    // Visible bookmark [52..64) keeps tail visible while [36..52) bridges Red [16..40) and unbookmarked [40..52).
+    editor.set_parse_result(ParseResult::new(
+        "overlap".into(),
+        vec![make_struct("short", 16, 12), make_struct("tail_overlap", 36, 16)],
+        64,
+        Vec::new(),
+    ));
+    editor.bookmarks_mut().add(BookmarkItem::new(16, 24, BookmarkColor::Red, "Marked"));
+    editor.bookmarks_mut().add(BookmarkItem::new(52, 12, BookmarkColor::Green, "VisibleTail"));
+    editor.bookmarks_mut().hide_color(BookmarkColor::Red);
+    editor.bookmarks_mut().set_hide_unbookmarked(true);
+    editor.toggle_struct_collapsed("16:0:short");
+    editor.toggle_struct_collapsed("36:0:tail_overlap");
+
+    let folds = editor.computed_folded_regions();
+    assert_eq!(*folds, [(0, 16), (16, 52)].into_iter().collect());
+
+    let lines = editor.line_starts();
+    assert_eq!(lines, vec![0, 16, 52]);
+}
+
+#[test]
+fn test_unfold_single_unbookmarked_gap_preserves_other_gaps_in_editor() {
+    use crate::core::bookmark::{BookmarkColor, BookmarkItem};
+
+    let mut editor = create_editor_with_content(&[0u8; 112]);
+    editor.bookmarks_mut().add(BookmarkItem::new(16, 16, BookmarkColor::Green, "G1"));
+    editor.bookmarks_mut().add(BookmarkItem::new(64, 16, BookmarkColor::Blue, "B1"));
+    editor.bookmarks_mut().set_hide_unbookmarked(true);
+
+    // Initially gaps [0..16), [32..64), [80..112) are all folded.
+    assert_eq!(editor.line_starts(), vec![0, 16, 32, 64, 80]);
+    editor.go_to_offset(16, false);
+    editor.move_down();
+    assert_eq!(editor.cursor.offset, 64);
+
+    // Unfold only the middle gap [32..64).
+    assert!(editor.unfold_bookmark_at(40));
+    assert!(editor.bookmarks().is_hide_unbookmarked());
+    assert!(editor.is_folded(0));
+    assert!(!editor.is_folded(32));
+    assert!(!editor.is_folded(48));
+    assert!(editor.is_folded(80));
+
+    // Middle gap [32..64) expands to two rows (32, 48) while [0..16) and [80..112) stay folded.
+    assert_eq!(editor.line_starts(), vec![0, 16, 32, 48, 64, 80]);
+
+    // Cursor navigation now steps through the unfolded gap [32..64) in both directions.
+    editor.go_to_offset(16, false);
+    editor.move_down();
+    assert_eq!(editor.cursor.offset, 32);
+    editor.move_down();
+    assert_eq!(editor.cursor.offset, 48);
+    editor.move_down();
+    assert_eq!(editor.cursor.offset, 64);
+    editor.move_up();
+    assert_eq!(editor.cursor.offset, 48);
+    editor.move_up();
+    assert_eq!(editor.cursor.offset, 32);
+    editor.move_up();
+    assert_eq!(editor.cursor.offset, 16);
+}
