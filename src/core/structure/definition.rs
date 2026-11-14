@@ -54,7 +54,12 @@ impl KsyMeta {
 /// Extracts `(switch_on, cases)` from a YAML mapping with `switch-on` and `cases` keys.
 pub fn parse_switch_map(val: &serde_yaml::Value) -> Option<(String, HashMap<String, String>)> {
     let map = val.as_mapping()?;
-    let switch_on = map.get("switch-on")?.as_str()?.to_string();
+    let switch_on = match map.get("switch-on")? {
+        serde_yaml::Value::String(s) => s.clone(),
+        serde_yaml::Value::Number(n) => n.to_string(),
+        serde_yaml::Value::Bool(b) => b.to_string(),
+        _ => return None,
+    };
     let cases_map = map.get("cases")?.as_mapping()?;
     let mut cases = HashMap::new();
     for (k, v) in cases_map {
