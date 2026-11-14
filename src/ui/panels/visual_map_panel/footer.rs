@@ -1,9 +1,9 @@
 //! Status footer rendering for hovered pixel details, address offsets, and buffer stats.
 
-use super::legend::ByteCategoryExt;
+use super::legend::VisualMapByteCategoryExt;
 use crate::core::editor::Editor;
 use crate::core::format::HexCase;
-use crate::core::visual_map::{ByteCategory, HoveredPixel, VisualMapColorMode as ColorMode};
+use crate::core::visual_map::{HoveredPixel, VisualMapByteCategory, VisualMapColorMode as ColorMode};
 use crate::ui::appearance::Appearance;
 use gpui_kit::component::{StyledExt, h_flex};
 use gpui_kit::prelude::*;
@@ -480,7 +480,7 @@ pub fn render_footer(
                     )
                     .into_any_element()
             } else {
-                let cat = ByteCategory::of(byte);
+                let cat = VisualMapByteCategory::of(byte);
                 let entropy_info = editor.and_then(|ed| {
                     let doc = ed.read(cx).document.read().ok()?;
                     let h = crate::core::entropy::shannon_entropy_at(doc.buffer.data(), offset, entropy_window);

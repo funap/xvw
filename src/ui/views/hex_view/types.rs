@@ -260,7 +260,7 @@ pub struct LayoutInput {
     pub scrollbar_width: f32,
 }
 
-use crate::core::radix::{ByteCategory, ByteCategoryColors, CategoryColor};
+use crate::core::radix::{ByteCategoryColors, CategoryColor, HexByteCategory};
 use gpui_kit::component::theme::Theme;
 
 /// Resolves an individual category color choice into an `Hsla` color from the active theme.
@@ -293,14 +293,14 @@ pub struct ByteCategoryPalette {
 impl ByteCategoryPalette {
     /// Returns the color configured for the given byte category, or the default foreground color if `None`.
     #[inline]
-    pub fn color_for(&self, category: Option<ByteCategory>) -> Hsla {
+    pub fn color_for(&self, category: Option<HexByteCategory>) -> Hsla {
         match category {
-            Some(ByteCategory::Null) => self.null,
-            Some(ByteCategory::AsciiPrintable) => self.ascii_printable,
-            Some(ByteCategory::AsciiWhitespace) => self.ascii_whitespace,
-            Some(ByteCategory::AsciiControl) => self.ascii_control,
-            Some(ByteCategory::NonAscii) => self.non_ascii,
-            Some(ByteCategory::Max) => self.max,
+            Some(HexByteCategory::Null) => self.null,
+            Some(HexByteCategory::AsciiPrintable) => self.ascii_printable,
+            Some(HexByteCategory::AsciiWhitespace) => self.ascii_whitespace,
+            Some(HexByteCategory::AsciiControl) => self.ascii_control,
+            Some(HexByteCategory::NonAscii) => self.non_ascii,
+            Some(HexByteCategory::Max) => self.max,
             None => self.default,
         }
     }

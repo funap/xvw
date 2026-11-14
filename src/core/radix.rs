@@ -191,9 +191,9 @@ impl ByteColoring {
     }
 }
 
-/// Semantic byte classification for category-based coloring.
+/// Semantic byte classification for category-based hex view coloring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ByteCategory {
+pub enum HexByteCategory {
     /// Zero byte (0x00)
     Null,
     /// ASCII control characters (0x01..=0x1F, 0x7F)
@@ -208,35 +208,35 @@ pub enum ByteCategory {
     Max,
 }
 
-impl ByteCategory {
-    pub const ALL: &'static [ByteCategory] = &[
-        ByteCategory::Null,
-        ByteCategory::AsciiControl,
-        ByteCategory::AsciiWhitespace,
-        ByteCategory::AsciiPrintable,
-        ByteCategory::NonAscii,
-        ByteCategory::Max,
+impl HexByteCategory {
+    pub const ALL: &'static [HexByteCategory] = &[
+        HexByteCategory::Null,
+        HexByteCategory::AsciiControl,
+        HexByteCategory::AsciiWhitespace,
+        HexByteCategory::AsciiPrintable,
+        HexByteCategory::NonAscii,
+        HexByteCategory::Max,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
-            ByteCategory::Null => "Null (0x00)",
-            ByteCategory::AsciiControl => "ASCII Control (0x01..0x1F, 0x7F)",
-            ByteCategory::AsciiWhitespace => "ASCII Whitespace (0x20)",
-            ByteCategory::AsciiPrintable => "ASCII Printable (0x21..0x7E)",
-            ByteCategory::NonAscii => "Non-ASCII (0x80..0xFE)",
-            ByteCategory::Max => "0xFF",
+            HexByteCategory::Null => "Null (0x00)",
+            HexByteCategory::AsciiControl => "ASCII Control (0x01..0x1F, 0x7F)",
+            HexByteCategory::AsciiWhitespace => "ASCII Whitespace (0x20)",
+            HexByteCategory::AsciiPrintable => "ASCII Printable (0x21..0x7E)",
+            HexByteCategory::NonAscii => "Non-ASCII (0x80..0xFE)",
+            HexByteCategory::Max => "0xFF",
         }
     }
 
     pub fn id(self) -> &'static str {
         match self {
-            ByteCategory::Null => "null",
-            ByteCategory::AsciiControl => "ascii-control",
-            ByteCategory::AsciiWhitespace => "ascii-whitespace",
-            ByteCategory::AsciiPrintable => "ascii-printable",
-            ByteCategory::NonAscii => "non-ascii",
-            ByteCategory::Max => "0xff",
+            HexByteCategory::Null => "null",
+            HexByteCategory::AsciiControl => "ascii-control",
+            HexByteCategory::AsciiWhitespace => "ascii-whitespace",
+            HexByteCategory::AsciiPrintable => "ascii-printable",
+            HexByteCategory::NonAscii => "non-ascii",
+            HexByteCategory::Max => "0xff",
         }
     }
 }
@@ -309,45 +309,45 @@ impl ByteCategoryColors {
 
     /// Returns the color configured for the given byte category, or `CategoryColor::Default` for mixed groups (`None`).
     #[inline]
-    pub fn color_for(&self, category: Option<ByteCategory>) -> CategoryColor {
+    pub fn color_for(&self, category: Option<HexByteCategory>) -> CategoryColor {
         match category {
-            Some(ByteCategory::Null) => self.null,
-            Some(ByteCategory::AsciiPrintable) => self.ascii_printable,
-            Some(ByteCategory::AsciiWhitespace) => self.ascii_whitespace,
-            Some(ByteCategory::AsciiControl) => self.ascii_control,
-            Some(ByteCategory::NonAscii) => self.non_ascii,
-            Some(ByteCategory::Max) => self.max,
+            Some(HexByteCategory::Null) => self.null,
+            Some(HexByteCategory::AsciiPrintable) => self.ascii_printable,
+            Some(HexByteCategory::AsciiWhitespace) => self.ascii_whitespace,
+            Some(HexByteCategory::AsciiControl) => self.ascii_control,
+            Some(HexByteCategory::NonAscii) => self.non_ascii,
+            Some(HexByteCategory::Max) => self.max,
             None => CategoryColor::Default,
         }
     }
 
     /// Sets the color for the given byte category.
-    pub fn set(&mut self, category: ByteCategory, color: CategoryColor) {
+    pub fn set(&mut self, category: HexByteCategory, color: CategoryColor) {
         match category {
-            ByteCategory::Null => self.null = color,
-            ByteCategory::AsciiControl => self.ascii_control = color,
-            ByteCategory::AsciiWhitespace => self.ascii_whitespace = color,
-            ByteCategory::AsciiPrintable => self.ascii_printable = color,
-            ByteCategory::NonAscii => self.non_ascii = color,
-            ByteCategory::Max => self.max = color,
+            HexByteCategory::Null => self.null = color,
+            HexByteCategory::AsciiControl => self.ascii_control = color,
+            HexByteCategory::AsciiWhitespace => self.ascii_whitespace = color,
+            HexByteCategory::AsciiPrintable => self.ascii_printable = color,
+            HexByteCategory::NonAscii => self.non_ascii = color,
+            HexByteCategory::Max => self.max = color,
         }
     }
 }
 
-/// Classifies a single byte into a `ByteCategory`.
-pub fn byte_category(b: u8) -> ByteCategory {
+/// Classifies a single byte into a [`HexByteCategory`].
+pub fn byte_category(b: u8) -> HexByteCategory {
     match b {
-        0x00 => ByteCategory::Null,
-        0x01..=0x1F | 0x7F => ByteCategory::AsciiControl,
-        0x20 => ByteCategory::AsciiWhitespace,
-        0x21..=0x7E => ByteCategory::AsciiPrintable,
-        0x80..=0xFE => ByteCategory::NonAscii,
-        0xFF => ByteCategory::Max,
+        0x00 => HexByteCategory::Null,
+        0x01..=0x1F | 0x7F => HexByteCategory::AsciiControl,
+        0x20 => HexByteCategory::AsciiWhitespace,
+        0x21..=0x7E => HexByteCategory::AsciiPrintable,
+        0x80..=0xFE => HexByteCategory::NonAscii,
+        0xFF => HexByteCategory::Max,
     }
 }
 
-/// Classifies a slice of bytes into a `ByteCategory` if all bytes share the same category.
-pub fn group_category(bytes: &[u8]) -> Option<ByteCategory> {
+/// Classifies a slice of bytes into a [`HexByteCategory`] if all bytes share the same category.
+pub fn group_category(bytes: &[u8]) -> Option<HexByteCategory> {
     if bytes.is_empty() {
         return None;
     }
@@ -899,37 +899,37 @@ mod tests {
         assert_eq!(ByteColoring::Custom.colors(), None);
 
         let mut custom = ByteCategoryColors::default();
-        custom.set(ByteCategory::Null, CategoryColor::Red);
+        custom.set(HexByteCategory::Null, CategoryColor::Red);
         assert_eq!(ByteColoring::from_colors(custom), ByteColoring::Custom);
     }
 
     #[test]
     fn test_byte_category() {
-        assert_eq!(byte_category(0x00), ByteCategory::Null);
-        assert_eq!(byte_category(0x01), ByteCategory::AsciiControl);
-        assert_eq!(byte_category(b'\t'), ByteCategory::AsciiControl);
-        assert_eq!(byte_category(b'\n'), ByteCategory::AsciiControl);
-        assert_eq!(byte_category(0x0B), ByteCategory::AsciiControl);
-        assert_eq!(byte_category(0x0C), ByteCategory::AsciiControl);
-        assert_eq!(byte_category(b'\r'), ByteCategory::AsciiControl);
-        assert_eq!(byte_category(0x7F), ByteCategory::AsciiControl);
-        assert_eq!(byte_category(b' '), ByteCategory::AsciiWhitespace);
-        assert_eq!(byte_category(b'A'), ByteCategory::AsciiPrintable);
-        assert_eq!(byte_category(b'~'), ByteCategory::AsciiPrintable);
-        assert_eq!(byte_category(0x80), ByteCategory::NonAscii);
-        assert_eq!(byte_category(0xFE), ByteCategory::NonAscii);
-        assert_eq!(byte_category(0xFF), ByteCategory::Max);
+        assert_eq!(byte_category(0x00), HexByteCategory::Null);
+        assert_eq!(byte_category(0x01), HexByteCategory::AsciiControl);
+        assert_eq!(byte_category(b'\t'), HexByteCategory::AsciiControl);
+        assert_eq!(byte_category(b'\n'), HexByteCategory::AsciiControl);
+        assert_eq!(byte_category(0x0B), HexByteCategory::AsciiControl);
+        assert_eq!(byte_category(0x0C), HexByteCategory::AsciiControl);
+        assert_eq!(byte_category(b'\r'), HexByteCategory::AsciiControl);
+        assert_eq!(byte_category(0x7F), HexByteCategory::AsciiControl);
+        assert_eq!(byte_category(b' '), HexByteCategory::AsciiWhitespace);
+        assert_eq!(byte_category(b'A'), HexByteCategory::AsciiPrintable);
+        assert_eq!(byte_category(b'~'), HexByteCategory::AsciiPrintable);
+        assert_eq!(byte_category(0x80), HexByteCategory::NonAscii);
+        assert_eq!(byte_category(0xFE), HexByteCategory::NonAscii);
+        assert_eq!(byte_category(0xFF), HexByteCategory::Max);
     }
 
     #[test]
     fn test_group_category() {
         assert_eq!(group_category(&[]), None);
-        assert_eq!(group_category(&[0x00, 0x00]), Some(ByteCategory::Null));
-        assert_eq!(group_category(&[0x01, b'\t']), Some(ByteCategory::AsciiControl));
-        assert_eq!(group_category(b"  "), Some(ByteCategory::AsciiWhitespace));
-        assert_eq!(group_category(b"AB"), Some(ByteCategory::AsciiPrintable));
-        assert_eq!(group_category(&[0x80, 0x81]), Some(ByteCategory::NonAscii));
-        assert_eq!(group_category(&[0xFF, 0xFF]), Some(ByteCategory::Max));
+        assert_eq!(group_category(&[0x00, 0x00]), Some(HexByteCategory::Null));
+        assert_eq!(group_category(&[0x01, b'\t']), Some(HexByteCategory::AsciiControl));
+        assert_eq!(group_category(b"  "), Some(HexByteCategory::AsciiWhitespace));
+        assert_eq!(group_category(b"AB"), Some(HexByteCategory::AsciiPrintable));
+        assert_eq!(group_category(&[0x80, 0x81]), Some(HexByteCategory::NonAscii));
+        assert_eq!(group_category(&[0xFF, 0xFF]), Some(HexByteCategory::Max));
         assert_eq!(group_category(b" \t"), None);
         assert_eq!(group_category(&[0x00, 0xFF]), None);
         assert_eq!(group_category(&[b'A', 0x00]), None);
@@ -1088,20 +1088,20 @@ mod tests {
     fn test_byte_category_colors_color_for_and_set() {
         let mut colors = ByteCategoryColors::default();
         assert_eq!(ByteColoring::from_colors(colors), ByteColoring::Uniform);
-        assert_eq!(colors.color_for(Some(ByteCategory::Null)), CategoryColor::Default);
+        assert_eq!(colors.color_for(Some(HexByteCategory::Null)), CategoryColor::Default);
         assert_eq!(colors.color_for(None), CategoryColor::Default);
-        assert_eq!(colors.color_for(Some(ByteCategory::AsciiPrintable)), CategoryColor::Default);
+        assert_eq!(colors.color_for(Some(HexByteCategory::AsciiPrintable)), CategoryColor::Default);
 
-        colors.set(ByteCategory::Null, CategoryColor::Red);
-        assert_eq!(colors.color_for(Some(ByteCategory::Null)), CategoryColor::Red);
+        colors.set(HexByteCategory::Null, CategoryColor::Red);
+        assert_eq!(colors.color_for(Some(HexByteCategory::Null)), CategoryColor::Red);
         assert_eq!(ByteColoring::from_colors(colors), ByteColoring::Custom);
 
-        colors.set(ByteCategory::AsciiPrintable, CategoryColor::Cyan);
-        assert_eq!(colors.color_for(Some(ByteCategory::AsciiPrintable)), CategoryColor::Cyan);
+        colors.set(HexByteCategory::AsciiPrintable, CategoryColor::Cyan);
+        assert_eq!(colors.color_for(Some(HexByteCategory::AsciiPrintable)), CategoryColor::Cyan);
 
         colors.reset_all();
         assert_eq!(ByteColoring::from_colors(colors), ByteColoring::Uniform);
-        assert_eq!(colors.color_for(Some(ByteCategory::Null)), CategoryColor::Default);
+        assert_eq!(colors.color_for(Some(HexByteCategory::Null)), CategoryColor::Default);
         assert_eq!(colors.color_for(None), CategoryColor::Default);
     }
 

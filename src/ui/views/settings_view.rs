@@ -1,6 +1,6 @@
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
-use crate::core::radix::{ByteCategory, ByteCategoryColors, ByteColoring, ByteGroupSize, ByteOrder, CategoryColor, DisplayRadix, HexCase};
+use crate::core::radix::{ByteCategoryColors, ByteColoring, ByteGroupSize, ByteOrder, CategoryColor, DisplayRadix, HexByteCategory, HexCase};
 use crate::core::structure::{StructureYamlIncludeOffsets, StructureYamlShaThreshold};
 use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::ui::icon::IconName;
@@ -1063,7 +1063,7 @@ impl Render for SettingsView {
                                                     .child(status_text),
                                             ),
                                     )
-                                    .children(ByteCategory::ALL.iter().copied().map(|cat| {
+                                    .children(HexByteCategory::ALL.iter().copied().map(|cat| {
                                         let color = category_colors.color_for(Some(cat));
                                         let default_cat_color = default_colors.color_for(Some(cat));
                                         let is_cat_modified = color != default_cat_color;

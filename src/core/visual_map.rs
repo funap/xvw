@@ -143,9 +143,9 @@ impl VisualMapColorMode {
     }
 }
 
-/// Categorization of byte values into semantic character and data groups.
+/// Categorization of byte values into semantic visual map data groups.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ByteCategory {
+pub enum VisualMapByteCategory {
     Null,
     Control,
     Space,
@@ -153,27 +153,27 @@ pub enum ByteCategory {
     Extended,
 }
 
-impl ByteCategory {
+impl VisualMapByteCategory {
     /// Categorizes a single byte.
     #[inline]
     pub fn of(byte: u8) -> Self {
         match byte {
-            0 => ByteCategory::Null,
-            1..=31 | 127 => ByteCategory::Control,
-            32 => ByteCategory::Space,
-            33..=126 => ByteCategory::Ascii,
-            _ => ByteCategory::Extended,
+            0 => VisualMapByteCategory::Null,
+            1..=31 | 127 => VisualMapByteCategory::Control,
+            32 => VisualMapByteCategory::Space,
+            33..=126 => VisualMapByteCategory::Ascii,
+            _ => VisualMapByteCategory::Extended,
         }
     }
 
     /// Returns human-readable label for this category.
     pub fn label(self) -> &'static str {
         match self {
-            ByteCategory::Null => "Null (00)",
-            ByteCategory::Control => "Control",
-            ByteCategory::Space => "Space (20)",
-            ByteCategory::Ascii => "ASCII",
-            ByteCategory::Extended => "Extended",
+            VisualMapByteCategory::Null => "Null (00)",
+            VisualMapByteCategory::Control => "Control",
+            VisualMapByteCategory::Space => "Space (20)",
+            VisualMapByteCategory::Ascii => "ASCII",
+            VisualMapByteCategory::Extended => "Extended",
         }
     }
 }
@@ -226,12 +226,12 @@ pub fn rainbow_bgra_lut() -> [[u8; 4]; 256] {
 pub fn category_bgra_lut(palette: &CategoryPalette) -> [[u8; 4]; 256] {
     let mut lut = [[0u8; 4]; 256];
     for byte in 0..=255 {
-        lut[byte as usize] = match ByteCategory::of(byte) {
-            ByteCategory::Null => palette.null,
-            ByteCategory::Control => palette.control,
-            ByteCategory::Space => palette.space,
-            ByteCategory::Ascii => palette.ascii,
-            ByteCategory::Extended => palette.extended,
+        lut[byte as usize] = match VisualMapByteCategory::of(byte) {
+            VisualMapByteCategory::Null => palette.null,
+            VisualMapByteCategory::Control => palette.control,
+            VisualMapByteCategory::Space => palette.space,
+            VisualMapByteCategory::Ascii => palette.ascii,
+            VisualMapByteCategory::Extended => palette.extended,
         };
     }
     lut
@@ -652,16 +652,16 @@ mod tests {
 
     #[test]
     fn test_byte_category_mapping() {
-        assert_eq!(ByteCategory::of(0), ByteCategory::Null);
-        assert_eq!(ByteCategory::of(1), ByteCategory::Control);
-        assert_eq!(ByteCategory::of(31), ByteCategory::Control);
-        assert_eq!(ByteCategory::of(127), ByteCategory::Control);
-        assert_eq!(ByteCategory::of(32), ByteCategory::Space);
-        assert_eq!(ByteCategory::of(33), ByteCategory::Ascii);
-        assert_eq!(ByteCategory::of(b'A'), ByteCategory::Ascii);
-        assert_eq!(ByteCategory::of(126), ByteCategory::Ascii);
-        assert_eq!(ByteCategory::of(128), ByteCategory::Extended);
-        assert_eq!(ByteCategory::of(255), ByteCategory::Extended);
+        assert_eq!(VisualMapByteCategory::of(0), VisualMapByteCategory::Null);
+        assert_eq!(VisualMapByteCategory::of(1), VisualMapByteCategory::Control);
+        assert_eq!(VisualMapByteCategory::of(31), VisualMapByteCategory::Control);
+        assert_eq!(VisualMapByteCategory::of(127), VisualMapByteCategory::Control);
+        assert_eq!(VisualMapByteCategory::of(32), VisualMapByteCategory::Space);
+        assert_eq!(VisualMapByteCategory::of(33), VisualMapByteCategory::Ascii);
+        assert_eq!(VisualMapByteCategory::of(b'A'), VisualMapByteCategory::Ascii);
+        assert_eq!(VisualMapByteCategory::of(126), VisualMapByteCategory::Ascii);
+        assert_eq!(VisualMapByteCategory::of(128), VisualMapByteCategory::Extended);
+        assert_eq!(VisualMapByteCategory::of(255), VisualMapByteCategory::Extended);
     }
 
     #[test]

@@ -1,22 +1,22 @@
 //! Legend chips and descriptions for each visual map color mode.
 
-use crate::core::visual_map::{ByteCategory, VisualMapColorMode as ColorMode};
+use crate::core::visual_map::{VisualMapByteCategory, VisualMapColorMode as ColorMode};
 use gpui_kit::component::{StyledExt, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-pub trait ByteCategoryExt {
+pub trait VisualMapByteCategoryExt {
     fn color(self, theme: &gpui_kit::component::Theme) -> Hsla;
 }
 
-impl ByteCategoryExt for ByteCategory {
+impl VisualMapByteCategoryExt for VisualMapByteCategory {
     fn color(self, theme: &gpui_kit::component::Theme) -> Hsla {
         match self {
-            ByteCategory::Null => theme.muted_foreground,
-            ByteCategory::Control => theme.red,
-            ByteCategory::Space => theme.blue,
-            ByteCategory::Ascii => theme.green,
-            ByteCategory::Extended => theme.accent,
+            VisualMapByteCategory::Null => theme.muted_foreground,
+            VisualMapByteCategory::Control => theme.red,
+            VisualMapByteCategory::Space => theme.blue,
+            VisualMapByteCategory::Ascii => theme.green,
+            VisualMapByteCategory::Extended => theme.accent,
         }
     }
 }
@@ -68,11 +68,11 @@ pub fn render_legend(color_mode: ColorMode, theme: &gpui_kit::component::Theme) 
     match color_mode {
         ColorMode::DataCategory => {
             row = row
-                .child(legend_chip(ByteCategory::Null.color(theme), "Null", false, theme))
-                .child(legend_chip(ByteCategory::Control.color(theme), "Control", false, theme))
-                .child(legend_chip(ByteCategory::Space.color(theme), "Space", false, theme))
-                .child(legend_chip(ByteCategory::Ascii.color(theme), "ASCII", false, theme))
-                .child(legend_chip(ByteCategory::Extended.color(theme), "Extended", false, theme));
+                .child(legend_chip(VisualMapByteCategory::Null.color(theme), "Null", false, theme))
+                .child(legend_chip(VisualMapByteCategory::Control.color(theme), "Control", false, theme))
+                .child(legend_chip(VisualMapByteCategory::Space.color(theme), "Space", false, theme))
+                .child(legend_chip(VisualMapByteCategory::Ascii.color(theme), "ASCII", false, theme))
+                .child(legend_chip(VisualMapByteCategory::Extended.color(theme), "Extended", false, theme));
         }
         ColorMode::Entropy => {
             let color_chip = |norm: f32| {

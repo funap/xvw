@@ -15,7 +15,7 @@ use self::element::VisualMapElement;
 use crate::core::editor::Editor;
 use crate::core::visual_map::geometry::VisualMapGeometry;
 #[allow(unused_imports)]
-pub use crate::core::visual_map::{ByteCategory, HoveredPixel};
+pub use crate::core::visual_map::{HoveredPixel, VisualMapByteCategory};
 use crate::core::visual_map::{VisualMapColorMode as ColorMode, decode_hovered_pixel};
 use crate::ui::components::scrollbar::{SCROLLBAR_WIDTH, calculate_scrollbar_geometry};
 use crate::ui::icon::IconName;
