@@ -26,6 +26,13 @@ pub fn parse_intel_hex(content: &str) -> Result<HexImportResult, HexImportError>
             });
         }
 
+        if !trimmed.is_ascii() {
+            return Err(HexImportError::InvalidHexDigits {
+                line: line_idx + 1,
+                content: trimmed.to_string(),
+            });
+        }
+
         if trimmed.len() < 11 {
             return Err(HexImportError::LineTooShort { line: line_idx + 1 });
         }
@@ -284,5 +291,48 @@ mod tests {
         assert_eq!(imported.address_map.segments.len(), 2);
         assert_eq!(imported.address_map.segments[0].address, 0x0800_0000);
         assert_eq!(imported.address_map.segments[1].address, 0x0800_0010);
+    }
+
+    #[test]
+    fn test_parse_intel_hex_non_ascii_does_not_panic() {
+        assert_eq!(
+            parse_intel_hex(":あいうえお123456\n").unwrap_err(),
+            HexImportError::InvalidHexDigits {
+                line: 1,
+                content: ":あいうえお123456".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_intel_hex(":あ\n").unwrap_err(),
+            HexImportError::InvalidHexDigits {
+                line: 1,
+                content: ":あ".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_intel_hex(":04000000あああa\n").unwrap_err(),
+            HexImportError::InvalidHexDigits {
+                line: 1,
+                content: ":04000000あああa".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_intel_hex(":0400000001020304あ\n").unwrap_err(),
+            HexImportError::InvalidHexDigits {
+                line: 1,
+                content: ":0400000001020304あ".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_intel_hex(":00000001あ\n").unwrap_err(),
+            HexImportError::InvalidHexDigits {
+                line: 1,
+                content: ":00000001あ".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_intel_hex("あいう\n").unwrap_err(),
+            HexImportError::InvalidRecordStart { line: 1, char: 'あ' }
+        );
     }
 }

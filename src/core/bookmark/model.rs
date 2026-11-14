@@ -165,6 +165,9 @@ impl<'de> Deserialize<'de> for BookmarkColor {
                     "pink" => Ok(BookmarkColor::Pink),
                     hex if hex.starts_with('#') => {
                         let hex_body = &hex[1..];
+                        if !hex_body.bytes().all(|b| b.is_ascii_hexdigit()) {
+                            return Err(E::custom(format!("Invalid hex color format: {}", hex)));
+                        }
                         match hex_body.len() {
                             3 => {
                                 let r = u8::from_str_radix(&hex_body[0..1].repeat(2), 16).map_err(E::custom)?;
@@ -845,5 +848,34 @@ mod tests {
 
         let kb = BookmarkItem::new(0, 2048, BookmarkColor::Orange, "");
         assert_eq!(kb.format_size(), "2.0 KB");
+    }
+
+    #[test]
+    fn test_bookmark_color_hex_variants_and_non_ascii_does_not_panic() {
+        let short_hex: BookmarkColor = serde_yaml::from_str("\"#f0a\"").unwrap();
+        assert_eq!(
+            short_hex,
+            BookmarkColor::Custom {
+                r: 0xFF,
+                g: 0x00,
+                b: 0xAA,
+                a: 255
+            }
+        );
+
+        let rgba_hex: BookmarkColor = serde_yaml::from_str("\"#11223344\"").unwrap();
+        assert_eq!(
+            rgba_hex,
+            BookmarkColor::Custom {
+                r: 0x11,
+                g: 0x22,
+                b: 0x33,
+                a: 0x44
+            }
+        );
+
+        for invalid in ["\"#あ\"", "\"#ああ\"", "\"#ああé\"", "\"#+1f000\"", "\"#12\""] {
+            assert!(serde_yaml::from_str::<BookmarkColor>(invalid).is_err(), "expected error for {invalid}");
+        }
     }
 }

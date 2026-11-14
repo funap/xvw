@@ -70,7 +70,7 @@ impl<'a> Lexer<'a> {
             return self.lex_string();
         }
 
-        self.pos += 1;
+        self.pos += ch.len_utf8();
         match ch {
             '+' => Token::Plus,
             '-' => Token::Minus,
@@ -2251,5 +2251,38 @@ impl<'a> ASTParser<'a> {
         }
 
         node
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lexer_non_ascii_symbols_stay_on_char_boundary() {
+        for input in ["→", "1 + →", "1 → 2", "★ == 👍", "「1 + 2」", "±"] {
+            let mut lexer = Lexer::new(input);
+            for _ in 0..16 {
+                let _ = lexer.next_token();
+                assert!(lexer.input.is_char_boundary(lexer.pos));
+            }
+            assert_eq!(lexer.next_token(), Token::EOF);
+            assert!(lexer.input.is_char_boundary(lexer.pos));
+        }
+    }
+
+    #[test]
+    fn test_expr_compile_and_eval_non_ascii_does_not_panic() {
+        let values = HashMap::new();
+        let ctx = EvalContext::simple(&values, &[]);
+
+        for input in ["→", "1 + →", "→ + 1", "(1 → 2)", "[1, ★]", "👍 == 0"] {
+            let ast = ExprAST::compile(input).expect("non-empty expr compiles");
+            let _ = ExprEvaluator::eval_ast_rich(&ast, &ctx);
+            let mut parser = Parser::new(input, &ctx);
+            let _ = parser.parse_ternary();
+        }
+
+        assert_eq!(ExprEvaluator::eval_i64("1 + 2 * 3", &ctx), 7);
     }
 }
