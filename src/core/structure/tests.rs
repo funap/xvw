@@ -2019,3 +2019,266 @@ fn test_decode_bytes_kaitai_encodings() {
     assert_eq!(decode_bytes(&win1252_bytes, "windows-1252"), "€");
     assert_eq!(decode_bytes(&win1252_bytes, "cp1252"), "€");
 }
+
+#[test]
+fn test_pos_with_repeat_eos_terminates_without_infinite_loop() {
+    // Constant `pos:` with `repeat: eos` reads sequentially from `pos` to EOS and restores stream position.
+    let yaml_const_pos = r#"
+meta:
+  id: pos_repeat_eos
+seq:
+  - id: prefix
+    type: u1
+  - id: tail_items
+    type: u1
+    pos: 2
+    repeat: eos
+  - id: after_prefix
+    type: u1
+"#;
+    let data = [0x10, 0x20, 0xAA, 0xBB, 0xCC];
+    let mut stream = KaitaiStream::new(&data);
+    let result = KaitaiInterpreter::new(parse_ksy_yaml(yaml_const_pos)).parse(&mut stream);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert_eq!(result.fields.len(), 5);
+    assert_eq!(result.fields[0].value, FieldValue::U8(0x10));
+    assert_eq!(result.fields[1].id, "tail_items[0]");
+    assert_eq!(result.fields[1].offset, 2);
+    assert_eq!(result.fields[1].value, FieldValue::U8(0xAA));
+    assert_eq!(result.fields[2].offset, 3);
+    assert_eq!(result.fields[2].value, FieldValue::U8(0xBB));
+    assert_eq!(result.fields[3].offset, 4);
+    assert_eq!(result.fields[3].value, FieldValue::U8(0xCC));
+    assert_eq!(result.fields[4].id, "after_prefix");
+    assert_eq!(result.fields[4].offset, 1);
+    assert_eq!(result.fields[4].value, FieldValue::U8(0x20));
+
+    // Constant `pos:` with 0-byte struct and `repeat: eos` must terminate cleanly.
+    let yaml_zero_pos = r#"
+meta:
+  id: pos_repeat_eos_zero
+seq:
+  - id: empty_items
+    type: empty_type
+    pos: 1
+    repeat: eos
+types:
+  empty_type:
+    seq: []
+"#;
+    let mut stream2 = KaitaiStream::new(&data);
+    let result2 = KaitaiInterpreter::new(parse_ksy_yaml(yaml_zero_pos)).parse(&mut stream2);
+    assert!(result2.fields.len() <= 1);
+
+    // `_index`-based non-advancing `pos:` with `repeat: eos` must stop instead of looping forever.
+    let yaml_stagnant_idx = r#"
+meta:
+  id: pos_repeat_eos_stagnant
+seq:
+  - id: items
+    type: u1
+    pos: _index * 0
+    repeat: eos
+"#;
+    let mut stream3 = KaitaiStream::new(&data);
+    let result3 = KaitaiInterpreter::new(parse_ksy_yaml(yaml_stagnant_idx)).parse(&mut stream3);
+    assert_eq!(result3.fields.len(), 1);
+    assert_eq!(result3.fields[0].offset, 0);
+}
+
+#[test]
+fn test_pos_with_repeat_until_false_terminates_without_infinite_loop() {
+    // Constant `pos:` with `repeat-until: false` advances sequentially until EOS and restores stream position.
+    let yaml_const_until = r#"
+meta:
+  id: pos_repeat_until_const
+seq:
+  - id: head
+    type: u1
+  - id: items
+    type: u1
+    pos: 2
+    repeat: until
+    repeat-until: 'false'
+  - id: second
+    type: u1
+"#;
+    let data = [0x01, 0x02, 0x03, 0x04];
+    let mut stream = KaitaiStream::new(&data);
+    let result = KaitaiInterpreter::new(parse_ksy_yaml(yaml_const_until)).parse(&mut stream);
+    assert_eq!(result.fields.len(), 4);
+    assert_eq!(result.fields[1].offset, 2);
+    assert_eq!(result.fields[2].offset, 3);
+    assert_eq!(result.fields[3].id, "second");
+    assert_eq!(result.fields[3].value, FieldValue::U8(0x02));
+
+    // Cyclic `_index`-based `pos:` with `repeat-until: false` detects the repeated span and exits cleanly.
+    let yaml_cyclic_until = r#"
+meta:
+  id: pos_repeat_until_cyclic
+seq:
+  - id: items
+    type: u1
+    pos: _index % 2
+    repeat: until
+    repeat-until: 'false'
+"#;
+    let mut stream2 = KaitaiStream::new(&data);
+    let result2 = KaitaiInterpreter::new(parse_ksy_yaml(yaml_cyclic_until)).parse(&mut stream2);
+    assert_eq!(result2.fields.len(), 2);
+    assert_eq!(result2.fields[0].offset, 0);
+    assert_eq!(result2.fields[1].offset, 1);
+
+    // Distinct non-monotonic spans in `_index`-based `repeat-until` still work until `repeat-until` matches.
+    let yaml_reverse = r#"
+meta:
+  id: pos_repeat_until_reverse
+seq:
+  - id: items
+    type: u1
+    pos: 3 - _index
+    repeat: until
+    repeat-until: _ == 0xAA
+"#;
+    let rev_data = [0x11, 0xAA, 0xBB, 0xCC];
+    let mut stream3 = KaitaiStream::new(&rev_data);
+    let result3 = KaitaiInterpreter::new(parse_ksy_yaml(yaml_reverse)).parse(&mut stream3);
+    assert_eq!(result3.fields.len(), 3);
+    assert_eq!(result3.fields[0].value, FieldValue::U8(0xCC));
+    assert_eq!(result3.fields[1].value, FieldValue::U8(0xBB));
+    assert_eq!(result3.fields[2].value, FieldValue::U8(0xAA));
+}
+
+#[test]
+fn test_nested_custom_type_propagates_progress_and_cancellation() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let yaml = r#"
+meta:
+  id: nested_progress_and_cancel
+seq:
+  - id: container
+    type: body_type
+    size: _io.size
+  - id: tail_check
+    type: u1
+    if: 'false'
+types:
+  body_type:
+    seq:
+      - id: items
+        type: u1
+        repeat: eos
+"#;
+    let ksy = parse_ksy_yaml(yaml);
+    let data = vec![0x5Au8; 131072]; // 128 KiB -> exceeds 64 KiB progress chunk threshold
+
+    // 1. Progress updates must fire while parsing inside nested custom type, without leaking child fields into root progress batches.
+    let mut stream_prog = KaitaiStream::new(&data);
+    let mut intermediate_offsets = Vec::new();
+    let mut nested_progress_field_counts = Vec::new();
+    let mut emitted_progress_field_ids = Vec::new();
+    let res_full = KaitaiInterpreter::new(ksy.clone()).parse_with_progress_cancellable(&mut stream_prog, None, |p| {
+        if !p.is_done && !p.is_finalizing {
+            intermediate_offsets.push(p.parsed_offset);
+            if p.parsed_offset < data.len() {
+                nested_progress_field_counts.push(p.fields.len());
+            }
+            for f in p.fields.iter() {
+                emitted_progress_field_ids.push(f.id.clone());
+            }
+        }
+    });
+    assert_eq!(res_full.fields.len(), 1);
+    assert_eq!(res_full.fields[0].children.len(), data.len());
+    assert!(
+        intermediate_offsets.iter().any(|&ofs| ofs >= 65536 && ofs < data.len()),
+        "Expected intermediate progress update inside nested type, got offsets: {:?}",
+        intermediate_offsets
+    );
+    assert!(
+        nested_progress_field_counts.iter().all(|&c| c == 0),
+        "Nested child fields must not be pushed as root-level progress fields: {:?}",
+        nested_progress_field_counts
+    );
+    assert_eq!(
+        emitted_progress_field_ids,
+        vec!["container".to_string()],
+        "Only root container field should be emitted in root progress batches"
+    );
+
+    // 2. Cancellation signaled during nested progress callback stops the inner repeat loop early.
+    let cancel_token = AtomicBool::new(false);
+    let mut stream_cancel = KaitaiStream::new(&data);
+    let res_cancelled = KaitaiInterpreter::new(ksy).parse_with_progress_cancellable(&mut stream_cancel, Some(&cancel_token), |p| {
+        if !p.is_done && p.parsed_offset >= 65536 {
+            cancel_token.store(true, Ordering::SeqCst);
+        }
+    });
+    assert_eq!(res_cancelled.fields.len(), 1);
+    let parsed_children = res_cancelled.fields[0].children.len();
+    assert!(
+        parsed_children >= 65536 && parsed_children < data.len(),
+        "Expected nested parsing to cancel early after ~64 KiB, got {parsed_children} items"
+    );
+
+    // 3. Cancellation also stops long repeat loops inside nested custom-type instances.
+    let inst_yaml = r#"
+meta:
+  id: nested_instance_cancel
+seq:
+  - id: holder
+    type: inst_holder
+    size: _io.size
+types:
+  inst_holder:
+    seq: []
+    instances:
+      all_bytes:
+        type: u1
+        pos: 0
+        repeat: eos
+"#;
+    let inst_ksy = parse_ksy_yaml(inst_yaml);
+    let inst_cancel = AtomicBool::new(false);
+    let mut stream_inst = KaitaiStream::new(&data);
+    let res_inst = KaitaiInterpreter::new(inst_ksy).parse_with_progress_cancellable(&mut stream_inst, Some(&inst_cancel), |p| {
+        if !p.is_done && p.parsed_offset >= 65536 {
+            inst_cancel.store(true, Ordering::SeqCst);
+        }
+    });
+    assert_eq!(res_inst.fields.len(), 1);
+    let inst_children = res_inst.fields[0].children.len();
+    assert!(
+        inst_children >= 65536 && inst_children < data.len(),
+        "Expected nested instance parsing to cancel early after ~64 KiB, got {inst_children} items"
+    );
+
+    // 4. Non-substream nested custom type also propagates progress and cancellation.
+    let direct_yaml = r#"
+meta:
+  id: nested_direct_cancel
+seq:
+  - id: container
+    type: body_type
+types:
+  body_type:
+    seq:
+      - id: items
+        type: u1
+        repeat: eos
+"#;
+    let direct_cancel = AtomicBool::new(false);
+    let mut stream_direct = KaitaiStream::new(&data);
+    let res_direct = KaitaiInterpreter::new(parse_ksy_yaml(direct_yaml)).parse_with_progress_cancellable(&mut stream_direct, Some(&direct_cancel), |p| {
+        if !p.is_done && p.parsed_offset >= 65536 {
+            direct_cancel.store(true, Ordering::SeqCst);
+        }
+    });
+    assert_eq!(res_direct.fields.len(), 1);
+    let direct_children = res_direct.fields[0].children.len();
+    assert!(
+        direct_children >= 65536 && direct_children < data.len(),
+        "Expected non-substream nested parsing to cancel early after ~64 KiB, got {direct_children} items"
+    );
+}

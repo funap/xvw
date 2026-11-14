@@ -69,6 +69,137 @@ pub struct KaitaiInterpreter {
 const MAX_RECURSION: usize = 24;
 const MAX_PROGRESS_FIELDS: usize = 512;
 
+fn is_cancelled(cancel_token: Option<&std::sync::atomic::AtomicBool>) -> bool {
+    cancel_token.is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+fn expr_uses_ident(expr: &str, target: &str) -> bool {
+    let bytes = expr.as_bytes();
+    let mut i = 0;
+    let mut quote: Option<u8> = None;
+    let mut prev_escaped = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = quote {
+            if prev_escaped {
+                prev_escaped = false;
+            } else if b == b'\\' && q == b'"' {
+                prev_escaped = true;
+            } else if b == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'\'' || b == b'"' {
+            quote = Some(b);
+            i += 1;
+            continue;
+        }
+        if b == b'#' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if b.is_ascii_alphabetic() || b == b'_' {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            if &expr[start..i] == target {
+                return true;
+            }
+            continue;
+        }
+        i += 1;
+    }
+    false
+}
+
+struct ProgressTracker<'a> {
+    def_id: &'a str,
+    total_bytes: usize,
+    last_notify_time: std::time::Instant,
+    last_notify_offset: usize,
+    pending_fields: Vec<ParsedField>,
+    index_builder: Option<StructureIndexBuilder>,
+    on_progress: &'a mut dyn FnMut(&ParseProgress),
+}
+
+impl<'a> ProgressTracker<'a> {
+    fn record_root_field(&mut self, field: &ParsedField) {
+        if let Some(index_builder) = self.index_builder.as_mut() {
+            index_builder.add_field(field);
+        }
+        if self.index_builder.is_some() {
+            self.pending_fields.push(field.clone());
+        }
+    }
+
+    fn maybe_notify(&mut self, current_offset: usize) {
+        let now = std::time::Instant::now();
+        let current_offset = current_offset.min(self.total_bytes);
+        if now.duration_since(self.last_notify_time).as_millis() >= 50
+            || current_offset.saturating_sub(self.last_notify_offset) >= 65536
+            || self.pending_fields.len() >= MAX_PROGRESS_FIELDS
+        {
+            self.flush(current_offset, now);
+        }
+    }
+
+    fn flush_if_pending(&mut self, current_offset: usize) {
+        if !self.pending_fields.is_empty() {
+            let current_offset = current_offset.min(self.total_bytes);
+            self.flush(current_offset, std::time::Instant::now());
+        }
+    }
+
+    fn flush(&mut self, current_offset: usize, now: std::time::Instant) {
+        self.last_notify_time = now;
+        self.last_notify_offset = current_offset;
+        (self.on_progress)(&ParseProgress {
+            definition_id: self.def_id.to_string(),
+            fields: into_field_chunk(std::mem::take(&mut self.pending_fields)),
+            parsed_offset: current_offset,
+            total_bytes: self.total_bytes,
+            is_done: false,
+            is_finalizing: false,
+            errors: Vec::new(),
+            parse_result: None,
+        });
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ProgressOrigin {
+    abs_base: usize,
+    abs_limit: Option<usize>,
+    emit_root_fields: bool,
+}
+
+impl ProgressOrigin {
+    fn root(emit_root_fields: bool) -> Self {
+        Self {
+            abs_base: 0,
+            abs_limit: None,
+            emit_root_fields,
+        }
+    }
+
+    fn resolve_offset(self, stream_pos: u64) -> usize {
+        let raw = self.abs_base.saturating_add(stream_pos as usize);
+        self.abs_limit.map_or(raw, |lim| raw.min(lim))
+    }
+}
+
+enum ArrayRunningMinMax {
+    Uninit,
+    Strings { min: String, max: String },
+    Ints { min: i64, max: i64 },
+}
+
 fn can_preeval_pos_instance(inst_attr: &KsyAttr, seq: &[KsyAttr], scope: TypeScope) -> bool {
     if inst_attr.pos.is_none() || inst_attr.value.is_some() {
         return false;
@@ -315,11 +446,6 @@ impl KaitaiInterpreter {
         let mut fields = Vec::new();
         let root_scope = TypeScope::root(&ksy_arc.types, &ksy_arc.enums);
 
-        let mut last_notify_time = std::time::Instant::now();
-        let mut last_notify_offset = 0usize;
-        let mut pending_fields = Vec::new();
-        let mut index_builder = prepare_display_layout.then(StructureIndexBuilder::new);
-
         // Initial progress notification
         on_progress(&ParseProgress {
             definition_id: def_id.clone(),
@@ -338,52 +464,45 @@ impl KaitaiInterpreter {
         let errors_before_root = self.errors.borrow().len();
         let saved_root_pos = stream.pos();
         for (id, inst_attr) in &ksy_arc.instances {
+            if is_cancelled(cancel_token) {
+                break;
+            }
             if can_preeval_pos_instance(inst_attr, &ksy_arc.seq, root_scope) {
                 let mut inst_copy = inst_attr.clone();
                 inst_copy.id = Some(id.clone());
-                self.parse_attr_repeated(&inst_copy, stream, root_scope, true);
+                self.parse_attr_repeated_cancellable(&inst_copy, stream, root_scope, true, ProgressOrigin::root(false), cancel_token, None);
             }
         }
         stream.set_pos(saved_root_pos);
         self.errors.borrow_mut().truncate(errors_before_root);
 
-        self.evaluate_value_instances_silent(&ksy_arc.instances, stream);
+        if !is_cancelled(cancel_token) {
+            self.evaluate_value_instances_silent(&ksy_arc.instances, stream);
+        }
+
+        let mut tracker = prepare_display_layout.then(|| ProgressTracker {
+            def_id: &def_id,
+            total_bytes,
+            last_notify_time: std::time::Instant::now(),
+            last_notify_offset: 0,
+            pending_fields: Vec::new(),
+            index_builder: Some(StructureIndexBuilder::new()),
+            on_progress: &mut on_progress,
+        });
 
         for attr in &ksy_arc.seq {
-            if let Some(token) = cancel_token
-                && token.load(std::sync::atomic::Ordering::Relaxed)
-            {
+            if is_cancelled(cancel_token) {
                 break;
             }
-            let parsed = self.parse_attr_repeated_cb_cancellable(attr, stream, root_scope, false, cancel_token, &mut |items, current_offset| {
-                if let Some(field) = items.last() {
-                    if let Some(index_builder) = index_builder.as_mut() {
-                        index_builder.add_field(field);
-                    }
-                    if prepare_display_layout {
-                        pending_fields.push(field.clone());
-                    }
-                }
-                let now = std::time::Instant::now();
-                if now.duration_since(last_notify_time).as_millis() >= 50
-                    || current_offset.saturating_sub(last_notify_offset) >= 65536
-                    || pending_fields.len() >= MAX_PROGRESS_FIELDS
-                {
-                    last_notify_time = now;
-                    last_notify_offset = current_offset;
-
-                    on_progress(&ParseProgress {
-                        definition_id: def_id.clone(),
-                        fields: into_field_chunk(std::mem::take(&mut pending_fields)),
-                        parsed_offset: current_offset,
-                        total_bytes,
-                        is_done: false,
-                        is_finalizing: false,
-                        errors: Vec::new(),
-                        parse_result: None,
-                    });
-                }
-            });
+            let parsed = self.parse_attr_repeated_cancellable(
+                attr,
+                stream,
+                root_scope,
+                false,
+                ProgressOrigin::root(prepare_display_layout),
+                cancel_token,
+                tracker.as_mut(),
+            );
             let should_parse = if let Some(cond) = &attr.condition {
                 let ctx = self.make_eval_ctx(stream);
                 if let Some(ref ast) = attr.compiled_condition {
@@ -398,93 +517,56 @@ impl KaitaiInterpreter {
                 break;
             }
             fields.extend(parsed);
+            if let Some(t) = tracker.as_mut() {
+                t.flush_if_pending(stream.pos() as usize);
+            }
+            if is_cancelled(cancel_token) {
+                break;
+            }
             self.update_endian_from_meta(&ksy_arc.meta, stream);
             self.evaluate_value_instances_silent(&ksy_arc.instances, stream);
-
-            let cur_pos = stream.pos() as usize;
-            if !pending_fields.is_empty() {
-                last_notify_time = std::time::Instant::now();
-                last_notify_offset = cur_pos;
-
-                on_progress(&ParseProgress {
-                    definition_id: def_id.clone(),
-                    fields: into_field_chunk(std::mem::take(&mut pending_fields)),
-                    parsed_offset: cur_pos,
-                    total_bytes,
-                    is_done: false,
-                    is_finalizing: false,
-                    errors: Vec::new(),
-                    parse_result: None,
-                });
-            }
         }
 
         // First evaluate pos-based instances, then refresh value instances, then emit value instances
-        for is_pos_pass in [true, false] {
-            if !is_pos_pass {
-                self.evaluate_value_instances_silent(&ksy_arc.instances, stream);
-            }
-            for (id, attr) in &ksy_arc.instances {
-                if let Some(token) = cancel_token
-                    && token.load(std::sync::atomic::Ordering::Relaxed)
-                {
+        if !is_cancelled(cancel_token) {
+            for is_pos_pass in [true, false] {
+                if is_cancelled(cancel_token) {
                     break;
                 }
-                let is_pos_inst = attr.pos.is_some();
-                if is_pos_inst != is_pos_pass {
-                    continue;
+                if !is_pos_pass {
+                    self.evaluate_value_instances_silent(&ksy_arc.instances, stream);
                 }
-                if attr.pos.is_some() || attr.value.is_some() {
-                    let mut inst_attr = attr.clone();
-                    inst_attr.id = Some(id.clone());
-                    let parsed = self.parse_attr_repeated_cb_cancellable(&inst_attr, stream, root_scope, true, cancel_token, &mut |items, current_offset| {
-                        if let Some(field) = items.last() {
-                            if let Some(index_builder) = index_builder.as_mut() {
-                                index_builder.add_field(field);
-                            }
-                            if prepare_display_layout {
-                                pending_fields.push(field.clone());
-                            }
-                        }
-                        let now = std::time::Instant::now();
-                        if now.duration_since(last_notify_time).as_millis() >= 50
-                            || current_offset.saturating_sub(last_notify_offset) >= 65536
-                            || pending_fields.len() >= MAX_PROGRESS_FIELDS
-                        {
-                            last_notify_time = now;
-                            last_notify_offset = current_offset;
+                for (id, attr) in &ksy_arc.instances {
+                    if is_cancelled(cancel_token) {
+                        break;
+                    }
+                    let is_pos_inst = attr.pos.is_some();
+                    if is_pos_inst != is_pos_pass {
+                        continue;
+                    }
+                    if attr.pos.is_some() || attr.value.is_some() {
+                        let mut inst_attr = attr.clone();
+                        inst_attr.id = Some(id.clone());
+                        let parsed = self.parse_attr_repeated_cancellable(
+                            &inst_attr,
+                            stream,
+                            root_scope,
+                            true,
+                            ProgressOrigin::root(prepare_display_layout),
+                            cancel_token,
+                            tracker.as_mut(),
+                        );
+                        fields.extend(parsed);
 
-                            on_progress(&ParseProgress {
-                                definition_id: def_id.clone(),
-                                fields: into_field_chunk(std::mem::take(&mut pending_fields)),
-                                parsed_offset: current_offset,
-                                total_bytes,
-                                is_done: false,
-                                is_finalizing: false,
-                                errors: Vec::new(),
-                                parse_result: None,
-                            });
+                        if let Some(t) = tracker.as_mut() {
+                            t.flush_if_pending(stream.pos() as usize);
                         }
-                    });
-                    fields.extend(parsed);
-
-                    if !pending_fields.is_empty() {
-                        last_notify_time = std::time::Instant::now();
-                        last_notify_offset = stream.pos() as usize;
-                        on_progress(&ParseProgress {
-                            definition_id: def_id.clone(),
-                            fields: into_field_chunk(std::mem::take(&mut pending_fields)),
-                            parsed_offset: last_notify_offset,
-                            total_bytes,
-                            is_done: false,
-                            is_finalizing: false,
-                            errors: Vec::new(),
-                            parse_result: None,
-                        });
                     }
                 }
             }
         }
+
+        let mut index_builder = tracker.take().and_then(|t| t.index_builder);
 
         let final_offset = stream.pos() as usize;
         let final_errors = self.errors.into_inner();
@@ -628,7 +710,7 @@ impl KaitaiInterpreter {
         }
     }
 
-    fn update_array_metadata(&mut self, attr: &KsyAttr, results: &[ParsedField]) {
+    fn update_array_metadata(&mut self, attr: &KsyAttr, results: &[ParsedField], stats: &mut ArrayRunningMinMax) {
         let Some(ref raw_id) = attr.id else {
             return;
         };
@@ -638,12 +720,47 @@ impl KaitaiInterpreter {
         }
 
         let len = results.len() as i64;
+        if let Some(last) = results.last() {
+            match (&mut *stats, &last.value) {
+                (s @ ArrayRunningMinMax::Uninit, FieldValue::String(str_val)) => {
+                    *s = ArrayRunningMinMax::Strings {
+                        min: str_val.clone(),
+                        max: str_val.clone(),
+                    };
+                }
+                (s @ ArrayRunningMinMax::Uninit, val) => {
+                    let n = val.to_i64();
+                    *s = ArrayRunningMinMax::Ints { min: n, max: n };
+                }
+                (ArrayRunningMinMax::Strings { min, max }, FieldValue::String(str_val)) => {
+                    if str_val < min {
+                        *min = str_val.clone();
+                    }
+                    if str_val > max {
+                        *max = str_val.clone();
+                    }
+                }
+                (ArrayRunningMinMax::Strings { .. }, _) => {}
+                (ArrayRunningMinMax::Ints { min, max }, val) => {
+                    let n = val.to_i64();
+                    if n < *min {
+                        *min = n;
+                    }
+                    if n > *max {
+                        *max = n;
+                    }
+                }
+            }
+        }
+
         for prefix in &prefixes {
             self.context.insert(format!("__array_len__:{prefix}"), len);
             self.context.insert(format!("{prefix}.size"), len);
             self.context.insert(format!("{prefix}.length"), len);
 
-            if let Some(first) = results.first() {
+            if results.len() == 1
+                && let Some(first) = results.first()
+            {
                 self.record_field_value(&format!("{prefix}.first"), &first.value);
                 self.record_children_values(&format!("{prefix}.first"), &first.children);
             }
@@ -651,29 +768,15 @@ impl KaitaiInterpreter {
                 self.record_field_value(&format!("{prefix}.last"), &last.value);
                 self.record_children_values(&format!("{prefix}.last"), &last.children);
             }
-            if !results.is_empty() {
-                if matches!(results[0].value, FieldValue::String(_)) {
-                    let min_str = results
-                        .iter()
-                        .filter_map(|f| if let FieldValue::String(ref s) = f.value { Some(s) } else { None })
-                        .min()
-                        .cloned();
-                    let max_str = results
-                        .iter()
-                        .filter_map(|f| if let FieldValue::String(ref s) = f.value { Some(s) } else { None })
-                        .max()
-                        .cloned();
-                    if let Some(s) = min_str {
-                        self.string_context.insert(format!("{prefix}.min"), s);
-                    }
-                    if let Some(s) = max_str {
-                        self.string_context.insert(format!("{prefix}.max"), s);
-                    }
-                } else {
-                    let min_val = results.iter().map(|f| f.value.to_i64()).min().unwrap_or(0);
-                    let max_val = results.iter().map(|f| f.value.to_i64()).max().unwrap_or(0);
-                    self.context.insert(format!("{prefix}.min"), min_val);
-                    self.context.insert(format!("{prefix}.max"), max_val);
+            match &*stats {
+                ArrayRunningMinMax::Uninit => {}
+                ArrayRunningMinMax::Strings { min, max } => {
+                    self.string_context.insert(format!("{prefix}.min"), min.clone());
+                    self.string_context.insert(format!("{prefix}.max"), max.clone());
+                }
+                ArrayRunningMinMax::Ints { min, max } => {
+                    self.context.insert(format!("{prefix}.min"), *min);
+                    self.context.insert(format!("{prefix}.max"), *max);
                 }
             }
         }
@@ -715,26 +818,42 @@ impl KaitaiInterpreter {
         }
     }
 
-    fn parse_attr_repeated(&mut self, attr: &KsyAttr, stream: &mut KaitaiStream, scope: TypeScope, is_instance: bool) -> Vec<ParsedField> {
-        self.parse_attr_repeated_cb_cancellable(attr, stream, scope, is_instance, None, &mut |_, _| {})
-    }
-
     #[allow(clippy::too_many_arguments)]
-    fn parse_attr_repeated_cb_cancellable<F>(
+    fn parse_attr_repeated_cancellable(
         &mut self,
         attr: &KsyAttr,
         stream: &mut KaitaiStream,
         scope: TypeScope,
         is_instance: bool,
+        origin: ProgressOrigin,
         cancel_token: Option<&std::sync::atomic::AtomicBool>,
-        on_item: &mut F,
-    ) -> Vec<ParsedField>
-    where
-        F: FnMut(&[ParsedField], usize),
-    {
-        if self.recursion_depth > MAX_RECURSION {
+        mut tracker: Option<&mut ProgressTracker<'_>>,
+    ) -> Vec<ParsedField> {
+        if is_cancelled(cancel_token) || self.recursion_depth > MAX_RECURSION {
             return Vec::new();
         }
+
+        // Redirect io: _root._io at attribute level so repeated reads advance on a single root stream.
+        if attr.io.as_deref() == Some("_root._io") {
+            let root_slice = stream.root_data();
+            let mut root_stream = KaitaiStream::new(root_slice);
+            let old_stream_size = self.stream_size;
+            self.stream_size = root_slice.len();
+            let mut attr_no_io = attr.clone();
+            attr_no_io.io = None;
+            let res = self.parse_attr_repeated_cancellable(
+                &attr_no_io,
+                &mut root_stream,
+                scope,
+                is_instance,
+                ProgressOrigin::root(origin.emit_root_fields),
+                cancel_token,
+                tracker,
+            );
+            self.stream_size = old_stream_size;
+            return res;
+        }
+
         let mut results = Vec::new();
 
         // Handle value instances (computed fields, no stream reading)
@@ -809,9 +928,10 @@ impl KaitaiInterpreter {
         }
 
         if let Some(repeat) = &attr.repeat {
+            let cond_uses_index = attr.condition.as_deref().is_some_and(|c| expr_uses_ident(c, "_index"));
             // Check attribute condition once before starting repetition if it does not depend on _index
             if let Some(cond) = &attr.condition
-                && !cond.contains("_index")
+                && !cond_uses_index
             {
                 let ctx = self.make_eval_ctx(stream);
                 let cond_holds = if let Some(ref ast) = attr.compiled_condition {
@@ -824,32 +944,73 @@ impl KaitaiInterpreter {
                 }
             }
 
-            self.update_array_metadata(attr, &results);
+            // When `pos` does not depend on `_index` or `_`, seek once for the repetition block and
+            // restore the original position afterwards so sequential reads advance and terminate.
+            let pos_uses_index = matches!(
+                &attr.pos,
+                Some(KsyValue::Expr(expr)) if expr_uses_ident(expr, "_index") || expr_uses_ident(expr, "_")
+            );
+            let mut stripped_pos_attr = None;
+            let mut saved_pos_before_repeat = None;
+            if attr.pos.is_some()
+                && !pos_uses_index
+                && let Some(target_pos) = self.resolve_pos(attr, stream)
+            {
+                saved_pos_before_repeat = Some(stream.pos());
+                stream.set_pos(target_pos as u64);
+                let mut cloned = attr.clone();
+                cloned.pos = None;
+                cloned.compiled_pos = None;
+                stripped_pos_attr = Some(cloned);
+            }
+            let loop_attr = stripped_pos_attr.as_ref().unwrap_or(attr);
+            let stream_len = stream.size() as usize;
+            let mut array_stats = ArrayRunningMinMax::Uninit;
+
+            self.update_array_metadata(loop_attr, &results, &mut array_stats);
 
             match repeat.as_str() {
                 "expr" => {
-                    if let Some(expr) = &attr.repeat_expr {
-                        let count = if let Some(ref ast) = attr.compiled_repeat_expr {
+                    if let Some(expr) = &loop_attr.repeat_expr {
+                        let count = if let Some(ref ast) = loop_attr.compiled_repeat_expr {
                             self.resolve_count_ast(ast, stream)
                         } else {
                             self.resolve_count(expr, stream)
                         };
+                        let mut prev_zero_pos: Option<usize> = None;
                         for i in 0..count {
-                            if let Some(token) = cancel_token
-                                && token.load(std::sync::atomic::Ordering::Relaxed)
-                            {
+                            if is_cancelled(cancel_token) {
                                 break;
                             }
                             self.set_repeat_index(i);
                             let pos_before = stream.pos();
-                            if let Some(field) = self.parse_attr_once(attr, Some(i), stream, scope, is_instance) {
-                                results.push(field);
-                                self.update_array_metadata(attr, &results);
-                                on_item(&results, stream.pos() as usize);
-                                if stream.pos() <= pos_before && attr.pos.is_none() {
-                                    break;
+                            if let Some(field) =
+                                self.parse_attr_once(loop_attr, Some(i), stream, scope, is_instance, origin, cancel_token, tracker.as_deref_mut())
+                            {
+                                let field_offset = field.offset;
+                                let field_size = field.size;
+                                if let Some(t) = tracker.as_mut() {
+                                    if origin.emit_root_fields {
+                                        t.record_root_field(&field);
+                                    }
+                                    if !is_cancelled(cancel_token) {
+                                        t.maybe_notify(origin.resolve_offset(stream.pos()));
+                                    }
                                 }
-                            } else if attr.condition.as_ref().is_some_and(|c| c.contains("_index")) {
+                                results.push(field);
+                                self.update_array_metadata(loop_attr, &results, &mut array_stats);
+                                if loop_attr.pos.is_none() {
+                                    if stream.pos() <= pos_before {
+                                        break;
+                                    }
+                                } else if field_size == 0 && (field_offset >= stream_len || prev_zero_pos == Some(field_offset)) {
+                                    break;
+                                } else if field_size == 0 {
+                                    prev_zero_pos = Some(field_offset);
+                                } else {
+                                    prev_zero_pos = None;
+                                }
+                            } else if cond_uses_index {
                                 continue;
                             } else {
                                 break;
@@ -859,20 +1020,37 @@ impl KaitaiInterpreter {
                 }
                 "eos" => {
                     let mut i = 0;
+                    let mut max_end: Option<usize> = None;
                     while !stream.is_eof() {
-                        if let Some(token) = cancel_token
-                            && token.load(std::sync::atomic::Ordering::Relaxed)
-                        {
+                        if is_cancelled(cancel_token) {
                             break;
                         }
                         self.set_repeat_index(i);
                         let pos_before = stream.pos();
-                        if let Some(field) = self.parse_attr_once(attr, Some(i), stream, scope, is_instance) {
-                            results.push(field);
-                            self.update_array_metadata(attr, &results);
-                            on_item(&results, stream.pos() as usize);
-                            if stream.pos() <= pos_before && attr.pos.is_none() {
+                        if let Some(field) = self.parse_attr_once(loop_attr, Some(i), stream, scope, is_instance, origin, cancel_token, tracker.as_deref_mut())
+                        {
+                            let span_end = field.offset.saturating_add(field.size);
+                            if loop_attr.pos.is_some() && max_end.is_some_and(|me| span_end <= me) {
                                 break;
+                            }
+                            if let Some(t) = tracker.as_mut() {
+                                if origin.emit_root_fields {
+                                    t.record_root_field(&field);
+                                }
+                                if !is_cancelled(cancel_token) {
+                                    t.maybe_notify(origin.resolve_offset(stream.pos()));
+                                }
+                            }
+                            results.push(field);
+                            self.update_array_metadata(loop_attr, &results, &mut array_stats);
+                            if loop_attr.pos.is_none() {
+                                if stream.pos() <= pos_before {
+                                    break;
+                                }
+                            } else if span_end >= stream_len {
+                                break;
+                            } else {
+                                max_end = Some(max_end.map_or(span_end, |me| me.max(span_end)));
                             }
                         } else {
                             break;
@@ -881,17 +1059,33 @@ impl KaitaiInterpreter {
                     }
                 }
                 "until" => {
-                    if let Some(until) = &attr.repeat_until {
+                    if let Some(until) = &loop_attr.repeat_until {
                         let mut i = 0;
+                        let mut max_end: Option<usize> = None;
+                        let mut visited_spans: Option<std::collections::HashSet<(usize, usize)>> = None;
                         while !stream.is_eof() {
-                            if let Some(token) = cancel_token
-                                && token.load(std::sync::atomic::Ordering::Relaxed)
-                            {
+                            if is_cancelled(cancel_token) {
                                 break;
                             }
                             self.set_repeat_index(i);
                             let pos_before = stream.pos();
-                            if let Some(field) = self.parse_attr_once(attr, Some(i), stream, scope, is_instance) {
+                            if let Some(field) =
+                                self.parse_attr_once(loop_attr, Some(i), stream, scope, is_instance, origin, cancel_token, tracker.as_deref_mut())
+                            {
+                                let span = (field.offset, field.size);
+                                let span_end = field.offset.saturating_add(field.size);
+                                if loop_attr.pos.is_some() {
+                                    if max_end.is_some_and(|me| span_end <= me) {
+                                        let seen = visited_spans.get_or_insert_with(|| results.iter().map(|f| (f.offset, f.size)).collect());
+                                        if !seen.insert(span) {
+                                            break;
+                                        }
+                                    } else if let Some(seen) = visited_spans.as_mut()
+                                        && !seen.insert(span)
+                                    {
+                                        break;
+                                    }
+                                }
                                 self.record_field_value("_", &field.value);
                                 self.record_children_values("_", &field.children);
                                 if !self.id_stack.is_empty() {
@@ -899,11 +1093,21 @@ impl KaitaiInterpreter {
                                     self.record_field_value(&full_underscore, &field.value);
                                     self.record_children_values(&full_underscore, &field.children);
                                 }
+                                if let Some(t) = tracker.as_mut() {
+                                    if origin.emit_root_fields {
+                                        t.record_root_field(&field);
+                                    }
+                                    if !is_cancelled(cancel_token) {
+                                        t.maybe_notify(origin.resolve_offset(stream.pos()));
+                                    }
+                                }
                                 results.push(field);
-                                self.update_array_metadata(attr, &results);
-                                on_item(&results, stream.pos() as usize);
+                                self.update_array_metadata(loop_attr, &results, &mut array_stats);
+                                if is_cancelled(cancel_token) {
+                                    break;
+                                }
                                 let ctx = self.make_eval_ctx(stream);
-                                let until_holds = if let Some(ref ast) = attr.compiled_repeat_until {
+                                let until_holds = if let Some(ref ast) = loop_attr.compiled_repeat_until {
                                     ExprEvaluator::eval_ast_bool(ast, &ctx)
                                 } else {
                                     ExprEvaluator::eval_bool(until, &ctx)
@@ -911,8 +1115,15 @@ impl KaitaiInterpreter {
                                 if until_holds {
                                     break;
                                 }
-                                if stream.pos() <= pos_before && attr.pos.is_none() {
-                                    break;
+                                if loop_attr.pos.is_none() {
+                                    if stream.pos() <= pos_before {
+                                        break;
+                                    }
+                                } else {
+                                    if span.1 == 0 && span.0 >= stream_len {
+                                        break;
+                                    }
+                                    max_end = Some(max_end.map_or(span_end, |me| me.max(span_end)));
                                 }
                             } else {
                                 break;
@@ -923,9 +1134,20 @@ impl KaitaiInterpreter {
                 }
                 _ => {}
             }
-        } else if let Some(field) = self.parse_attr_once(attr, None, stream, scope, is_instance) {
+
+            if let Some(old_pos) = saved_pos_before_repeat {
+                stream.set_pos(old_pos);
+            }
+        } else if let Some(field) = self.parse_attr_once(attr, None, stream, scope, is_instance, origin, cancel_token, tracker.as_deref_mut()) {
+            if let Some(t) = tracker.as_mut() {
+                if origin.emit_root_fields {
+                    t.record_root_field(&field);
+                }
+                if !is_cancelled(cancel_token) {
+                    t.maybe_notify(origin.resolve_offset(stream.pos()));
+                }
+            }
             results.push(field);
-            on_item(&results, stream.pos() as usize);
         }
         results
     }
@@ -987,8 +1209,19 @@ impl KaitaiInterpreter {
         cases.get("_").cloned()
     }
 
-    fn parse_attr_once(&mut self, attr: &KsyAttr, index: Option<usize>, stream: &mut KaitaiStream, scope: TypeScope, is_instance: bool) -> Option<ParsedField> {
-        if self.recursion_depth > MAX_RECURSION {
+    #[allow(clippy::too_many_arguments)]
+    fn parse_attr_once(
+        &mut self,
+        attr: &KsyAttr,
+        index: Option<usize>,
+        stream: &mut KaitaiStream,
+        scope: TypeScope,
+        is_instance: bool,
+        progress_origin: ProgressOrigin,
+        cancel_token: Option<&std::sync::atomic::AtomicBool>,
+        tracker: Option<&mut ProgressTracker<'_>>,
+    ) -> Option<ParsedField> {
+        if is_cancelled(cancel_token) || self.recursion_depth > MAX_RECURSION {
             return None;
         }
 
@@ -1000,7 +1233,16 @@ impl KaitaiInterpreter {
             self.stream_size = root_slice.len();
             let mut attr_no_io = attr.clone();
             attr_no_io.io = None;
-            let res = self.parse_attr_once(&attr_no_io, index, &mut root_stream, scope, is_instance);
+            let res = self.parse_attr_once(
+                &attr_no_io,
+                index,
+                &mut root_stream,
+                scope,
+                is_instance,
+                ProgressOrigin::root(progress_origin.emit_root_fields),
+                cancel_token,
+                tracker,
+            );
             self.stream_size = old_stream_size;
             return res;
         }
@@ -1097,6 +1339,9 @@ impl KaitaiInterpreter {
                 old_pos,
                 stream,
                 scope,
+                progress_origin,
+                cancel_token,
+                tracker,
             )
         } else if attr.size.is_some() || attr.size_eos || attr.contents.is_some() {
             let read_size = if attr.size_eos { self.remaining_bytes(stream) } else { computed_size };
@@ -1239,6 +1484,9 @@ impl KaitaiInterpreter {
         old_pos: Option<u64>,
         stream: &mut KaitaiStream,
         scope: TypeScope,
+        progress_origin: ProgressOrigin,
+        cancel_token: Option<&std::sync::atomic::AtomicBool>,
+        tracker: Option<&mut ProgressTracker<'_>>,
     ) -> Option<(FieldValue, usize, Vec<ParsedField>)> {
         match type_str {
             "u1" => Some((FieldValue::U8(stream.read_u1()?), 1, Vec::new())),
@@ -1355,7 +1603,19 @@ impl KaitaiInterpreter {
                 }
             }
             // Custom type
-            custom => self.parse_custom_type(custom, type_args, index, attr, start_offset, old_pos, stream, scope),
+            custom => self.parse_custom_type(
+                custom,
+                type_args,
+                index,
+                attr,
+                start_offset,
+                old_pos,
+                stream,
+                scope,
+                progress_origin,
+                cancel_token,
+                tracker,
+            ),
         }
     }
 
@@ -1457,7 +1717,14 @@ impl KaitaiInterpreter {
         _old_pos: Option<u64>,
         stream: &mut KaitaiStream,
         scope: TypeScope,
+        progress_origin: ProgressOrigin,
+        cancel_token: Option<&std::sync::atomic::AtomicBool>,
+        mut tracker: Option<&mut ProgressTracker<'_>>,
     ) -> Option<(FieldValue, usize, Vec<ParsedField>)> {
+        if is_cancelled(cancel_token) {
+            return None;
+        }
+
         let type_def = match scope.get_type(type_name) {
             Some(t) => t,
             None => {
@@ -1591,6 +1858,7 @@ impl KaitaiInterpreter {
         // Align bit cursor when entering a new struct ONLY if neither fixed nor calculated bitfields are mid-byte?
         // Note: In Kaitai Struct, subtypes do not reset bit alignment unless stream changes (substream).
         let use_substream = (size_val.is_some() && size_val != Some(0)) || attr.size_eos;
+        let saved_stream_size = self.stream_size;
 
         let res = (|| {
             if use_substream {
@@ -1609,9 +1877,21 @@ impl KaitaiInterpreter {
                 };
 
                 let effective_sub_size = sub_stream.size() as usize;
-                let old_stream_size = self.stream_size;
                 self.stream_size = effective_sub_size;
                 self.context.insert(format!("{stack_prefix}._io.size"), effective_sub_size as i64);
+
+                let child_base = progress_origin.abs_base.saturating_add(start_offset);
+                let child_limit = if processed_buf_opt.is_some() {
+                    let proc_cap = child_base.saturating_add(sub_size);
+                    Some(progress_origin.abs_limit.map_or(proc_cap, |lim| lim.min(proc_cap)))
+                } else {
+                    progress_origin.abs_limit
+                };
+                let child_origin = ProgressOrigin {
+                    abs_base: child_base,
+                    abs_limit: child_limit,
+                    emit_root_fields: false,
+                };
 
                 let mut fields = Vec::new();
 
@@ -1619,20 +1899,39 @@ impl KaitaiInterpreter {
                 let errors_before_sub = self.errors.borrow().len();
                 let saved_sub_pos = sub_stream.pos();
                 for (id, inst_attr) in &type_def.instances {
+                    if is_cancelled(cancel_token) {
+                        break;
+                    }
                     if can_preeval_pos_instance(inst_attr, &type_def.seq, nested_scope) {
                         let mut inst_copy = inst_attr.clone();
                         inst_copy.id = Some(id.clone());
-                        self.parse_attr_repeated(&inst_copy, &mut sub_stream, nested_scope, true);
+                        self.parse_attr_repeated_cancellable(&inst_copy, &mut sub_stream, nested_scope, true, child_origin, cancel_token, None);
                     }
                 }
                 sub_stream.set_pos(saved_sub_pos);
                 self.errors.borrow_mut().truncate(errors_before_sub);
 
                 // Pre-evaluate value instances without recording errors (in case seq sizes depend on them)
-                self.evaluate_value_instances_silent(&type_def.instances, &sub_stream);
+                if !is_cancelled(cancel_token) {
+                    self.evaluate_value_instances_silent(&type_def.instances, &sub_stream);
+                }
 
                 for nested_attr in &type_def.seq {
-                    let parsed = self.parse_attr_repeated(nested_attr, &mut sub_stream, nested_scope, false);
+                    if is_cancelled(cancel_token) {
+                        break;
+                    }
+                    let parsed = self.parse_attr_repeated_cancellable(
+                        nested_attr,
+                        &mut sub_stream,
+                        nested_scope,
+                        false,
+                        child_origin,
+                        cancel_token,
+                        tracker.as_deref_mut(),
+                    );
+                    if parsed.is_empty() && is_cancelled(cancel_token) {
+                        break;
+                    }
                     let should_parse = if let Some(cond) = &nested_attr.condition {
                         let ctx = self.make_eval_ctx(&sub_stream);
                         if let Some(ref ast) = nested_attr.compiled_condition {
@@ -1647,6 +1946,9 @@ impl KaitaiInterpreter {
                         return None;
                     }
                     fields.extend(parsed);
+                    if is_cancelled(cancel_token) {
+                        break;
+                    }
                     if let Some(ref sub_meta) = type_def.meta {
                         self.update_endian_from_meta(sub_meta, &sub_stream);
                     }
@@ -1663,57 +1965,89 @@ impl KaitaiInterpreter {
                 }
 
                 // Evaluate instances after seq: first pos instances, then refresh value instances, then emit value instances
-                for is_pos_pass in [true, false] {
-                    if !is_pos_pass {
-                        self.evaluate_value_instances_silent(&type_def.instances, &sub_stream);
-                    }
-                    for (id, inst_attr) in &type_def.instances {
-                        let is_pos_inst = inst_attr.pos.is_some();
-                        if is_pos_inst != is_pos_pass {
-                            continue;
+                if !is_cancelled(cancel_token) {
+                    for is_pos_pass in [true, false] {
+                        if is_cancelled(cancel_token) {
+                            break;
                         }
-                        if inst_attr.pos.is_some() || inst_attr.value.is_some() {
-                            let mut inst_copy = inst_attr.clone();
-                            inst_copy.id = Some(id.clone());
-                            let mut inst_fields = self.parse_attr_repeated(&inst_copy, &mut sub_stream, nested_scope, true);
-                            if inst_attr.io.as_deref() != Some("_root._io") {
-                                let mut inst_pending = inst_fields.iter_mut().map(|field| (field, start_offset)).collect::<Vec<_>>();
-                                while let Some((field, base)) = inst_pending.pop() {
-                                    field.offset += base;
-                                    for child in &mut field.children {
-                                        inst_pending.push((child, base));
+                        if !is_pos_pass {
+                            self.evaluate_value_instances_silent(&type_def.instances, &sub_stream);
+                        }
+                        for (id, inst_attr) in &type_def.instances {
+                            if is_cancelled(cancel_token) {
+                                break;
+                            }
+                            let is_pos_inst = inst_attr.pos.is_some();
+                            if is_pos_inst != is_pos_pass {
+                                continue;
+                            }
+                            if inst_attr.pos.is_some() || inst_attr.value.is_some() {
+                                let mut inst_copy = inst_attr.clone();
+                                inst_copy.id = Some(id.clone());
+                                let mut inst_fields = self.parse_attr_repeated_cancellable(
+                                    &inst_copy,
+                                    &mut sub_stream,
+                                    nested_scope,
+                                    true,
+                                    child_origin,
+                                    cancel_token,
+                                    tracker.as_deref_mut(),
+                                );
+                                if inst_attr.io.as_deref() != Some("_root._io") {
+                                    let mut inst_pending = inst_fields.iter_mut().map(|field| (field, start_offset)).collect::<Vec<_>>();
+                                    while let Some((field, base)) = inst_pending.pop() {
+                                        field.offset += base;
+                                        for child in &mut field.children {
+                                            inst_pending.push((child, base));
+                                        }
                                     }
                                 }
+                                fields.extend(inst_fields);
                             }
-                            fields.extend(inst_fields);
                         }
                     }
                 }
 
                 let new_pos = (start_offset + sub_size) as u64;
                 stream.set_pos(new_pos);
-                self.stream_size = old_stream_size;
                 Some(fields)
             } else {
+                let child_origin = ProgressOrigin {
+                    emit_root_fields: false,
+                    ..progress_origin
+                };
+
                 // Pre-evaluate pos-based instances before seq
                 let errors_before = self.errors.borrow().len();
                 let saved_pos = stream.pos();
                 for (id, inst_attr) in &type_def.instances {
+                    if is_cancelled(cancel_token) {
+                        break;
+                    }
                     if can_preeval_pos_instance(inst_attr, &type_def.seq, nested_scope) {
                         let mut inst_copy = inst_attr.clone();
                         inst_copy.id = Some(id.clone());
-                        self.parse_attr_repeated(&inst_copy, stream, nested_scope, true);
+                        self.parse_attr_repeated_cancellable(&inst_copy, stream, nested_scope, true, child_origin, cancel_token, None);
                     }
                 }
                 stream.set_pos(saved_pos);
                 self.errors.borrow_mut().truncate(errors_before);
 
                 // Pre-evaluate value instances without recording errors (in case seq sizes depend on them)
-                self.evaluate_value_instances_silent(&type_def.instances, stream);
+                if !is_cancelled(cancel_token) {
+                    self.evaluate_value_instances_silent(&type_def.instances, stream);
+                }
 
                 let mut fields = Vec::new();
                 for nested_attr in &type_def.seq {
-                    let parsed = self.parse_attr_repeated(nested_attr, stream, nested_scope, false);
+                    if is_cancelled(cancel_token) {
+                        break;
+                    }
+                    let parsed =
+                        self.parse_attr_repeated_cancellable(nested_attr, stream, nested_scope, false, child_origin, cancel_token, tracker.as_deref_mut());
+                    if parsed.is_empty() && is_cancelled(cancel_token) {
+                        break;
+                    }
                     let should_parse = if let Some(cond) = &nested_attr.condition {
                         let ctx = self.make_eval_ctx(stream);
                         if let Some(ref ast) = nested_attr.compiled_condition {
@@ -1728,6 +2062,9 @@ impl KaitaiInterpreter {
                         return None;
                     }
                     fields.extend(parsed);
+                    if is_cancelled(cancel_token) {
+                        break;
+                    }
                     if let Some(ref sub_meta) = type_def.meta {
                         self.update_endian_from_meta(sub_meta, stream);
                     }
@@ -1735,19 +2072,35 @@ impl KaitaiInterpreter {
                 }
 
                 // Evaluate instances after seq: first pos instances, then refresh value instances, then emit value instances
-                for is_pos_pass in [true, false] {
-                    if !is_pos_pass {
-                        self.evaluate_value_instances_silent(&type_def.instances, stream);
-                    }
-                    for (id, inst_attr) in &type_def.instances {
-                        let is_pos_inst = inst_attr.pos.is_some();
-                        if is_pos_inst != is_pos_pass {
-                            continue;
+                if !is_cancelled(cancel_token) {
+                    for is_pos_pass in [true, false] {
+                        if is_cancelled(cancel_token) {
+                            break;
                         }
-                        if inst_attr.pos.is_some() || inst_attr.value.is_some() {
-                            let mut inst_copy = inst_attr.clone();
-                            inst_copy.id = Some(id.clone());
-                            fields.extend(self.parse_attr_repeated(&inst_copy, stream, nested_scope, true));
+                        if !is_pos_pass {
+                            self.evaluate_value_instances_silent(&type_def.instances, stream);
+                        }
+                        for (id, inst_attr) in &type_def.instances {
+                            if is_cancelled(cancel_token) {
+                                break;
+                            }
+                            let is_pos_inst = inst_attr.pos.is_some();
+                            if is_pos_inst != is_pos_pass {
+                                continue;
+                            }
+                            if inst_attr.pos.is_some() || inst_attr.value.is_some() {
+                                let mut inst_copy = inst_attr.clone();
+                                inst_copy.id = Some(id.clone());
+                                fields.extend(self.parse_attr_repeated_cancellable(
+                                    &inst_copy,
+                                    stream,
+                                    nested_scope,
+                                    true,
+                                    child_origin,
+                                    cancel_token,
+                                    tracker.as_deref_mut(),
+                                ));
+                            }
                         }
                     }
                 }
@@ -1755,6 +2108,7 @@ impl KaitaiInterpreter {
             }
         })();
 
+        self.stream_size = saved_stream_size;
         self.set_endian(saved_endian);
         self.global_bit_endian = saved_bit_endian;
         self.global_encoding = saved_encoding;
