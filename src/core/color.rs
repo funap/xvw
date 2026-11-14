@@ -128,10 +128,15 @@ mod tests {
     #[test]
     fn test_from_hex() {
         assert_eq!(RgbaColor::from_hex("#ff0000"), Some(RgbaColor::rgb(255, 0, 0)));
+        assert_eq!(RgbaColor::from_hex("#00FF00"), Some(RgbaColor::rgb(0, 255, 0)));
         assert_eq!(RgbaColor::from_hex("00ff0080"), Some(RgbaColor::new(0, 255, 0, 128)));
         assert_eq!(RgbaColor::from_hex("invalid"), None);
-        // Multibyte string safety tests (must not panic)
+        // Multibyte string safety tests (must not panic, including '#' + byte lengths 6/8)
         assert_eq!(RgbaColor::from_hex("あいう"), None);
+        assert_eq!(RgbaColor::from_hex("#あ"), None);
+        assert_eq!(RgbaColor::from_hex("#あいう"), None);
+        assert_eq!(RgbaColor::from_hex("#あa45"), None);
+        assert_eq!(RgbaColor::from_hex("#12あ456"), None);
         assert_eq!(RgbaColor::from_hex("＃FF0000"), None);
         assert_eq!(RgbaColor::from_hex(""), None);
     }

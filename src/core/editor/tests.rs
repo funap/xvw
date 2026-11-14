@@ -2580,3 +2580,88 @@ fn test_unfold_single_unbookmarked_gap_preserves_other_gaps_in_editor() {
     editor.move_up();
     assert_eq!(editor.cursor.offset, 16);
 }
+
+#[test]
+fn test_go_to_offset_unfolds_overlapping_bookmark_gap_and_struct_folds() {
+    use crate::core::bookmark::{BookmarkColor, BookmarkItem};
+    use crate::core::color::RgbaColor;
+    use crate::core::structure::{FieldValue, ParsedField};
+
+    let mut editor = create_editor_with_content(&[0u8; 80]);
+    let make_leaf = |id: &str, offset: usize, size: usize| ParsedField {
+        id: id.into(),
+        field_type: "bytes".into(),
+        offset,
+        size,
+        value: FieldValue::Bytes(vec![0; size]),
+        color: RgbaColor::default(),
+        description: None,
+        children: Vec::new(),
+        enum_label: None,
+        is_instance: false,
+    };
+
+    let inner = ParsedField {
+        id: "inner".into(),
+        field_type: "inner_t".into(),
+        offset: 24,
+        size: 16,
+        value: FieldValue::Struct,
+        color: RgbaColor::default(),
+        description: None,
+        children: vec![make_leaf("inner_data", 24, 16)],
+        enum_label: None,
+        is_instance: false,
+    };
+    let outer = ParsedField {
+        id: "outer".into(),
+        field_type: "outer_t".into(),
+        offset: 16,
+        size: 32,
+        value: FieldValue::Struct,
+        color: RgbaColor::default(),
+        description: None,
+        children: vec![make_leaf("outer_prefix", 16, 8), inner, make_leaf("outer_tail", 40, 8)],
+        enum_label: None,
+        is_instance: false,
+    };
+    let tail_struct = ParsedField {
+        id: "tail_struct".into(),
+        field_type: "tail_t".into(),
+        offset: 64,
+        size: 16,
+        value: FieldValue::Struct,
+        color: RgbaColor::default(),
+        description: None,
+        children: vec![make_leaf("tail_data", 64, 16)],
+        enum_label: None,
+        is_instance: false,
+    };
+
+    editor.set_parse_result(ParseResult::new("overlap-jump".into(), vec![outer, tail_struct], 80, Vec::new()));
+    editor.bookmarks_mut().add(BookmarkItem::new(16, 16, BookmarkColor::Red, "HiddenBM"));
+    editor.bookmarks_mut().add(BookmarkItem::new(48, 16, BookmarkColor::Blue, "VisibleBM"));
+    editor.bookmarks_mut().hide_color(BookmarkColor::Red);
+    editor.bookmarks_mut().set_hide_unbookmarked(true);
+    editor.toggle_struct_collapsed("16:0:outer");
+    editor.toggle_struct_collapsed("24:1:inner");
+    editor.toggle_struct_collapsed("64:0:tail_struct");
+
+    assert_eq!(*editor.computed_folded_regions(), [(0, 16), (16, 48), (64, 80)].into_iter().collect());
+    assert_eq!(editor.line_starts(), vec![0, 16, 48, 64]);
+
+    // Jumping into [16..48) must auto-unfold all overlapping layers (hidden bookmark, unbookmarked
+    // tail [32..48), and nested collapsed structures) while leaving unrelated folds collapsed.
+    editor.go_to_offset(28, false);
+    assert_eq!(editor.cursor.offset, 28);
+    assert!(!editor.is_folded(16));
+    assert!(!editor.is_folded(28));
+    assert!(!editor.is_folded(36));
+    assert!(!editor.structure.is_collapsed("16:0:outer"));
+    assert!(!editor.structure.is_collapsed("24:1:inner"));
+    assert!(editor.bookmarks().is_hide_unbookmarked());
+    assert!(editor.is_folded(0));
+    assert!(editor.is_folded(64));
+    assert!(editor.structure.is_collapsed("64:0:tail_struct"));
+    assert_eq!(editor.line_starts(), vec![0, 16, 16, 24, 24, 40, 48, 64]);
+}

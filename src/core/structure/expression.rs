@@ -1929,15 +1929,26 @@ mod tests {
     #[test]
     fn test_expr_compile_and_eval_non_ascii_does_not_panic() {
         let values = HashMap::new();
-        let ctx = EvalContext::simple(&values, &[]);
+        let errors = std::cell::RefCell::new(Vec::new());
+        let ctx = EvalContext {
+            errors: Some(&errors),
+            ..EvalContext::simple(&values, &[])
+        };
 
-        for input in ["→", "1 + →", "→ + 1", "(1 → 2)", "[1, ★]", "👍 == 0"] {
+        for input in ["→", "1 + →", "→ + 1", "(1 → 2)", "[1, ★]", "👍 == 0", "# 日本語コメント"] {
             let ast = ExprAST::compile(input).expect("non-empty expr compiles");
             let _ = ExprEvaluator::eval_ast_rich(&ast, &ctx);
             let _ = ExprEvaluator::evaluate_rich(input, &ctx);
         }
 
         assert_eq!(ExprEvaluator::eval_i64("1 + 2 * 3", &ctx), 7);
+        assert_eq!(ExprEvaluator::eval_i64("1 + 2 # 日本語コメント\n+ 3", &ctx), 6);
+        assert_eq!(ExprEvaluator::eval_i64("42 # 末尾コメント😀", &ctx), 42);
+        assert_eq!(ExprEvaluator::eval_i64("'あいう'.length", &ctx), 3);
+        assert_eq!(ExprEvaluator::eval_string("'あいう'.reverse", &ctx), "ういあ");
+        assert_eq!(ExprEvaluator::eval_string("'👍a😀b'.substring(1, 3)", &ctx), "a😀");
+        assert_eq!(ExprEvaluator::eval_string("\"あ\" + \"いう\"", &ctx), "あいう");
+        assert!(errors.borrow().is_empty());
     }
 
     #[test]
