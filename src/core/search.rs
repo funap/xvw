@@ -230,7 +230,7 @@ pub fn find_occurrences(data: &[u8], pattern: &[PatternByte], limit: SearchLimit
                 }
                 SearchLimit::Range(range_bytes) => {
                     if let Some(first) = first_match
-                        && i >= first + range_bytes
+                        && i >= first.saturating_add(range_bytes)
                     {
                         break;
                     }
@@ -269,7 +269,7 @@ pub fn find_occurrences_segmented(
     }
 
     let mut results = Vec::new();
-    let mut first_match = None;
+    let mut first_match: Option<usize> = None;
 
     for seg in segments {
         let seg_start = seg.start.min(data.len());
@@ -301,7 +301,7 @@ pub fn find_occurrences_segmented(
             }
             SearchLimit::Range(range_bytes) => {
                 if let Some(first) = first_match
-                    && effective_range.start >= first + range_bytes
+                    && effective_range.start >= first.saturating_add(range_bytes)
                 {
                     break;
                 }
@@ -321,7 +321,7 @@ pub fn find_occurrences_segmented(
             SearchLimit::Range(range_bytes) => {
                 if let Some(first) = first_match
                     && let Some(&last) = results.last()
-                    && last >= first + range_bytes
+                    && last >= first.saturating_add(range_bytes)
                 {
                     break;
                 }
@@ -462,7 +462,7 @@ pub fn find_next_occurrence_segmented(data: &[u8], pattern: &[PatternByte], from
 
         // 2. Wrap-around: search from 0 to `from_offset`
         if from_offset > 0 {
-            let wrap_end = (from_offset + pattern.len().saturating_sub(1)).min(data.len());
+            let wrap_end = from_offset.saturating_add(pattern.len().saturating_sub(1)).min(data.len());
             return find_single_forward(data, pattern, 0, wrap_end);
         }
         return None;
@@ -484,7 +484,7 @@ pub fn find_next_occurrence_segmented(data: &[u8], pattern: &[PatternByte], from
         if seg.start >= from_offset {
             break;
         }
-        let seg_end = seg.end.min((from_offset + pattern.len().saturating_sub(1)).min(data.len()));
+        let seg_end = seg.end.min(from_offset.saturating_add(pattern.len().saturating_sub(1)).min(data.len()));
         if let Some(pos) = find_single_forward(data, pattern, seg.start, seg_end) {
             return Some(pos);
         }
@@ -508,7 +508,7 @@ pub fn find_prev_occurrence_segmented(data: &[u8], pattern: &[PatternByte], befo
     if segments.is_empty() {
         // 1. Search backward strictly before `before_offset` if `before_offset > 0`
         if before_offset > 0 {
-            let end = (before_offset + pattern.len().saturating_sub(1)).min(data.len());
+            let end = before_offset.saturating_add(pattern.len().saturating_sub(1)).min(data.len());
             if let Some(pos) = find_single_backward(data, pattern, 0, end) {
                 return Some(pos);
             }
@@ -524,7 +524,7 @@ pub fn find_prev_occurrence_segmented(data: &[u8], pattern: &[PatternByte], befo
             if seg.start >= before_offset {
                 continue;
             }
-            let seg_end = seg.end.min((before_offset + pattern.len().saturating_sub(1)).min(data.len()));
+            let seg_end = seg.end.min(before_offset.saturating_add(pattern.len().saturating_sub(1)).min(data.len()));
             if let Some(pos) = find_single_backward(data, pattern, seg.start, seg_end) {
                 return Some(pos);
             }
@@ -766,5 +766,23 @@ mod tests {
         // Range filter restriction (e.g. viewport)
         let filtered = find_occurrences_segmented(data, &hello_pattern, SearchLimit::Unlimited, &segments, Some(5..14));
         assert_eq!(filtered, vec![7]);
+    }
+
+    #[test]
+    fn test_search_extreme_range_and_offset_bounds_do_not_overflow() {
+        let data = b"AA..BB";
+        let pat_aa = to_exact_pattern(b"AA");
+        let pat_bb = to_exact_pattern(b"BB");
+        let segments = [0..2, 4..6];
+
+        assert_eq!(find_occurrences(data, &pat_aa, SearchLimit::Range(usize::MAX), None), vec![0]);
+        assert_eq!(
+            find_occurrences_segmented(data, &pat_aa, SearchLimit::Range(usize::MAX), &segments, None),
+            vec![0]
+        );
+        assert_eq!(find_next_occurrence_segmented(data, &pat_aa, usize::MAX, &[]), Some(0));
+        assert_eq!(find_next_occurrence_segmented(data, &pat_aa, usize::MAX, &segments), Some(0));
+        assert_eq!(find_prev_occurrence_segmented(data, &pat_bb, usize::MAX, &[]), Some(4));
+        assert_eq!(find_prev_occurrence_segmented(data, &pat_bb, usize::MAX, &segments), Some(4));
     }
 }

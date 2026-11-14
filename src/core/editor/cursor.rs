@@ -373,13 +373,10 @@ impl CursorModel {
 
     pub fn select_left(&mut self, total_size: usize) {
         let step = self.group_size.byte_count();
-        if self.offset > 0 {
-            let target = (self.offset / step).saturating_sub(1) * step;
-            let anchor = if self.has_selection(total_size) {
-                self.selection.anchor()
-            } else {
-                self.offset
-            };
+        let current = self.offset.min(total_size);
+        if current > 0 {
+            let target = Self::previous_group_boundary(current, total_size, step);
+            let anchor = if self.has_selection(total_size) { self.selection.anchor() } else { current };
             self.offset = target;
             self.selection = Selection::new(anchor, target).clamped(total_size);
         }
@@ -513,6 +510,9 @@ impl CursorModel {
     }
 
     pub fn page_up(&mut self, visible_rows: usize, line_map: &LineMap, total_size: usize) {
+        if line_map.is_empty() {
+            return;
+        }
         let step = self.group_size.byte_count();
         let current_line_idx = LayoutEngine::find_line_index(self.offset, line_map);
 
@@ -535,10 +535,14 @@ impl CursorModel {
     }
 
     pub fn page_down(&mut self, visible_rows: usize, line_map: &LineMap, total_size: usize) {
+        if line_map.is_empty() {
+            return;
+        }
         let step = self.group_size.byte_count();
         let current_line_idx = LayoutEngine::find_line_index(self.offset, line_map);
+        let last_line_idx = line_map.len().saturating_sub(1);
 
-        let target_line_idx = cmp::min(current_line_idx + visible_rows, line_map.len() - 1);
+        let target_line_idx = cmp::min(current_line_idx.saturating_add(visible_rows), last_line_idx);
         let current_line_start = line_map.get(current_line_idx).expect("valid current line start");
         let offset_in_line = self.offset - current_line_start;
 
@@ -550,7 +554,7 @@ impl CursorModel {
         };
         let target_line_len = target_line_end - target_line_start;
 
-        if target_line_idx == line_map.len() - 1 && target_line_len == 0 {
+        if target_line_idx == last_line_idx && target_line_len == 0 {
             let max_offset = total_size;
             self.offset = (max_offset / step) * step;
         } else {
@@ -574,6 +578,9 @@ impl CursorModel {
     }
 
     pub fn select_page_up(&mut self, visible_rows: usize, line_map: &LineMap, total_size: usize) {
+        if line_map.is_empty() {
+            return;
+        }
         let step = self.group_size.byte_count();
         let current_line_idx = LayoutEngine::find_line_index(self.offset, line_map);
         let anchor = if self.has_selection(total_size) {
@@ -601,6 +608,9 @@ impl CursorModel {
     }
 
     pub fn select_page_down(&mut self, visible_rows: usize, line_map: &LineMap, total_size: usize) {
+        if line_map.is_empty() {
+            return;
+        }
         let step = self.group_size.byte_count();
         let current_line_idx = LayoutEngine::find_line_index(self.offset, line_map);
         let anchor = if self.has_selection(total_size) {
@@ -609,7 +619,8 @@ impl CursorModel {
             self.offset
         };
 
-        let target_line_idx = cmp::min(current_line_idx + visible_rows, line_map.len() - 1);
+        let last_line_idx = line_map.len().saturating_sub(1);
+        let target_line_idx = cmp::min(current_line_idx.saturating_add(visible_rows), last_line_idx);
         let current_line_start = line_map.get(current_line_idx).expect("valid current line start");
         let offset_in_line = self.offset - current_line_start;
 
@@ -621,7 +632,7 @@ impl CursorModel {
         };
         let target_line_len = target_line_end - target_line_start;
 
-        if target_line_idx == line_map.len() - 1 && target_line_len == 0 {
+        if target_line_idx == last_line_idx && target_line_len == 0 {
             let max_offset = total_size.saturating_sub(1);
             self.offset = (max_offset / step) * step;
         } else {
@@ -761,5 +772,57 @@ mod tests {
 
         model.clear_selection(total + 5);
         assert!(!model.has_selection(total + 5));
+    }
+
+    #[test]
+    fn test_cursor_model_select_left_unaligned_eof_matches_move_left() {
+        let total = 10;
+        let mut sel_model = CursorModel::new(ByteGroupSize::Four);
+        sel_model.set_cursor_offset(total, total);
+        sel_model.select_left(total);
+        assert_eq!(sel_model.offset, 8);
+        assert_eq!(sel_model.selection_range(total), Some(8..10));
+
+        let mut move_model = CursorModel::new(ByteGroupSize::Four);
+        move_model.set_cursor_offset(total, total);
+        move_model.move_left(total);
+        assert_eq!(sel_model.offset, move_model.offset);
+
+        sel_model.select_left(total);
+        assert_eq!(sel_model.offset, 4);
+        assert_eq!(sel_model.selection_range(total), Some(4..10));
+    }
+
+    #[test]
+    fn test_cursor_model_page_navigation_overflow_and_empty_line_map() {
+        use crate::core::layout::SparseLineMap;
+        use std::sync::Arc;
+
+        let line_map = LineMap::Standard {
+            total_size: 48,
+            bytes_per_row: 16,
+        };
+        let mut model = CursorModel::default();
+        model.page_down(usize::MAX, &line_map, 48);
+        assert_eq!(model.offset, 32);
+
+        let mut sel_model = CursorModel::default();
+        sel_model.select_page_down(usize::MAX, &line_map, 48);
+        assert_eq!(sel_model.offset, 32);
+        assert_eq!(sel_model.selection_range(48), Some(0..32));
+
+        let empty_map = LineMap::Sparse(Arc::new(SparseLineMap {
+            segments: Vec::new(),
+            total_lines: 0,
+            total_size: 0,
+            max_bytes_per_row: 16,
+            bytes_per_row: 16,
+        }));
+        let mut empty_model = CursorModel::default();
+        empty_model.page_up(10, &empty_map, 0);
+        empty_model.page_down(10, &empty_map, 0);
+        empty_model.select_page_up(10, &empty_map, 0);
+        empty_model.select_page_down(10, &empty_map, 0);
+        assert_eq!(empty_model.offset, 0);
     }
 }

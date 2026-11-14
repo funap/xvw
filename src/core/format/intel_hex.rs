@@ -171,24 +171,32 @@ pub fn export_intel_hex(data: &[u8], address_map: &AddressMap) -> String {
 
     let mut current_upper_16: Option<u16> = None;
     let chunk_size = if address_map.format_options.record_data_length > 0 {
-        address_map.format_options.record_data_length
+        address_map.format_options.record_data_length.min(u8::MAX as usize)
     } else {
         16 // standard 0x10 for Intel HEX
     };
 
     for seg in &segments {
         let seg_start = seg.buffer_offset.min(data.len());
-        let seg_end = (seg.buffer_offset + seg.length).min(data.len());
+        let seg_end = seg.buffer_offset.saturating_add(seg.length).min(data.len());
         if seg_start >= seg_end {
             continue;
         }
 
         let seg_data = &data[seg_start..seg_end];
         let mut cur_addr = seg.address;
+        let mut pos = 0;
 
-        for chunk in seg_data.chunks(chunk_size) {
+        while pos < seg_data.len() {
+            if cur_addr > u32::MAX as usize {
+                break;
+            }
+
             let upper_16 = ((cur_addr >> 16) & 0xFFFF) as u16;
             let lower_16 = (cur_addr & 0xFFFF) as u16;
+            let max_in_64k_page = 0x1_0000usize - (lower_16 as usize);
+            let record_len = (seg_data.len() - pos).min(chunk_size).min(max_in_64k_page);
+            let chunk = &seg_data[pos..pos + record_len];
 
             if current_upper_16 != Some(upper_16) {
                 current_upper_16 = Some(upper_16);
@@ -199,7 +207,7 @@ pub fn export_intel_hex(data: &[u8], address_map: &AddressMap) -> String {
                 out.push_str(&format!(":02000004{:04X}{:02X}{}", upper_16, checksum, line_ending));
             }
 
-            let byte_count = chunk.len() as u8;
+            let byte_count = u8::try_from(chunk.len()).expect("Intel HEX record byte count capped at 255");
             let a1 = ((lower_16 >> 8) & 0xFF) as u8;
             let a0 = (lower_16 & 0xFF) as u8;
             let mut sum: u32 = byte_count as u32 + a1 as u32 + a0 as u32;
@@ -212,18 +220,24 @@ pub fn export_intel_hex(data: &[u8], address_map: &AddressMap) -> String {
             let checksum = (!((sum & 0xFF) as u8)).wrapping_add(1);
             out.push_str(&format!("{:02X}{}", checksum, line_ending));
 
-            cur_addr += chunk.len();
+            pos += record_len;
+            let Some(next_addr) = cur_addr.checked_add(record_len) else {
+                break;
+            };
+            cur_addr = next_addr;
         }
     }
 
-    if let Some(entry) = address_map.format_options.entry_point {
-        let e3 = ((entry >> 24) & 0xFF) as u8;
-        let e2 = ((entry >> 16) & 0xFF) as u8;
-        let e1 = ((entry >> 8) & 0xFF) as u8;
-        let e0 = (entry & 0xFF) as u8;
+    if let Some(entry) = address_map.format_options.entry_point
+        && let Ok(entry_u32) = u32::try_from(entry)
+    {
+        let e3 = ((entry_u32 >> 24) & 0xFF) as u8;
+        let e2 = ((entry_u32 >> 16) & 0xFF) as u8;
+        let e1 = ((entry_u32 >> 8) & 0xFF) as u8;
+        let e0 = (entry_u32 & 0xFF) as u8;
         let sum: u32 = 4 + 5 + e3 as u32 + e2 as u32 + e1 as u32 + e0 as u32;
         let checksum = (!((sum & 0xFF) as u8)).wrapping_add(1);
-        out.push_str(&format!(":04000005{:08X}{:02X}{}", entry, checksum, line_ending));
+        out.push_str(&format!(":04000005{:08X}{:02X}{}", entry_u32, checksum, line_ending));
     }
 
     out.push_str(&format!(":00000001FF{}", line_ending));
@@ -334,5 +348,43 @@ mod tests {
             parse_intel_hex("あいう\n").unwrap_err(),
             HexImportError::InvalidRecordStart { line: 1, char: 'あ' }
         );
+    }
+
+    #[test]
+    fn test_export_intel_hex_clamps_record_length_and_splits_64k_boundary() {
+        let data: Vec<u8> = (0..300usize).map(|i| (i & 0xFF) as u8).collect();
+        let mut map = AddressMap::single_segment(0x0000_FFFC, data.len());
+        map.format_options.record_data_length = 300; // exceeds 255 byte_count max
+
+        let exported = export_intel_hex(&data, &map);
+        for line in exported.lines() {
+            assert!(line.starts_with(':'));
+            let byte_count = u8::from_str_radix(&line[1..3], 16).unwrap() as usize;
+            assert_eq!(line.len(), 11 + byte_count * 2, "unexpected record length in line {line}");
+        }
+
+        let reimported = parse_intel_hex(&exported).expect("clamped and 64KB-split Intel HEX must roundtrip");
+        assert_eq!(reimported.data, data);
+        assert_eq!(reimported.address_map.base_address(), 0x0000_FFFC);
+    }
+
+    #[test]
+    fn test_export_intel_hex_skips_entry_point_over_u32_max_and_handles_max_segment_length() {
+        let data = vec![0x01, 0x02, 0x03, 0x04];
+        let mut map = AddressMap::default(); // segments[0].length == usize::MAX
+        if let Ok(large_ep) = usize::try_from(0x1_0000_0005u64) {
+            map.format_options.entry_point = Some(large_ep);
+        }
+
+        let exported = export_intel_hex(&data, &map);
+        if usize::BITS > 32 {
+            assert!(!exported.contains(":04000005"), "must not emit invalid or truncated Type 05 record");
+        }
+
+        let reimported = parse_intel_hex(&exported).expect("valid Intel HEX output");
+        assert_eq!(reimported.data, data);
+        if usize::BITS > 32 {
+            assert_eq!(reimported.entry_point, None);
+        }
     }
 }

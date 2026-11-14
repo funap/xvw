@@ -188,6 +188,7 @@ pub enum HexImportError {
     UnsupportedRecordType { line: usize, record_type: String },
     NoDataRecords,
     UnknownFormat,
+    AddressOverflow,
 }
 
 impl fmt::Display for HexImportError {
@@ -213,6 +214,7 @@ impl fmt::Display for HexImportError {
             }
             HexImportError::NoDataRecords => write!(f, "No data records found in file"),
             HexImportError::UnknownFormat => write!(f, "Unrecognized format (not valid Motorola S-Record or Intel HEX)"),
+            HexImportError::AddressOverflow => write!(f, "Address space overflow while assembling records"),
         }
     }
 }
@@ -247,16 +249,19 @@ pub(crate) fn assemble_chunks_into_result(
     let mut merged_blocks: Vec<MergedBlock> = Vec::new();
 
     for (chunk_addr, chunk_data) in raw_chunks {
+        if let Some(last_byte_offset) = chunk_data.len().checked_sub(1) {
+            chunk_addr.checked_add(last_byte_offset).ok_or(HexImportError::AddressOverflow)?;
+        }
+
         if let Some(last) = merged_blocks.last_mut() {
-            let last_end = last.address + last.data.len();
-            if chunk_addr <= last_end {
-                // Overlap or strictly contiguous
-                let offset_in_last = chunk_addr - last.address;
-                let needed_len = offset_in_last + chunk_data.len();
+            let offset_in_last = chunk_addr - last.address;
+            if offset_in_last <= last.data.len() {
+                // Overlap or strictly contiguous without overflowing address addition
+                let needed_len = offset_in_last.checked_add(chunk_data.len()).ok_or(HexImportError::AddressOverflow)?;
                 if needed_len > last.data.len() {
                     last.data.resize(needed_len, 0xFF);
                 }
-                last.data[offset_in_last..offset_in_last + chunk_data.len()].copy_from_slice(&chunk_data);
+                last.data[offset_in_last..needed_len].copy_from_slice(&chunk_data);
                 continue;
             }
         }
@@ -270,11 +275,14 @@ pub(crate) fn assemble_chunks_into_result(
         return Err(HexImportError::NoDataRecords);
     }
 
-    let total_bytes: usize = merged_blocks.iter().map(|b| b.data.len()).sum();
+    let total_bytes = merged_blocks
+        .iter()
+        .try_fold(0usize, |acc, b| acc.checked_add(b.data.len()))
+        .ok_or(HexImportError::AddressOverflow)?;
     let mut combined_data = Vec::with_capacity(total_bytes);
     let mut segments = Vec::with_capacity(merged_blocks.len());
 
-    let mut current_buffer_offset = 0;
+    let mut current_buffer_offset = 0usize;
     for block in merged_blocks {
         let len = block.data.len();
         segments.push(MemorySegment {
@@ -283,7 +291,7 @@ pub(crate) fn assemble_chunks_into_result(
             length: len,
         });
         combined_data.extend_from_slice(&block.data);
-        current_buffer_offset += len;
+        current_buffer_offset = current_buffer_offset.checked_add(len).ok_or(HexImportError::AddressOverflow)?;
     }
 
     Ok(HexImportResult {
@@ -322,5 +330,30 @@ mod tests {
         assert_eq!(json, "\"base64\"");
         let deserialized: FileFormat = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, FileFormat::Base64);
+    }
+
+    #[test]
+    fn test_assemble_chunks_overflow_protection() {
+        // Chunk extending past usize::MAX must error cleanly instead of overflowing.
+        let overflow_chunks = vec![(usize::MAX - 1, vec![0x01, 0x02, 0x03])];
+        let err = assemble_chunks_into_result(overflow_chunks, HexFormat::IntelHex, None, None, HexFormatOptions::default()).unwrap_err();
+        assert_eq!(err, HexImportError::AddressOverflow);
+
+        // Exact inclusive end byte at usize::MAX is valid.
+        let max_end_chunks = vec![(usize::MAX - 3, vec![0xAA, 0xBB, 0xCC, 0xDD])];
+        let ok = assemble_chunks_into_result(max_end_chunks, HexFormat::IntelHex, None, None, HexFormatOptions::default())
+            .expect("exact usize::MAX end byte is valid");
+        assert_eq!(ok.data, vec![0xAA, 0xBB, 0xCC, 0xDD]);
+        assert_eq!(ok.address_map.segments.len(), 1);
+        assert_eq!(ok.address_map.segments[0].address, usize::MAX - 3);
+        assert_eq!(ok.address_map.segments[0].length, 4);
+
+        // Adjacent chunks ending at usize::MAX merge without addition overflow.
+        let contiguous_max = vec![(usize::MAX - 3, vec![0x01, 0x02]), (usize::MAX - 1, vec![0x03, 0x04])];
+        let merged = assemble_chunks_into_result(contiguous_max, HexFormat::IntelHex, None, None, HexFormatOptions::default())
+            .expect("contiguous chunks to usize::MAX merge");
+        assert_eq!(merged.data, vec![0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(merged.address_map.segments.len(), 1);
+        assert_eq!(merged.address_map.segments[0].length, 4);
     }
 }

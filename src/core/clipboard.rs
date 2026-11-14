@@ -124,24 +124,82 @@ fn parse_binary_tokens(text: &str) -> Option<Vec<u8>> {
 }
 
 fn parse_hex(text: &str) -> Option<Vec<u8>> {
+    struct ParsedHexLine<'a> {
+        tokens: Vec<&'a str>,
+        has_ascii_panel: bool,
+        offset_candidate: Option<usize>,
+        rest_all_two_digit_bytes: bool,
+    }
+
+    let mut parsed_lines = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let (hex_part, has_ascii_panel) = if trimmed.ends_with('|')
+            && let Some((before_pipe, _after_pipe)) = trimmed[..trimmed.len() - 1].split_once('|')
+        {
+            if before_pipe.trim().is_empty() {
+                return None;
+            }
+            (before_pipe, true)
+        } else {
+            (line, false)
+        };
+
+        let tokens: Vec<&str> = hex_part.split_ascii_whitespace().collect();
+        if tokens.is_empty() {
+            continue;
+        }
+
+        let offset_candidate = if tokens.len() > 1 && tokens[0].len() >= 6 && is_hex(tokens[0]) {
+            usize::from_str_radix(tokens[0], 16).ok()
+        } else {
+            None
+        };
+        let rest_all_two_digit_bytes = tokens.len() > 1
+            && tokens[1..].iter().all(|token| {
+                let token = token.trim_matches(|c| c == ',' || c == ';');
+                token.len() == 2 && is_hex(token)
+            });
+
+        parsed_lines.push(ParsedHexLine {
+            tokens,
+            has_ascii_panel,
+            offset_candidate,
+            rest_all_two_digit_bytes,
+        });
+    }
+
+    if parsed_lines.is_empty() {
+        return None;
+    }
+
+    // Only skip a leading address column across un-piped lines when multiple lines form
+    // a consistent contiguous hexdump sequence (offset + line byte count == next offset).
+    let is_contiguous_offset_dump = parsed_lines.len() >= 2
+        && parsed_lines.iter().all(|line| line.offset_candidate.is_some() && line.rest_all_two_digit_bytes)
+        && parsed_lines.windows(2).all(|window| {
+            let Some(addr0) = window[0].offset_candidate else {
+                return false;
+            };
+            let Some(addr1) = window[1].offset_candidate else {
+                return false;
+            };
+            addr0.checked_add(window[0].tokens.len() - 1) == Some(addr1)
+        });
+
     let mut result = Vec::new();
     let mut saw_hex = false;
 
-    for line in text.lines() {
-        let line = line.split('|').next().unwrap_or(line);
-        let mut tokens = line.split_ascii_whitespace();
-        let first = tokens.next();
-        let remaining: Vec<&str> = tokens.collect();
+    for parsed in parsed_lines {
+        let skip_first = parsed.offset_candidate.is_some() && parsed.rest_all_two_digit_bytes && (parsed.has_ascii_panel || is_contiguous_offset_dump);
+        let start_idx = usize::from(skip_first);
 
-        // Skip the address column of the application's conventional hex dump.
-        let tokens: Vec<&str> = if first.is_some_and(|token| token.len() >= 6 && is_hex(token)) && !remaining.is_empty() {
-            remaining
-        } else {
-            first.into_iter().chain(remaining).collect()
-        };
-
-        for token in tokens {
-            let token = token.trim_matches(|c| c == ',' || c == ';');
+        for &raw_token in &parsed.tokens[start_idx..] {
+            let token = raw_token.trim_matches(|c| c == ',' || c == ';');
             if token.is_empty() {
                 continue;
             }
@@ -153,8 +211,6 @@ fn parse_hex(text: &str) -> Option<Vec<u8>> {
                     result.push(u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?);
                 }
                 saw_hex = true;
-            } else if token.contains(':') || token.contains('-') {
-                continue;
             } else {
                 return None;
             }
@@ -203,5 +259,20 @@ mod tests {
     #[test]
     fn falls_back_to_text() {
         assert_eq!(parse_paste_bytes("hello"), Some(b"hello".to_vec()));
+        assert_eq!(parse_paste_bytes("aa:bb 01"), Some(b"aa:bb 01".to_vec()));
+        assert_eq!(parse_paste_bytes("01 02-03"), Some(b"01 02-03".to_vec()));
+        assert_eq!(parse_paste_bytes("foo-bar dead beef"), Some(b"foo-bar dead beef".to_vec()));
+        assert_eq!(parse_paste_bytes("|hello|"), Some(b"|hello|".to_vec()));
+    }
+
+    #[test]
+    fn preserves_long_first_hex_token_and_handles_hexdump_variants() {
+        assert_eq!(
+            parse_paste_bytes("DEADBEEF CAFEBABE"),
+            Some(vec![0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE])
+        );
+        assert_eq!(parse_paste_bytes("deadbeef 01 02"), Some(vec![0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02]));
+        assert_eq!(parse_paste_bytes("00000000  48 65 6c 6c 6f\n00000005  21"), Some(b"Hello!".to_vec()));
+        assert_eq!(parse_paste_bytes("00000000  7c 41  ||A|"), Some(vec![0x7c, 0x41]));
     }
 }

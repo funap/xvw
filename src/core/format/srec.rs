@@ -196,10 +196,20 @@ pub fn export_motorola_srec(data: &[u8], address_map: &AddressMap) -> String {
     let mut out = String::new();
     let line_ending = if address_map.format_options.crlf { "\r\n" } else { "\n" };
 
-    // S0 Header record: only if header was present in source or specified
+    // S0 Header record: only if header was present in source or specified.
+    // byte_count = 2 address bytes + data bytes + 1 checksum byte <= 255 -> max 252 data bytes.
     if let Some(hdr) = &address_map.format_options.header {
-        let hdr_bytes = hdr.as_bytes();
-        let byte_count = 2 + hdr_bytes.len() + 1;
+        const MAX_S0_HEADER_BYTES: usize = (u8::MAX as usize) - 3;
+        let hdr_bytes = if hdr.len() > MAX_S0_HEADER_BYTES {
+            let mut end = MAX_S0_HEADER_BYTES;
+            while end > 0 && !hdr.is_char_boundary(end) {
+                end -= 1;
+            }
+            &hdr.as_bytes()[..end]
+        } else {
+            hdr.as_bytes()
+        };
+        let byte_count = u8::try_from(2 + hdr_bytes.len() + 1).expect("S0 byte count fits in u8");
         let mut sum: u32 = byte_count as u32;
         out.push_str(&format!("S0{:02X}0000", byte_count));
         for &b in hdr_bytes {
@@ -220,7 +230,16 @@ pub fn export_motorola_srec(data: &[u8], address_map: &AddressMap) -> String {
         address_map.segments.clone()
     };
 
-    let max_address = segments.iter().map(|s| s.address.saturating_add(s.length)).max().unwrap_or(0);
+    let max_address = segments
+        .iter()
+        .filter_map(|s| {
+            let seg_start = s.buffer_offset.min(data.len());
+            let seg_end = s.buffer_offset.saturating_add(s.length).min(data.len());
+            let effective_len = seg_end.saturating_sub(seg_start);
+            (effective_len > 0).then(|| s.address.saturating_add(effective_len - 1))
+        })
+        .max()
+        .unwrap_or(0);
 
     let address_bytes = if address_map.format_options.address_width >= 2 {
         address_map.format_options.address_width.min(4)
@@ -232,26 +251,43 @@ pub fn export_motorola_srec(data: &[u8], address_map: &AddressMap) -> String {
         4
     };
 
-    let mut record_count: usize = 0;
-    let chunk_size = if address_map.format_options.record_data_length > 0 {
+    let max_address_for_width = match address_bytes {
+        2 => 0xFFFFusize,
+        3 => 0xFF_FFFFusize,
+        _ => u32::MAX as usize,
+    };
+
+    let max_data_per_record = (u8::MAX as usize) - address_bytes - 1;
+    let requested_chunk_size = if address_map.format_options.record_data_length > 0 {
         address_map.format_options.record_data_length
     } else {
         20 // standard 0x14 for Motorola S-Record
     };
+    let chunk_size = requested_chunk_size.min(max_data_per_record);
+
+    let mut record_count: usize = 0;
 
     for seg in &segments {
         let seg_start = seg.buffer_offset.min(data.len());
-        let seg_end = (seg.buffer_offset + seg.length).min(data.len());
+        let seg_end = seg.buffer_offset.saturating_add(seg.length).min(data.len());
         if seg_start >= seg_end {
             continue;
         }
 
         let seg_data = &data[seg_start..seg_end];
         let mut cur_addr = seg.address;
+        let mut pos = 0;
 
-        for chunk in seg_data.chunks(chunk_size) {
-            record_count += 1;
-            let byte_count = address_bytes + chunk.len() + 1;
+        while pos < seg_data.len() {
+            if cur_addr > max_address_for_width {
+                break;
+            }
+            let max_len_in_addr_space = (max_address_for_width - cur_addr).min(chunk_size - 1) + 1;
+            let record_len = (seg_data.len() - pos).min(chunk_size).min(max_len_in_addr_space);
+            let chunk = &seg_data[pos..pos + record_len];
+
+            record_count = record_count.saturating_add(1);
+            let byte_count = u8::try_from(address_bytes + chunk.len() + 1).expect("SREC record byte count fits in u8");
             let mut sum: u32 = byte_count as u32;
 
             out.push('S');
@@ -295,17 +331,31 @@ pub fn export_motorola_srec(data: &[u8], address_map: &AddressMap) -> String {
             let checksum = !(sum as u8);
             out.push_str(&format!("{:02X}{}", checksum, line_ending));
 
-            cur_addr += chunk.len();
+            pos += record_len;
+            let Some(next_addr) = cur_addr.checked_add(chunk.len()) else {
+                break;
+            };
+            cur_addr = next_addr;
         }
     }
 
-    if address_map.format_options.has_count_record && record_count <= 0xFFFF {
-        let count_u16 = record_count as u16;
-        let c1 = ((count_u16 >> 8) & 0xFF) as u8;
-        let c0 = (count_u16 & 0xFF) as u8;
-        let sum: u32 = 3 + c1 as u32 + c0 as u32;
-        let checksum = !(sum as u8);
-        out.push_str(&format!("S503{:04X}{:02X}{}", count_u16, checksum, line_ending));
+    if address_map.format_options.has_count_record {
+        if record_count <= 0xFFFF {
+            let count_u16 = record_count as u16;
+            let c1 = ((count_u16 >> 8) & 0xFF) as u8;
+            let c0 = (count_u16 & 0xFF) as u8;
+            let sum: u32 = 3 + c1 as u32 + c0 as u32;
+            let checksum = !(sum as u8);
+            out.push_str(&format!("S503{:04X}{:02X}{}", count_u16, checksum, line_ending));
+        } else if record_count <= 0xFF_FFFF {
+            let count_u32 = record_count as u32;
+            let c2 = ((count_u32 >> 16) & 0xFF) as u8;
+            let c1 = ((count_u32 >> 8) & 0xFF) as u8;
+            let c0 = (count_u32 & 0xFF) as u8;
+            let sum: u32 = 4 + c2 as u32 + c1 as u32 + c0 as u32;
+            let checksum = !(sum as u8);
+            out.push_str(&format!("S604{:06X}{:02X}{}", count_u32, checksum, line_ending));
+        }
     }
 
     let start_addr = address_map
@@ -315,28 +365,31 @@ pub fn export_motorola_srec(data: &[u8], address_map: &AddressMap) -> String {
 
     match address_bytes {
         2 => {
-            let a1 = ((start_addr >> 8) & 0xFF) as u8;
-            let a0 = (start_addr & 0xFF) as u8;
+            let addr = (start_addr & 0xFFFF) as u16;
+            let a1 = ((addr >> 8) & 0xFF) as u8;
+            let a0 = (addr & 0xFF) as u8;
             let sum: u32 = 3 + a1 as u32 + a0 as u32;
             let checksum = !(sum as u8);
-            out.push_str(&format!("S903{:04X}{:02X}{}", start_addr & 0xFFFF, checksum, line_ending));
+            out.push_str(&format!("S903{:04X}{:02X}{}", addr, checksum, line_ending));
         }
         3 => {
-            let a2 = ((start_addr >> 16) & 0xFF) as u8;
-            let a1 = ((start_addr >> 8) & 0xFF) as u8;
-            let a0 = (start_addr & 0xFF) as u8;
+            let addr = (start_addr & 0xFF_FFFF) as u32;
+            let a2 = ((addr >> 16) & 0xFF) as u8;
+            let a1 = ((addr >> 8) & 0xFF) as u8;
+            let a0 = (addr & 0xFF) as u8;
             let sum: u32 = 4 + a2 as u32 + a1 as u32 + a0 as u32;
             let checksum = !(sum as u8);
-            out.push_str(&format!("S804{:06X}{:02X}{}", start_addr & 0xFF_FFFF, checksum, line_ending));
+            out.push_str(&format!("S804{:06X}{:02X}{}", addr, checksum, line_ending));
         }
         _ => {
-            let a3 = ((start_addr >> 24) & 0xFF) as u8;
-            let a2 = ((start_addr >> 16) & 0xFF) as u8;
-            let a1 = ((start_addr >> 8) & 0xFF) as u8;
-            let a0 = (start_addr & 0xFF) as u8;
+            let addr = (start_addr & 0xFFFF_FFFF) as u32;
+            let a3 = ((addr >> 24) & 0xFF) as u8;
+            let a2 = ((addr >> 16) & 0xFF) as u8;
+            let a1 = ((addr >> 8) & 0xFF) as u8;
+            let a0 = (addr & 0xFF) as u8;
             let sum: u32 = 5 + a3 as u32 + a2 as u32 + a1 as u32 + a0 as u32;
             let checksum = !(sum as u8);
-            out.push_str(&format!("S705{:08X}{:02X}{}", start_addr, checksum, line_ending));
+            out.push_str(&format!("S705{:08X}{:02X}{}", addr, checksum, line_ending));
         }
     }
 
@@ -477,5 +530,68 @@ mod tests {
             parse_motorola_srec("あいう\n").unwrap_err(),
             HexImportError::InvalidRecordStart { line: 1, char: 'あ' }
         );
+    }
+
+    #[test]
+    fn test_export_motorola_srec_clamps_s0_header_and_data_byte_count() {
+        let data: Vec<u8> = (0..300usize).map(|i| (i & 0xFF) as u8).collect();
+        let mut map = AddressMap::single_segment(0x0001_0000, data.len());
+        map.format_options.header = Some("あ".repeat(100)); // 300 UTF-8 bytes (> 252 byte cap)
+        map.format_options.record_data_length = 300; // exceeds max_data_per_record (<= 251 for S2)
+
+        let exported = export_motorola_srec(&data, &map);
+        for line in exported.lines() {
+            assert!(line.starts_with('S'));
+            let byte_count = u8::from_str_radix(&line[2..4], 16).unwrap() as usize;
+            assert_eq!(line.len(), 4 + byte_count * 2, "unexpected record length in line {line}");
+        }
+
+        let reimported = parse_motorola_srec(&exported).expect("clamped S0/data SREC must parse cleanly");
+        assert_eq!(reimported.data, data);
+        assert_eq!(reimported.address_map.base_address(), 0x0001_0000);
+        assert_eq!(reimported.header, Some("あ".repeat(84))); // 84 * 3 = 252 bytes on UTF-8 char boundary
+    }
+
+    #[test]
+    fn test_export_motorola_srec_emits_s6_when_record_count_exceeds_u16() {
+        let data = vec![0xAA; 65_537];
+        let mut map = AddressMap::single_segment(0, data.len());
+        map.format_options.record_data_length = 1;
+        map.format_options.has_count_record = true;
+
+        let exported = export_motorola_srec(&data, &map);
+        let mut lines = exported.lines().rev();
+        let term = lines.next().expect("termination record");
+        let count_rec = lines.next().expect("S6 count record");
+        assert_eq!(term, "S804000000FB");
+        assert_eq!(count_rec, "S604010001F9");
+
+        let reimported = parse_motorola_srec(&exported).expect("S6 SREC must parse cleanly");
+        assert_eq!(reimported.data.len(), 65_537);
+        assert!(reimported.address_map.format_options.has_count_record);
+    }
+
+    #[test]
+    fn test_export_motorola_srec_masks_start_addr_and_handles_max_segment_length() {
+        let data = vec![0x12, 0x34, 0x56, 0x78];
+        let mut map = AddressMap::default(); // segments[0].length == usize::MAX
+        map.format_options.address_width = 4;
+        if let Ok(large_ep) = usize::try_from(0x1_0000_0042u64) {
+            map.format_options.entry_point = Some(large_ep);
+        }
+
+        let exported = export_motorola_srec(&data, &map);
+        if usize::BITS > 32 {
+            assert!(
+                exported.lines().any(|l| l == "S70500000042B8"),
+                "expected valid 8-digit S7 record, got:\n{exported}"
+            );
+        }
+
+        let reimported = parse_motorola_srec(&exported).expect("valid SREC output");
+        assert_eq!(reimported.data, data);
+        if usize::BITS > 32 {
+            assert_eq!(reimported.entry_point, Some(0x0000_0042));
+        }
     }
 }
