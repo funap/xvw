@@ -522,6 +522,7 @@ impl ParseResult {
 
     /// Collects the byte intervals [start, end) of visible top-level collapsed structures.
     /// Descendant structures inside an already collapsed parent are folded into the parent.
+    /// Overlapping intervals with existing entries are coalesced into disjoint half-open ranges.
     pub fn collect_collapsed_ranges(&self, collapsed_structs: &HashSet<String>, ranges: &mut BTreeMap<usize, usize>) {
         if collapsed_structs.is_empty() {
             return;
@@ -535,7 +536,7 @@ impl ParseResult {
             let key = struct_collapse_key(field.offset, depth, &field.id);
             let is_collapsed = collapsed_structs.contains(&key) || collapsed_structs.contains(&field.id);
             if !field.is_instance && field.size > 0 && !parent_collapsed && is_collapsed {
-                ranges.insert(field.offset, field.offset + field.size);
+                merge_folded_range(ranges, field.offset, field.offset.saturating_add(field.size));
                 continue;
             }
 
@@ -545,6 +546,38 @@ impl ParseResult {
                 }
             }
         }
+    }
+
+    /// Removes collapse keys covering `target_offset` so navigation exposes hidden structure fields.
+    pub fn unfold_collapsed_at(&self, target_offset: usize, collapsed_structs: &mut HashSet<String>) -> bool {
+        if collapsed_structs.is_empty() {
+            return false;
+        }
+
+        let mut unfolded = false;
+        let mut work: Vec<(&ParsedField, usize)> = self.fields.iter().map(|field| (field, 0)).collect();
+        while let Some((field, depth)) = work.pop() {
+            if !field.is_struct() {
+                continue;
+            }
+            let field_end = field.offset.saturating_add(field.size);
+            let covers_target = !field.is_instance && field.size > 0 && field.offset <= target_offset && target_offset < field_end;
+            if covers_target {
+                let key = struct_collapse_key(field.offset, depth, &field.id);
+                if collapsed_structs.remove(&key) {
+                    unfolded = true;
+                }
+                if collapsed_structs.remove(&field.id) {
+                    unfolded = true;
+                }
+            }
+            if covers_target || field.is_instance || field.size == 0 {
+                for child in &field.children {
+                    work.push((child, depth + 1));
+                }
+            }
+        }
+        unfolded
     }
 
     /// Returns whether a visible structure starts at `offset`.
@@ -636,6 +669,29 @@ impl ParseResult {
     pub fn count_active_struct_ranges(&self, start_offset: usize, len: usize) -> usize {
         self.index.count_active_struct_ranges(start_offset, len)
     }
+}
+
+/// Inserts half-open interval `[start, end)` into `ranges`, coalescing any strictly overlapping
+/// intervals while preserving adjacent non-overlapping intervals (`end == next_start`) as separate entries.
+pub(crate) fn merge_folded_range(ranges: &mut BTreeMap<usize, usize>, mut start: usize, mut end: usize) {
+    if start >= end {
+        return;
+    }
+
+    if let Some((&prev_start, &prev_end)) = ranges.range(..start).next_back()
+        && prev_end > start
+    {
+        ranges.remove(&prev_start);
+        start = prev_start;
+        end = end.max(prev_end);
+    }
+
+    while let Some((&next_start, &next_end)) = ranges.range(start..end).next() {
+        ranges.remove(&next_start);
+        end = end.max(next_end);
+    }
+
+    ranges.insert(start, end);
 }
 
 #[cfg(test)]
@@ -930,5 +986,115 @@ mod tests {
         assert_eq!(result.find_deepest_leaf_at(20).map(|f| f.id.as_str()), Some("trailing"));
         assert_eq!(result.find_deepest_leaf_at(23).map(|f| f.id.as_str()), Some("trailing"));
         assert!(result.find_deepest_leaf_at(24).is_none());
+    }
+
+    #[test]
+    fn test_collect_collapsed_ranges_merges_overlapping_and_preserves_adjacent() {
+        let make_struct = |id: &str, offset: usize, size: usize| ParsedField {
+            id: id.into(),
+            field_type: "blk".into(),
+            offset,
+            size,
+            value: FieldValue::Struct,
+            color: RgbaColor::default(),
+            description: None,
+            children: vec![test_field("inner", offset)],
+            enum_label: None,
+            is_instance: false,
+        };
+
+        let result = ParseResult::new(
+            "folds".into(),
+            vec![
+                make_struct("adj", 4, 6),
+                make_struct("same_start_shorter", 10, 8),
+                make_struct("bridge", 45, 15),
+            ],
+            70,
+            Vec::new(),
+        );
+
+        let mut collapsed = HashSet::new();
+        collapsed.insert("4:0:adj".to_string());
+        collapsed.insert("10:0:same_start_shorter".to_string());
+        collapsed.insert("45:0:bridge".to_string());
+
+        let mut ranges = BTreeMap::new();
+        ranges.insert(0, 4); // touches [4..10)
+        ranges.insert(10, 30); // longer than [10..18)
+        ranges.insert(40, 50); // overlaps [45..60)
+        ranges.insert(55, 65); // overlapped by [45..60)
+        ranges.insert(65, 70); // touches [40..65) at 65
+
+        result.collect_collapsed_ranges(&collapsed, &mut ranges);
+
+        let expected: BTreeMap<usize, usize> = [(0, 4), (4, 10), (10, 30), (40, 65), (65, 70)].into_iter().collect();
+        assert_eq!(ranges, expected);
+    }
+
+    #[test]
+    fn test_unfold_collapsed_at_unfolds_nested_and_keeps_siblings() {
+        let inner = ParsedField {
+            id: "inner".into(),
+            field_type: "inner_t".into(),
+            offset: 8,
+            size: 16,
+            value: FieldValue::Struct,
+            color: RgbaColor::default(),
+            description: None,
+            children: vec![test_field("payload", 8)],
+            enum_label: None,
+            is_instance: false,
+        };
+        let sibling = ParsedField {
+            id: "sibling".into(),
+            field_type: "sib_t".into(),
+            offset: 24,
+            size: 8,
+            value: FieldValue::Struct,
+            color: RgbaColor::default(),
+            description: None,
+            children: vec![test_field("sib_byte", 24)],
+            enum_label: None,
+            is_instance: false,
+        };
+        let outer = ParsedField {
+            id: "outer".into(),
+            field_type: "outer_t".into(),
+            offset: 0,
+            size: 32,
+            value: FieldValue::Struct,
+            color: RgbaColor::default(),
+            description: None,
+            children: vec![inner, sibling],
+            enum_label: None,
+            is_instance: false,
+        };
+        let tail = ParsedField {
+            id: "tail".into(),
+            field_type: "tail_t".into(),
+            offset: 32,
+            size: 16,
+            value: FieldValue::Struct,
+            color: RgbaColor::default(),
+            description: None,
+            children: vec![test_field("tail_byte", 32)],
+            enum_label: None,
+            is_instance: false,
+        };
+
+        let result = ParseResult::new("nested".into(), vec![outer, tail], 48, Vec::new());
+        let mut collapsed: HashSet<String> = ["0:0:outer", "8:1:inner", "24:1:sibling", "32:0:tail"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+
+        assert!(result.unfold_collapsed_at(12, &mut collapsed));
+        assert!(!collapsed.contains("0:0:outer"));
+        assert!(!collapsed.contains("8:1:inner"));
+        assert!(collapsed.contains("24:1:sibling"));
+        assert!(collapsed.contains("32:0:tail"));
+
+        assert!(!result.unfold_collapsed_at(12, &mut collapsed));
     }
 }

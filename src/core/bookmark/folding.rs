@@ -20,11 +20,17 @@ impl BookmarkStore {
         if let Some((&start, &end)) = found {
             let mut colors_to_decompose = HashSet::new();
             let mut ids_to_unhide = Vec::new();
+            let mut covered_bookmarks = Vec::new();
 
             for it in &self.items {
-                if it.offset < end && it.offset.saturating_add(it.size) > start {
+                if it.size == 0 {
+                    continue;
+                }
+                let item_end = it.offset.saturating_add(it.size);
+                if it.offset < end && item_end > start {
                     colors_to_decompose.insert(it.color);
                     ids_to_unhide.push(it.id.clone());
+                    covered_bookmarks.push((it.offset.max(start), item_end.min(end)));
                 }
             }
 
@@ -51,9 +57,21 @@ impl BookmarkStore {
                 }
             }
 
-            if self.hide_unbookmarked && colors_to_decompose.is_empty() {
-                self.hide_unbookmarked = false;
-                changed = true;
+            if self.hide_unbookmarked {
+                covered_bookmarks.sort_unstable_by_key(|&(s, e)| (s, e));
+                let mut cursor = start;
+                for (bm_s, bm_e) in covered_bookmarks {
+                    if bm_s > cursor && self.insert_unfolded_unbookmarked_range(cursor, bm_s) {
+                        changed = true;
+                    }
+                    cursor = cursor.max(bm_e);
+                    if cursor >= end {
+                        break;
+                    }
+                }
+                if cursor < end && self.insert_unfolded_unbookmarked_range(cursor, end) {
+                    changed = true;
+                }
             }
 
             if changed {
@@ -126,10 +144,10 @@ impl BookmarkStore {
             folds.insert(cur_start, cur_end);
         }
 
-        // 2. If hide_unbookmarked is enabled, unbookmarked gaps also become folds
+        // 2. If hide_unbookmarked is enabled, unbookmarked gaps (minus individually unfolded gaps) become folds
         if is_hide_unbookmarked {
             if bookmarked_ranges.is_empty() {
-                folds.insert(0, total_size);
+                insert_unbookmarked_gap_excluding_unfolded(0, total_size, &self.unfolded_unbookmarked_ranges, &mut folds);
             } else {
                 bookmarked_ranges.sort_unstable_by_key(|&(s, e)| (s, e));
                 let mut merged_bm = Vec::new();
@@ -149,12 +167,12 @@ impl BookmarkStore {
                 let mut cursor = 0;
                 for (bm_s, bm_e) in merged_bm {
                     if bm_s > cursor {
-                        folds.insert(cursor, bm_s);
+                        insert_unbookmarked_gap_excluding_unfolded(cursor, bm_s, &self.unfolded_unbookmarked_ranges, &mut folds);
                     }
                     cursor = bm_e;
                 }
                 if cursor < total_size {
-                    folds.insert(cursor, total_size);
+                    insert_unbookmarked_gap_excluding_unfolded(cursor, total_size, &self.unfolded_unbookmarked_ranges, &mut folds);
                 }
             }
         }
@@ -199,6 +217,28 @@ impl BookmarkStore {
     }
 }
 
+fn insert_unbookmarked_gap_excluding_unfolded(gap_start: usize, gap_end: usize, unfolded_ranges: &[(usize, usize)], folds: &mut BTreeMap<usize, usize>) {
+    let mut cursor = gap_start;
+    for &(u_start, u_end) in unfolded_ranges {
+        if u_end <= cursor {
+            continue;
+        }
+        if u_start >= gap_end {
+            break;
+        }
+        if u_start > cursor {
+            folds.insert(cursor, u_start);
+        }
+        cursor = u_end.min(gap_end);
+        if cursor >= gap_end {
+            break;
+        }
+    }
+    if cursor < gap_end {
+        folds.insert(cursor, gap_end);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +267,57 @@ mod tests {
         // Unfold at offset 15
         assert!(store.unfold_at(15, &folds));
         assert!(store.computed_folded_regions(100).is_empty());
+    }
+
+    #[test]
+    fn test_unfold_at_single_unbookmarked_gap_preserves_hide_unbookmarked_and_other_gaps() {
+        let mut store = BookmarkStore::new();
+        store.add(BookmarkItem::new(10, 10, BookmarkColor::Green, "First"), 100);
+        store.add(BookmarkItem::new(60, 10, BookmarkColor::Blue, "Second"), 100);
+        store.set_hide_unbookmarked(true);
+
+        let folds = store.computed_folded_regions(100);
+        assert_eq!(*folds, [(0, 10), (20, 60), (70, 100)].into_iter().collect());
+
+        // Unfolding the middle gap [20..60) must leave hide_unbookmarked enabled and keep [0..10) & [70..100) folded.
+        assert!(store.unfold_at(35, &folds));
+        assert!(store.is_hide_unbookmarked());
+        assert_eq!(*store.computed_folded_regions(100), [(0, 10), (70, 100)].into_iter().collect());
+
+        // Unfolding the same already-unfolded gap again is a no-op.
+        assert!(!store.unfold_at(35, &folds));
+
+        // Toggling hide_unbookmarked off and back on resets per-gap unfolds.
+        store.toggle_hide_unbookmarked();
+        assert!(!store.is_hide_unbookmarked());
+        assert!(store.computed_folded_regions(100).is_empty());
+
+        store.toggle_hide_unbookmarked();
+        assert!(store.is_hide_unbookmarked());
+        assert_eq!(*store.computed_folded_regions(100), [(0, 10), (20, 60), (70, 100)].into_iter().collect());
+    }
+
+    #[test]
+    fn test_unfold_at_mixed_fold_and_non_bookmark_fold() {
+        let mut store = BookmarkStore::new();
+        // When hide_unbookmarked is false, unfolding a range that has no hidden bookmarks (e.g. collapsed struct)
+        // must not mutate BookmarkStore or record unbookmarked ranges.
+        let external_fold: BTreeMap<usize, usize> = [(16, 32)].into_iter().collect();
+        assert!(!store.unfold_at(20, &external_fold));
+        assert!(store.unfolded_unbookmarked_ranges.is_empty());
+
+        // With hide_unbookmarked enabled and a merged range [20..60) spanning a hidden bookmark [30..40)
+        // plus unbookmarked margins [20..30) and [40..60), unfolding [20..60) unhides the bookmark
+        // and reveals only the [20..30) and [40..60) unbookmarked sub-ranges while keeping [0..20) and [60..100) folded.
+        let hidden = store.add(BookmarkItem::new(30, 10, BookmarkColor::Red, "Hidden"), 100);
+        store.hide_color(BookmarkColor::Red);
+        store.set_hide_unbookmarked(true);
+
+        let merged_with_struct: BTreeMap<usize, usize> = [(0, 20), (20, 60), (60, 100)].into_iter().collect();
+        assert!(store.unfold_at(25, &merged_with_struct));
+        assert!(store.is_hide_unbookmarked());
+        assert!(!store.is_id_hidden(&hidden));
+        assert_eq!(store.unfolded_unbookmarked_ranges, vec![(20, 30), (40, 60)]);
+        assert_eq!(*store.computed_folded_regions(100), [(0, 20), (60, 100)].into_iter().collect());
     }
 }

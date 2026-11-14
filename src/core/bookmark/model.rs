@@ -378,6 +378,7 @@ pub struct BookmarkStore {
     pub hidden_colors: HashSet<BookmarkColor>,
     pub hidden_ids: HashSet<String>,
     pub hide_unbookmarked: bool,
+    pub unfolded_unbookmarked_ranges: Vec<(usize, usize)>,
     pub version: u64,
     snapshot_cache: Arc<Vec<BookmarkItem>>,
     pub(crate) cached_folded_regions: CachedFoldedRegions,
@@ -389,6 +390,7 @@ impl PartialEq for BookmarkStore {
             && self.hidden_colors == other.hidden_colors
             && self.hidden_ids == other.hidden_ids
             && self.hide_unbookmarked == other.hide_unbookmarked
+            && self.unfolded_unbookmarked_ranges == other.unfolded_unbookmarked_ranges
     }
 }
 
@@ -401,6 +403,7 @@ impl Default for BookmarkStore {
             hidden_colors: HashSet::new(),
             hidden_ids: HashSet::new(),
             hide_unbookmarked: false,
+            unfolded_unbookmarked_ranges: Vec::new(),
             version: 0,
             snapshot_cache: Arc::new(Vec::new()),
             cached_folded_regions: Arc::new(std::sync::Mutex::new(None)),
@@ -690,13 +693,42 @@ impl BookmarkStore {
         self.hide_unbookmarked
     }
 
+    pub fn insert_unfolded_unbookmarked_range(&mut self, start: usize, end: usize) -> bool {
+        if start >= end {
+            return false;
+        }
+        if self
+            .unfolded_unbookmarked_ranges
+            .iter()
+            .any(|&(u_start, u_end)| u_start <= start && end <= u_end)
+        {
+            return false;
+        }
+        self.unfolded_unbookmarked_ranges.push((start, end));
+        self.unfolded_unbookmarked_ranges.sort_unstable_by_key(|&(s, e)| (s, e));
+        let mut merged: Vec<(usize, usize)> = Vec::with_capacity(self.unfolded_unbookmarked_ranges.len());
+        for (s, e) in self.unfolded_unbookmarked_ranges.drain(..) {
+            if let Some(last) = merged.last_mut()
+                && s <= last.1
+            {
+                last.1 = last.1.max(e);
+            } else {
+                merged.push((s, e));
+            }
+        }
+        self.unfolded_unbookmarked_ranges = merged;
+        true
+    }
+
     pub fn toggle_hide_unbookmarked(&mut self) {
         self.hide_unbookmarked = !self.hide_unbookmarked;
+        self.unfolded_unbookmarked_ranges.clear();
         self.bump_version();
     }
 
     pub fn set_hide_unbookmarked(&mut self, hide: bool) {
         self.hide_unbookmarked = hide;
+        self.unfolded_unbookmarked_ranges.clear();
         self.bump_version();
     }
 
@@ -722,14 +754,56 @@ impl BookmarkStore {
                 continue;
             }
 
-            let prefix = item_end.min(start).saturating_sub(item_start);
-            let suffix = item_end.saturating_sub(old_end.max(item_start));
-            item.offset = item_start.min(start);
-            item.size = prefix.saturating_add(new_len).saturating_add(suffix);
+            let new_start = map_bookmark_boundary_after_edit(item_start, start, old_len, new_len);
+            let new_end = if item_end >= old_end {
+                shift(item_end)
+            } else {
+                map_bookmark_boundary_after_edit(item_end, start, old_len, new_len)
+            };
+            item.offset = new_start;
+            item.size = new_end.saturating_sub(new_start);
         }
         self.items.retain(|item| item.size > 0);
         self.items.sort_by_key(|item| (item.offset, item.size));
+
+        let old_unfolded = std::mem::take(&mut self.unfolded_unbookmarked_ranges);
+        for (u_start, u_end) in old_unfolded {
+            if old_len == 0 {
+                if u_end <= start {
+                    self.insert_unfolded_unbookmarked_range(u_start, u_end);
+                } else if u_start >= start {
+                    self.insert_unfolded_unbookmarked_range(u_start.saturating_add(new_len), u_end.saturating_add(new_len));
+                } else {
+                    self.insert_unfolded_unbookmarked_range(u_start, u_end.saturating_add(new_len));
+                }
+            } else {
+                let new_start = if u_start >= old_end {
+                    shift(u_start)
+                } else {
+                    map_bookmark_boundary_after_edit(u_start, start, old_len, new_len)
+                };
+                let new_end = if u_end >= old_end {
+                    shift(u_end)
+                } else {
+                    map_bookmark_boundary_after_edit(u_end, start, old_len, new_len)
+                };
+                self.insert_unfolded_unbookmarked_range(new_start, new_end);
+            }
+        }
+
         self.bump_version();
+    }
+}
+
+fn map_bookmark_boundary_after_edit(offset: usize, start: usize, old_len: usize, new_len: usize) -> usize {
+    let old_end = start.saturating_add(old_len);
+    if offset <= start {
+        offset
+    } else if offset >= old_end {
+        let new_end = start.saturating_add(new_len);
+        new_end.saturating_add(offset - old_end)
+    } else {
+        start.saturating_add((offset - start).min(new_len))
     }
 }
 
@@ -877,5 +951,59 @@ mod tests {
         for invalid in ["\"#あ\"", "\"#ああ\"", "\"#ああé\"", "\"#+1f000\"", "\"#12\""] {
             assert!(serde_yaml::from_str::<BookmarkColor>(invalid).is_err(), "expected error for {invalid}");
         }
+    }
+
+    #[test]
+    fn test_adjust_after_edit_overlapping_and_adjacent_bookmarks_no_multi_inflation() {
+        let shift =
+            |start: usize, old_len: usize, new_len: usize| move |off: usize| crate::core::document::shift_offset_after_edit(off, start, old_len, new_len);
+
+        // 1. Same-length overwrite across two adjacent bookmarks [10..20) and [20..30)
+        let mut store = BookmarkStore::new();
+        store.add(BookmarkItem::new(10, 10, BookmarkColor::Red, "A"), 100);
+        store.add(BookmarkItem::new(20, 10, BookmarkColor::Blue, "B"), 100);
+        store.adjust_after_edit(15, 10, 10, shift(15, 10, 10));
+        assert_eq!(store.items.len(), 2);
+        assert_eq!((store.items[0].offset, store.items[0].size), (10, 10));
+        assert_eq!((store.items[1].offset, store.items[1].size), (20, 10));
+
+        // 2. Expanding replacement [15..25) -> 20 bytes (+10 net) across [10..20) and [20..30)
+        // Total span [10..30) expands from 20 to 30 bytes without double-adding new_len=20.
+        let mut expand = BookmarkStore::new();
+        expand.add(BookmarkItem::new(10, 10, BookmarkColor::Red, "A"), 100);
+        expand.add(BookmarkItem::new(20, 10, BookmarkColor::Blue, "B"), 100);
+        expand.adjust_after_edit(15, 10, 20, shift(15, 10, 20));
+        assert_eq!(expand.items.len(), 2);
+        assert_eq!((expand.items[0].offset, expand.items[0].size), (10, 10));
+        assert_eq!((expand.items[1].offset, expand.items[1].size), (20, 20));
+
+        // 3. Nested overlapping bookmarks [5..35) and [15..25) with [10..20) -> 15 bytes (+5 net)
+        let mut nested = BookmarkStore::new();
+        nested.add(BookmarkItem::new(5, 30, BookmarkColor::Green, "Outer"), 100);
+        nested.add(BookmarkItem::new(15, 10, BookmarkColor::Yellow, "Inner"), 100);
+        nested.adjust_after_edit(10, 10, 15, shift(10, 10, 15));
+        assert_eq!(nested.items.len(), 2);
+        assert_eq!((nested.items[0].offset, nested.items[0].size), (5, 35));
+        assert_eq!((nested.items[1].offset, nested.items[1].size), (15, 15));
+
+        // 4. Shrinking replacement [15..25) -> 3 bytes across [10..20), [18..22), [20..30)
+        let mut shrink = BookmarkStore::new();
+        shrink.add(BookmarkItem::new(10, 10, BookmarkColor::Red, "Head"), 100);
+        shrink.add(BookmarkItem::new(18, 4, BookmarkColor::Green, "Truncated"), 100);
+        shrink.add(BookmarkItem::new(20, 10, BookmarkColor::Blue, "Tail"), 100);
+        shrink.adjust_after_edit(15, 10, 3, shift(15, 10, 3));
+        assert_eq!(shrink.items.len(), 2);
+        assert_eq!((shrink.items[0].offset, shrink.items[0].size), (10, 8));
+        assert_eq!((shrink.items[1].offset, shrink.items[1].size), (18, 5));
+
+        // 5. Unfolded unbookmarked ranges track edits cleanly
+        let mut unfolded = BookmarkStore::new();
+        unfolded.set_hide_unbookmarked(true);
+        unfolded.insert_unfolded_unbookmarked_range(10, 20);
+        unfolded.insert_unfolded_unbookmarked_range(30, 50);
+        unfolded.adjust_after_edit(0, 0, 5, shift(0, 0, 5));
+        assert_eq!(unfolded.unfolded_unbookmarked_ranges, vec![(15, 25), (35, 55)]);
+        unfolded.adjust_after_edit(25, 10, 0, shift(25, 10, 0));
+        assert_eq!(unfolded.unfolded_unbookmarked_ranges, vec![(15, 45)]);
     }
 }

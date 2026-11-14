@@ -962,7 +962,7 @@ impl Editor {
     }
 
     /// Returns the active folded intervals [start, end) computed from hidden bookmarks, unbookmarked gaps, or collapsed structures.
-    /// Overlapping and adjacent intervals are merged into disjoint union ranges.
+    /// Overlapping intervals are merged into disjoint ranges while preserving distinct adjacent folds.
     pub fn computed_folded_regions(&self) -> Arc<std::collections::BTreeMap<usize, usize>> {
         let regions = if let Ok(doc) = self.document.read() {
             doc.computed_folded_regions()
@@ -970,6 +970,7 @@ impl Editor {
             Arc::new(std::collections::BTreeMap::new())
         };
         if self.structure.show_inline_structure_view
+            && !self.structure.is_parsing()
             && !self.structure.collapsed_struct_ids.is_empty()
             && let Some(parse_res) = self.parse_result()
         {
@@ -991,7 +992,17 @@ impl Editor {
     }
 
     pub fn auto_unfold_if_needed(&mut self, target_offset: usize) -> bool {
-        self.unfold_bookmark_at(target_offset)
+        let mut unfolded = self.unfold_bookmark_at(target_offset);
+        if self.structure.show_inline_structure_view
+            && !self.structure.is_parsing()
+            && !self.structure.collapsed_struct_ids.is_empty()
+            && let Some(parse_res) = self.parse_result()
+            && parse_res.unfold_collapsed_at(target_offset, Arc::make_mut(&mut self.structure.collapsed_struct_ids))
+        {
+            self.layout.invalidate();
+            unfolded = true;
+        }
+        unfolded
     }
 
     pub fn is_folded(&self, offset: usize) -> bool {
