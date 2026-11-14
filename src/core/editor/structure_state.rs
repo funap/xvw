@@ -22,6 +22,8 @@ pub struct EditorStructureState {
     pub cancel_token: Option<Arc<AtomicBool>>,
     /// Enables background reparsing after document edits.
     pub is_async: bool,
+    #[cfg(test)]
+    pub(crate) sync_reparse_on_edit: bool,
     /// Set after an edit until the UI starts the debounced background parse.
     pub reparse_requested: bool,
     pub collapsed_struct_ids: Arc<HashSet<String>>,
@@ -37,6 +39,8 @@ impl Default for EditorStructureState {
             generation: 0,
             cancel_token: None,
             is_async: false,
+            #[cfg(test)]
+            sync_reparse_on_edit: false,
             reparse_requested: false,
             collapsed_struct_ids: Arc::new(HashSet::new()),
             show_inline_structure_view: true,
@@ -134,6 +138,10 @@ impl EditorStructureState {
     pub fn start_async_parse(&mut self, total_size: usize, cancel_token: Arc<AtomicBool>) {
         self.cancel();
         self.is_async = true;
+        #[cfg(test)]
+        {
+            self.sync_reparse_on_edit = false;
+        }
         self.reparse_requested = false;
         self.status = StructureParseStatus::Parsing;
         self.progress_offset = 0;

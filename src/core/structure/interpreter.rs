@@ -638,6 +638,7 @@ impl KaitaiInterpreter {
         }
     }
 
+    #[cfg(test)]
     pub fn parse(self, stream: &mut KaitaiStream) -> ParseResult {
         self.parse_with_progress_cancellable_impl(stream, None, |_| {}, false)
     }

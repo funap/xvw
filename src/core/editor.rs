@@ -1127,9 +1127,11 @@ impl Editor {
         self.document.read().expect("document read lock").can_redo()
     }
 
+    #[cfg(test)]
     pub fn set_kaitai_definition(&mut self, ksy: Arc<crate::core::structure::KsyDefinition>) {
         self.cancel_structure_parsing();
         self.structure.is_async = false;
+        self.structure.sync_reparse_on_edit = true;
         self.structure.reparse_requested = false;
         {
             let mut doc = self.document.write().expect("document write lock");
@@ -1218,6 +1220,7 @@ impl Editor {
         self.layout.invalidate();
     }
 
+    #[cfg(test)]
     pub fn reparse_structure(&mut self) {
         if let Some(ksy) = self.ksy_definition() {
             let (buffer, ksy_clone) = {
@@ -1250,18 +1253,21 @@ impl Editor {
         self.search_state.on_document_changed();
         self.find_state.on_document_changed();
 
-        if self.structure.is_async && self.ksy_definition().is_some() {
+        #[cfg(test)]
+        if self.structure.sync_reparse_on_edit && !self.structure.is_async {
+            self.reparse_structure();
+            return;
+        }
+
+        if let Some(ksy) = self.ksy_definition() {
+            let definition_id = ksy.meta.id.clone();
             self.cancel_structure_parsing();
+            self.structure.is_async = true;
             self.structure.reparse_requested = true;
             self.structure.set_parsing();
             self.structure.progress_offset = 0;
             self.structure.total_size = self.total_size();
-
-            if let Some(ksy) = self.ksy_definition() {
-                self.begin_partial_parse_result(ksy.meta.id.clone());
-            }
-        } else {
-            self.reparse_structure();
+            self.begin_partial_parse_result(definition_id);
         }
     }
 
@@ -1272,6 +1278,10 @@ impl Editor {
     pub fn clear_structure_definition(&mut self) {
         self.cancel_structure_parsing();
         self.structure.is_async = false;
+        #[cfg(test)]
+        {
+            self.structure.sync_reparse_on_edit = false;
+        }
         self.structure.reparse_requested = false;
         let (old_definition, old) = {
             let mut doc = self.document.write().expect("document write lock");

@@ -441,6 +441,45 @@ seq:
 }
 
 #[test]
+fn test_split_editor_edit_requests_async_reparse_instead_of_sync_parse() {
+    use crate::core::command::InsertCharCommand;
+    use crate::core::document::Document;
+    use crate::core::editor::Editor;
+    use std::sync::{Arc, RwLock};
+
+    let ksy_yaml = r#"
+meta:
+  id: test_split_async
+seq:
+  - id: len
+    type: u1
+  - id: body
+    size: len
+"#;
+    let ksy = Arc::new(parse_ksy_yaml(ksy_yaml));
+    let buffer = crate::core::buffer::Buffer::new(vec![0x02, 0xAA, 0xBB]);
+    let doc = Arc::new(RwLock::new(Document::new(std::path::PathBuf::from("test_split_async.bin"), buffer)));
+    let mut editor1 = Editor::new(doc.clone());
+    let mut editor2 = Editor::new(doc.clone());
+
+    editor1.structure.start_async_parse(3, Arc::new(std::sync::atomic::AtomicBool::new(false)));
+    editor1.set_ksy_definition(ksy);
+    assert!(!editor2.structure.is_async);
+
+    // Editing via the split pane whose local `is_async` was initially false
+    // must schedule an async reparse instead of running synchronous parsing.
+    editor2.set_cursor_offset(0);
+    assert!(editor2.execute_command(Box::new(InsertCharCommand::new(0, 0x01))));
+
+    assert!(editor2.structure.is_async);
+    assert!(editor2.structure.is_parsing());
+    let (pending_ksy, generation) = editor2.pending_structure_reparse().expect("async reparse must be requested");
+    assert_eq!(pending_ksy.meta.id, "test_split_async");
+    assert!(editor2.parse_result().as_ref().unwrap().fields.is_empty());
+    assert!(editor2.take_structure_reparse_request(generation).is_some());
+}
+
+#[test]
 fn test_parse_zip_ksy() {
     let zip_ksy_content = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/structure/simple_zip.ksy"));
 
