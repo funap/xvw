@@ -1145,29 +1145,29 @@ impl Editor {
         doc.metadata.ksy_definition = Some(ksy);
     }
 
+    fn replace_parse_result_arc(&self, next: Arc<ParseResult>) {
+        let old = {
+            let mut doc = self.document.write().expect("document write lock");
+            doc.bump_layout_version();
+            doc.metadata.parse_result.replace(next)
+        };
+        if let Some(old_res) = old {
+            crate::core::dealloc::discard_in_background(old_res);
+        }
+    }
+
     pub fn set_parse_result(&mut self, result: ParseResult) {
         self.structure.progress_offset = result.total_parsed_bytes;
         if self.structure.is_finalizing() {
             self.structure.set_idle();
         }
-        {
-            let mut doc = self.document.write().expect("document write lock");
-            doc.bump_layout_version();
-            doc.metadata.parse_result = Some(Arc::new(result));
-        }
+        self.replace_parse_result_arc(Arc::new(result));
         self.layout.invalidate();
     }
 
     /// Starts a new partial structure result that can receive parse batches.
     pub fn begin_partial_parse_result(&mut self, definition_id: String) {
-        let old = {
-            let mut doc = self.document.write().expect("document write lock");
-            doc.bump_layout_version();
-            doc.metadata.parse_result.replace(Arc::new(ParseResult::empty(definition_id)))
-        };
-        if let Some(old_res) = old {
-            crate::core::dealloc::discard_in_background(old_res);
-        }
+        self.replace_parse_result_arc(Arc::new(ParseResult::empty(definition_id)));
         if self.structure.is_finalizing() {
             self.structure.set_idle();
         }
@@ -1193,9 +1193,7 @@ impl Editor {
         } else {
             Arc::new(ParseResult::empty(definition_id).append_shared_chunks_without_index(&chunks, offset))
         };
-        let mut doc = self.document.write().expect("document write lock");
-        doc.bump_layout_version();
-        doc.metadata.parse_result = Some(next);
+        self.replace_parse_result_arc(next);
     }
 
     pub fn set_parse_result_arc(&mut self, result: Arc<ParseResult>) {
@@ -1203,14 +1201,7 @@ impl Editor {
         if self.structure.is_finalizing() {
             self.structure.set_idle();
         }
-        let old = {
-            let mut doc = self.document.write().expect("document write lock");
-            doc.bump_layout_version();
-            doc.metadata.parse_result.replace(result)
-        };
-        if let Some(old_res) = old {
-            crate::core::dealloc::discard_in_background(old_res);
-        }
+        self.replace_parse_result_arc(result);
         self.layout.invalidate();
     }
 
@@ -1218,9 +1209,7 @@ impl Editor {
         self.structure.progress_offset = offset;
         self.structure.total_size = total_size;
         if let Some(res) = intermediate_result {
-            let mut doc = self.document.write().expect("document write lock");
-            doc.bump_layout_version();
-            doc.metadata.parse_result = Some(Arc::new(res));
+            self.replace_parse_result_arc(Arc::new(res));
             self.layout.invalidate();
         }
     }
