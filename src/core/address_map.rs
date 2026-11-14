@@ -96,9 +96,9 @@ impl MemorySegment {
 }
 
 /// Formatting options and metadata for exporting Motorola S-Record and Intel HEX files.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HexFormatOptions {
-    /// Number of data bytes per record line (default 20 / 0x14 for Motorola S-Record, 16 / 0x10 for Intel HEX)
+    /// Number of data bytes per record line (0 = format default: 20 / 0x14 for Motorola S-Record, 16 / 0x10 for Intel HEX)
     pub record_data_length: usize,
     /// Explicit address width in bytes (2 = S1, 3 = S2, 4 = S3; 0 = auto-detect)
     pub address_width: usize,
@@ -110,19 +110,6 @@ pub struct HexFormatOptions {
     pub has_count_record: bool,
     /// Preferred line ending (CRLF or LF)
     pub crlf: bool,
-}
-
-impl Default for HexFormatOptions {
-    fn default() -> Self {
-        Self {
-            record_data_length: 20, // standard 0x14 for Motorola S-Record
-            address_width: 0,       // auto-detect
-            header: None,
-            entry_point: None,
-            has_count_record: false,
-            crlf: false,
-        }
-    }
 }
 
 /// Maps buffer offsets to physical memory addresses across one or more segments.
@@ -229,14 +216,14 @@ impl AddressMap {
         }) {
             Ok(idx) => {
                 let seg = &self.segments[idx];
-                seg.address + (offset - seg.buffer_offset)
+                seg.address.saturating_add(offset - seg.buffer_offset)
             }
             Err(idx) => {
                 if idx == 0 {
                     self.segments[0].address
                 } else if idx >= self.segments.len() {
                     let last = &self.segments[self.segments.len() - 1];
-                    last.address + (offset.saturating_sub(last.buffer_offset))
+                    last.address.saturating_add(offset.saturating_sub(last.buffer_offset))
                 } else {
                     let seg = &self.segments[idx];
                     seg.address
@@ -253,7 +240,7 @@ impl AddressMap {
 
         for seg in &self.segments {
             if seg.contains_address(address) {
-                return Some(seg.buffer_offset + (address - seg.address));
+                return seg.buffer_offset.checked_add(address - seg.address);
             }
         }
 
@@ -351,9 +338,14 @@ impl AddressMap {
             "hex"
         } else if is_b64 {
             "b64"
-        } else if self.has_gaps() || self.format_options.record_data_length == 20 {
+        } else if self.has_gaps()
+            || self.format_options.address_width > 0
+            || self.format_options.header.is_some()
+            || self.format_options.has_count_record
+            || self.format_options.record_data_length == 20
+        {
             "mot"
-        } else if self.format_options.record_data_length == 16 && self.format_options.header.is_none() && self.base_address() > 0 {
+        } else if self.format_options.record_data_length > 0 && self.base_address() > 0 {
             "hex"
         } else {
             "bin"
@@ -380,7 +372,7 @@ impl AddressMap {
 
         let old_end = start.saturating_add(old_len);
         let mut new_segments: Vec<MemorySegment> = Vec::with_capacity(self.segments.len());
-        let mut current_buffer_offset = 0;
+        let mut current_buffer_offset = 0usize;
         let mut inserted_remaining = new_len;
 
         let num_segs = self.segments.len();
@@ -413,7 +405,7 @@ impl AddressMap {
                     address: seg.address,
                     length: new_seg_len,
                 });
-                current_buffer_offset += new_seg_len;
+                current_buffer_offset = current_buffer_offset.saturating_add(new_seg_len);
             } else {
                 // Replacement or deletion
                 if old_end <= seg_start {
@@ -423,7 +415,7 @@ impl AddressMap {
                         address: seg.address,
                         length: seg.length,
                     });
-                    current_buffer_offset += seg.length;
+                    current_buffer_offset = current_buffer_offset.saturating_add(seg.length);
                 } else if start >= seg_end && !is_last_seg {
                     // Edit is completely after this segment
                     new_segments.push(MemorySegment {
@@ -431,7 +423,7 @@ impl AddressMap {
                         address: seg.address,
                         length: seg.length,
                     });
-                    current_buffer_offset += seg.length;
+                    current_buffer_offset = current_buffer_offset.saturating_add(seg.length);
                 } else {
                     // Overlaps with this segment
                     let kept_before = start.saturating_sub(seg_start).min(seg.length);
@@ -456,7 +448,7 @@ impl AddressMap {
                         0
                     };
 
-                    let new_seg_len = kept_before + to_insert + kept_after;
+                    let new_seg_len = kept_before.saturating_add(to_insert).saturating_add(kept_after);
                     if new_seg_len > 0 {
                         let new_address = seg.address.saturating_add(deleted_prefix);
                         new_segments.push(MemorySegment {
@@ -464,7 +456,7 @@ impl AddressMap {
                             address: new_address,
                             length: new_seg_len,
                         });
-                        current_buffer_offset += new_seg_len;
+                        current_buffer_offset = current_buffer_offset.saturating_add(new_seg_len);
                     }
                 }
             }
@@ -472,7 +464,7 @@ impl AddressMap {
 
         if inserted_remaining > 0 {
             if let Some(last) = new_segments.last_mut() {
-                last.length += inserted_remaining;
+                last.length = last.length.saturating_add(inserted_remaining);
             } else {
                 let base_addr = self.base_address();
                 new_segments.push(MemorySegment {
@@ -639,5 +631,60 @@ mod tests {
         assert_eq!(map.offset_to_address(6), 0x00FD_0006);
         assert_eq!(map.offset_to_address(7), 0x0100_0000);
         assert_eq!(map.offset_to_address(16), 0x0100_0009);
+    }
+
+    #[test]
+    fn test_address_map_default_extension() {
+        assert_eq!(HexFormatOptions::default().record_data_length, 0);
+        assert_eq!(AddressMap::default().default_extension(Path::new("firmware.dat")), "bin");
+        assert_eq!(AddressMap::default().default_extension(Path::new("Untitled")), "bin");
+        assert_eq!(AddressMap::single_segment(0x1000, 100).default_extension(Path::new("dump.dat")), "bin");
+
+        assert_eq!(AddressMap::default().default_extension(Path::new("image.hex")), "hex");
+        assert_eq!(AddressMap::default().default_extension(Path::new("image.mot")), "mot");
+        assert_eq!(AddressMap::default().default_extension(Path::new("image.b64")), "b64");
+
+        let srec_map = AddressMap::from_segments_with_options(
+            vec![MemorySegment {
+                buffer_offset: 0,
+                address: 0x1000,
+                length: 20,
+            }],
+            HexFormatOptions {
+                record_data_length: 20,
+                address_width: 2,
+                ..Default::default()
+            },
+        );
+        assert_eq!(srec_map.default_extension(Path::new("image.dat")), "mot");
+
+        let hex_map = AddressMap::from_segments_with_options(
+            vec![MemorySegment {
+                buffer_offset: 0,
+                address: 0x0800_0000,
+                length: 16,
+            }],
+            HexFormatOptions {
+                record_data_length: 16,
+                address_width: 0,
+                ..Default::default()
+            },
+        );
+        assert_eq!(hex_map.default_extension(Path::new("image.dat")), "hex");
+    }
+
+    #[test]
+    fn test_address_map_overflow_safety() {
+        let mut high_addr = AddressMap::single_segment(usize::MAX - 4, 4);
+        assert_eq!(high_addr.offset_to_address(10), usize::MAX);
+        high_addr.adjust_after_edit(usize::MAX - 1, 0, 16);
+        assert_eq!(high_addr.segments[0].length, 20);
+
+        let high_buf_map = AddressMap::from_segments(vec![MemorySegment {
+            buffer_offset: usize::MAX - 2,
+            address: 0x1000,
+            length: 10,
+        }]);
+        assert_eq!(high_buf_map.address_to_offset(0x1005), None);
     }
 }
