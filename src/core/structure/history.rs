@@ -25,7 +25,7 @@ impl RecentPathHistory {
 
     /// Records a path, moving an existing entry to the front.
     pub fn record(&mut self, path: PathBuf) {
-        let path = canonicalize_or_keep(path);
+        let path = normalize_path(path);
         self.paths.retain(|entry| entry != &path);
         self.paths.insert(0, path);
         self.paths.truncate(MAX_RECENT_DEFINITIONS);
@@ -33,7 +33,7 @@ impl RecentPathHistory {
 
     /// Removes a path and reports whether an entry was removed.
     pub fn remove(&mut self, path: &std::path::Path) -> bool {
-        let path = canonicalize_or_keep(path.to_path_buf());
+        let path = normalize_path(path.to_path_buf());
         let old_len = self.paths.len();
         self.paths.retain(|entry| entry != &path);
         self.paths.len() != old_len
@@ -59,7 +59,7 @@ pub struct RecentFileEntry {
 impl RecentFileEntry {
     pub fn new(path: PathBuf, format: Option<FileFormat>) -> Self {
         Self {
-            path: canonicalize_or_keep(path),
+            path: normalize_path(path),
             format,
         }
     }
@@ -98,7 +98,7 @@ impl FileHistory {
 
     /// Records a path and its open format, moving an existing entry to the front.
     pub fn record(&mut self, path: PathBuf, format: Option<FileFormat>) {
-        let path = canonicalize_or_keep(path);
+        let path = normalize_path(path);
         self.entries.retain(|entry| entry.path != path);
         self.entries.insert(0, RecentFileEntry::new(path, format));
         self.entries.truncate(MAX_RECENT_FILES);
@@ -106,7 +106,7 @@ impl FileHistory {
 
     /// Removes a path and reports whether an entry was removed.
     pub fn remove(&mut self, path: &std::path::Path) -> bool {
-        let path = canonicalize_or_keep(path.to_path_buf());
+        let path = normalize_path(path.to_path_buf());
         let old_len = self.entries.len();
         self.entries.retain(|entry| entry.path != path);
         self.entries.len() != old_len
@@ -123,8 +123,35 @@ impl FileHistory {
     }
 }
 
-fn canonicalize_or_keep(path: PathBuf) -> PathBuf {
-    std::fs::canonicalize(&path).unwrap_or(path)
+/// Lexically normalizes `.` and `..` components without blocking filesystem I/O.
+fn normalize_path(path: PathBuf) -> PathBuf {
+    use std::path::Component;
+
+    if path.as_os_str().is_empty() {
+        return path;
+    }
+
+    let mut normalized: Vec<Component<'_>> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match normalized.last() {
+                Some(Component::Normal(_)) => {
+                    normalized.pop();
+                }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                Some(Component::ParentDir) | None => normalized.push(component),
+                Some(Component::CurDir) => unreachable!(),
+            },
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => normalized.push(component),
+        }
+    }
+
+    if normalized.is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized.into_iter().collect()
+    }
 }
 
 #[cfg(test)]
@@ -179,5 +206,18 @@ mod tests {
         assert!(history.remove(std::path::Path::new("new.bin")));
         assert_eq!(history.paths(), &[PathBuf::from("old.bin")]);
         assert!(!history.remove(std::path::Path::new("missing.bin")));
+    }
+
+    #[test]
+    fn normalizes_dot_segments_lexically_without_filesystem_io() {
+        let mut history = DefinitionHistory::default();
+        history.record(PathBuf::from("/tmp/dir/./sub/../schema.ksy"));
+        assert_eq!(history.paths(), &[PathBuf::from("/tmp/dir/schema.ksy")]);
+        assert!(history.remove(std::path::Path::new("/tmp/dir/schema.ksy")));
+        assert!(history.paths().is_empty());
+
+        let mut files = FileHistory::default();
+        files.record(PathBuf::from("./nested/../sample.bin"), Some(FileFormat::Binary));
+        assert_eq!(files.paths(), &[PathBuf::from("sample.bin")]);
     }
 }

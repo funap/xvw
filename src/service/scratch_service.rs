@@ -72,7 +72,13 @@ impl ScratchService {
 
     /// Returns true if two file paths refer to the same target file.
     pub fn is_same_target_file(path_a: &Path, path_b: &Path) -> bool {
-        crate::core::scratch::is_same_target_file(path_a, path_b)
+        if crate::core::scratch::is_same_target_file(path_a, path_b) {
+            return true;
+        }
+        if path_a.as_os_str().is_empty() || path_b.as_os_str().is_empty() {
+            return false;
+        }
+        matches!((path_a.canonicalize(), path_b.canonicalize()), (Ok(canon_a), Ok(canon_b)) if canon_a == canon_b)
     }
 
     /// Determines the next available scratchpad ID considering existing files on disk and open tabs.

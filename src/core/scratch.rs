@@ -89,7 +89,7 @@ pub fn format_scratch_content(target_file: Option<&Path>, custom_title: Option<&
     }
 }
 
-/// Returns true if two file paths refer to the same target file.
+/// Returns true if two file paths lexically refer to the same target file.
 pub fn is_same_target_file(path_a: &Path, path_b: &Path) -> bool {
     if path_a.as_os_str().is_empty() || path_b.as_os_str().is_empty() {
         return false;
@@ -97,32 +97,58 @@ pub fn is_same_target_file(path_a: &Path, path_b: &Path) -> bool {
     if path_a == path_b {
         return true;
     }
-    if let (Ok(canon_a), Ok(canon_b)) = (path_a.canonicalize(), path_b.canonicalize())
-        && canon_a == canon_b
-    {
-        return true;
-    }
     let norm_a = normalize_path(path_a);
     let norm_b = normalize_path(path_b);
     if norm_a == norm_b {
         return true;
     }
-    if norm_a.is_relative() && norm_b.ends_with(&norm_a) {
+    if norm_a.is_relative() && !norm_a.as_os_str().is_empty() && norm_a != Path::new(".") && norm_b.ends_with(&norm_a) {
         return true;
     }
-    if norm_b.is_relative() && norm_a.ends_with(&norm_b) {
+    if norm_b.is_relative() && !norm_b.as_os_str().is_empty() && norm_b != Path::new(".") && norm_a.ends_with(&norm_b) {
         return true;
     }
     false
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
+    use std::path::Component;
+
+    let mut normalized: Vec<Component<'_>> = Vec::new();
     for component in path.components() {
         match component {
-            std::path::Component::CurDir => {}
-            _ => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => match normalized.last() {
+                Some(Component::Normal(_)) => {
+                    normalized.pop();
+                }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                Some(Component::ParentDir) | None => normalized.push(component),
+                Some(Component::CurDir) => unreachable!(),
+            },
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => normalized.push(component),
         }
     }
-    normalized
+    if normalized.is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized.into_iter().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_same_target_file_lexical_normalization() {
+        assert!(is_same_target_file(
+            Path::new("/foo/baz/../bar/firmware.bin"),
+            Path::new("/foo/bar/firmware.bin")
+        ));
+        assert!(is_same_target_file(Path::new("./bar/firmware.bin"), Path::new("/foo/bar/firmware.bin")));
+        assert!(!is_same_target_file(Path::new("."), Path::new("/foo/bar/firmware.bin")));
+        assert!(!is_same_target_file(Path::new("a/.."), Path::new("/foo/bar/firmware.bin")));
+        assert!(!is_same_target_file(Path::new(""), Path::new("/foo/bar/firmware.bin")));
+    }
 }

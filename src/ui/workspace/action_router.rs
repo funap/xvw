@@ -1049,10 +1049,15 @@ impl Workspace {
                 if let Some(document_service) = document_service_opt {
                     match document_service.open_file(target_path_clone.clone()).await {
                         Ok(document) => {
+                            let canonical_recent = document
+                                .read()
+                                .ok()
+                                .map(|d| d.path().to_path_buf())
+                                .unwrap_or_else(|| target_path_clone.clone());
                             window
                                 .update(|window, cx| {
                                     view.update(cx, |this, cx| {
-                                        this.record_recent_file(target_path_clone.clone(), Some(crate::core::format::FileFormat::Binary), cx);
+                                        this.record_recent_file(canonical_recent, Some(crate::core::format::FileFormat::Binary), cx);
                                         let editor_view = this.open_editor_view(document, window, cx);
                                         let focus_handle = editor_view.read(cx).focus_handle(cx);
                                         focus_handle.focus(window, cx);

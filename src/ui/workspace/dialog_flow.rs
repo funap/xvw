@@ -641,29 +641,51 @@ impl Workspace {
         let Some(target_editor) = self.active_editor(cx) else { return };
 
         let view = cx.entity().clone();
-        cx.spawn_in(window, async move |_, window| match std::fs::read_to_string(&path) {
-            Ok(contents) => match serde_yaml::from_str::<crate::core::structure::KsyDefinition>(&contents) {
-                Ok(ksy) => {
+        cx.spawn_in(window, async move |_, window| {
+            enum LoadKsyResult {
+                Ok(PathBuf, Box<crate::core::structure::KsyDefinition>),
+                ReadErr(PathBuf, std::io::Error),
+                ParseErr(serde_yaml::Error),
+            }
+
+            let load_task = window
+                .update(|_, cx| {
+                    cx.background_executor().spawn(async move {
+                        let canonical_path = path.canonicalize().unwrap_or(path);
+                        match std::fs::read_to_string(&canonical_path) {
+                            Ok(contents) => match serde_yaml::from_str::<crate::core::structure::KsyDefinition>(&contents) {
+                                Ok(ksy) => LoadKsyResult::Ok(canonical_path, Box::new(ksy)),
+                                Err(err) => LoadKsyResult::ParseErr(err),
+                            },
+                            Err(err) => LoadKsyResult::ReadErr(canonical_path, err),
+                        }
+                    })
+                })
+                .ok();
+            let Some(load_task) = load_task else { return };
+
+            match load_task.await {
+                LoadKsyResult::Ok(canonical_path, ksy) => {
                     window
                         .update(|window, cx| {
                             view.update(cx, |this, cx| {
-                                this.apply_loaded_structure_definition(target_editor, path, ksy, window, cx);
+                                this.apply_loaded_structure_definition(target_editor, canonical_path, *ksy, window, cx);
                             });
                         })
                         .ok();
                 }
-                Err(e) => {
+                LoadKsyResult::ParseErr(e) => {
                     eprintln!("Failed to parse KSY definition: {}", e);
                     let _ = window.update(|window, cx| {
                         window.push_notification(notification::error(format!("Failed to parse structure definition: {e}")), cx);
                     });
                 }
-            },
-            Err(e) => {
-                eprintln!("Failed to read KSY file at {:?}: {}", path, e);
-                let _ = window.update(|window, cx| {
-                    window.push_notification(notification::error(format!("Failed to read structure file: {e}")), cx);
-                });
+                LoadKsyResult::ReadErr(failed_path, e) => {
+                    eprintln!("Failed to read KSY file at {:?}: {}", failed_path, e);
+                    let _ = window.update(|window, cx| {
+                        window.push_notification(notification::error(format!("Failed to read structure file: {e}")), cx);
+                    });
+                }
             }
         })
         .detach();
