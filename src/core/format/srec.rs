@@ -28,6 +28,13 @@ pub fn parse_motorola_srec(content: &str) -> Result<HexImportResult, HexImportEr
             });
         }
 
+        if !trimmed.is_ascii() {
+            return Err(HexImportError::InvalidHexDigits {
+                line: line_idx + 1,
+                content: trimmed.to_string(),
+            });
+        }
+
         if trimmed.len() < 4 {
             return Err(HexImportError::LineTooShort { line: line_idx + 1 });
         }
@@ -434,5 +441,41 @@ mod tests {
 
         let reexported = export_motorola_srec(&res.data, &res.address_map);
         assert_eq!(reexported, srec);
+    }
+
+    #[test]
+    fn test_parse_motorola_srec_non_ascii_does_not_panic() {
+        assert_eq!(
+            parse_motorola_srec("Sあ\n").unwrap_err(),
+            HexImportError::InvalidHexDigits {
+                line: 1,
+                content: "Sあ".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_motorola_srec("S1あ\n").unwrap_err(),
+            HexImportError::InvalidHexDigits {
+                line: 1,
+                content: "S1あ".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_motorola_srec("S\u{00e9}030000FC\n").unwrap_err(),
+            HexImportError::InvalidHexDigits {
+                line: 1,
+                content: "S\u{00e9}030000FC".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_motorola_srec("S103ああ\n").unwrap_err(),
+            HexImportError::InvalidHexDigits {
+                line: 1,
+                content: "S103ああ".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_motorola_srec("あいう\n").unwrap_err(),
+            HexImportError::InvalidRecordStart { line: 1, char: 'あ' }
+        );
     }
 }
