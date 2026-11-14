@@ -357,6 +357,7 @@ pub struct EvalContext<'a> {
     pub string_values: &'a HashMap<String, String>,
     pub byte_arrays: &'a HashMap<String, Vec<u8>>,
     pub base_path: &'a [String],
+    pub active_io_prefixes: &'a [String],
     pub stream_eof: bool,
     pub stream_size: usize,
     pub stream_pos: usize,
@@ -375,6 +376,7 @@ impl<'a> EvalContext<'a> {
             string_values: empty_strings,
             byte_arrays: empty_bytes,
             base_path,
+            active_io_prefixes: &[],
             stream_eof: false,
             stream_size: 0,
             stream_pos: 0,
@@ -820,8 +822,8 @@ impl<'a> Parser<'a> {
                 }
             } else {
                 match op {
-                    Token::Plus => val = ExprValue::Int(val.to_i64() + right.to_i64()),
-                    Token::Minus => val = ExprValue::Int(val.to_i64() - right.to_i64()),
+                    Token::Plus => val = ExprValue::Int(val.to_i64().wrapping_add(right.to_i64())),
+                    Token::Minus => val = ExprValue::Int(val.to_i64().wrapping_sub(right.to_i64())),
                     _ => {}
                 }
             }
@@ -852,14 +854,14 @@ impl<'a> Parser<'a> {
                             self.record_error("Modulo by zero in expression".to_string());
                             val = ExprValue::Int(0);
                         } else {
-                            val = ExprValue::Int(val.to_i64() % r);
+                            val = ExprValue::Int(val.to_i64().wrapping_rem(r));
                         }
                     }
                     _ => {}
                 }
             } else {
                 match op {
-                    Token::Star => val = ExprValue::Int(val.to_i64() * right.to_i64()),
+                    Token::Star => val = ExprValue::Int(val.to_i64().wrapping_mul(right.to_i64())),
                     Token::Slash => {
                         let r = right.to_i64();
                         if let Some(res) = val.to_i64().checked_div(r) {
@@ -906,7 +908,7 @@ impl<'a> Parser<'a> {
                 if val.is_float() {
                     ExprValue::Float(-val.to_f64())
                 } else {
-                    ExprValue::Int(-val.to_i64())
+                    ExprValue::Int(val.to_i64().wrapping_neg())
                 }
             }
             Token::Tilde => {
@@ -1114,10 +1116,8 @@ impl<'a> Parser<'a> {
             // enum_def maps numeric_key -> label_name
             // We need reverse lookup: label_name -> numeric_key
             for (key, label) in enum_def {
-                if label == value_name
-                    && let Ok(v) = key.parse::<i64>()
-                {
-                    return ExprValue::Int(v);
+                if label == value_name {
+                    return ExprValue::Int(parse_str_to_int(key, 10));
                 }
             }
         }
@@ -1212,21 +1212,18 @@ fn parse_str_to_int(s: &str, radix: u32) -> i64 {
         (false, cleaned.as_str())
     };
     let parsed = if (rest.starts_with("0x") || rest.starts_with("0X")) && (radix == 16 || radix == 10) {
-        i64::from_str_radix(&rest[2..], 16)
+        u64::from_str_radix(&rest[2..], 16)
     } else if (rest.starts_with("0b") || rest.starts_with("0B")) && (radix == 2 || radix == 10) {
-        i64::from_str_radix(&rest[2..], 2)
+        u64::from_str_radix(&rest[2..], 2)
     } else if (rest.starts_with("0o") || rest.starts_with("0O")) && (radix == 8 || radix == 10) {
-        i64::from_str_radix(&rest[2..], 8)
+        u64::from_str_radix(&rest[2..], 8)
     } else {
-        i64::from_str_radix(rest, radix.clamp(2, 36))
+        u64::from_str_radix(rest, radix.clamp(2, 36))
     };
     match parsed {
         Ok(v) => {
-            if is_neg {
-                -v
-            } else {
-                v
-            }
+            let v = v as i64;
+            if is_neg { v.wrapping_neg() } else { v }
         }
         Err(_) => 0,
     }
@@ -1362,17 +1359,30 @@ impl ExprAST {
         Some(segments)
     }
 
-    fn apply_segments(mut stack: Vec<String>, segments: &[PathSegment], resolve_first_last: bool, ctx: &EvalContext) -> String {
+    fn apply_segments_inner(
+        mut stack: Vec<String>,
+        segments: &[PathSegment],
+        resolve_first_last: bool,
+        resolve_terminal_first_last: bool,
+        reject_parent_underflow: bool,
+        ctx: &EvalContext,
+    ) -> Option<String> {
         for (idx, seg) in segments.iter().enumerate() {
             match seg {
                 PathSegment::Ident(name) => {
                     if name == "_root" {
                         stack.clear();
                     } else if name == "_parent" {
-                        stack.pop();
+                        if stack.pop().is_none() && reject_parent_underflow {
+                            return None;
+                        }
                     } else if name == "_" && idx == 0 {
                         stack.push("_".to_string());
-                    } else if resolve_first_last && (name == "first" || name == "last") && !stack.is_empty() && idx + 1 < segments.len() {
+                    } else if resolve_first_last
+                        && (name == "first" || name == "last")
+                        && !stack.is_empty()
+                        && (resolve_terminal_first_last || idx + 1 < segments.len())
+                    {
                         let current_prefix = stack.join(".");
                         let last_ident = stack.last().cloned().unwrap_or_default();
                         if name == "first" {
@@ -1402,7 +1412,11 @@ impl ExprAST {
                 }
             }
         }
-        stack.join(".")
+        Some(stack.join("."))
+    }
+
+    fn apply_segments(stack: Vec<String>, segments: &[PathSegment], resolve_first_last: bool, ctx: &EvalContext) -> String {
+        Self::apply_segments_inner(stack, segments, resolve_first_last, false, false, ctx).unwrap_or_default()
     }
 
     fn collect_candidate_paths(&self, ctx: &EvalContext) -> Option<Vec<String>> {
@@ -1439,6 +1453,103 @@ impl ExprAST {
         }
 
         Some(paths)
+    }
+
+    fn resolve_io_owner(&self, ctx: &EvalContext) -> Option<(bool, Vec<String>)> {
+        let segments = self.extract_path_segments(ctx)?;
+        let root_id = match segments.first()? {
+            PathSegment::Ident(s) => s.as_str(),
+            _ => return None,
+        };
+
+        if root_id == "_root" || root_id == "_parent" {
+            let base = ctx.base_path.to_vec();
+            let mut paths = Vec::new();
+            let mut reaches_root = false;
+            if let Some(resolved) = Self::apply_segments_inner(base.clone(), &segments, true, true, true, ctx) {
+                if resolved.is_empty() {
+                    reaches_root = true;
+                } else {
+                    paths.push(resolved);
+                }
+            }
+            if let Some(resolved_raw) = Self::apply_segments_inner(base, &segments, false, false, true, ctx) {
+                if resolved_raw.is_empty() {
+                    reaches_root = true;
+                } else if !paths.contains(&resolved_raw) {
+                    paths.push(resolved_raw);
+                }
+            }
+            return Some((reaches_root, paths));
+        }
+
+        let mut paths = Vec::new();
+        let mut push_unique = |s: Option<String>| {
+            if let Some(s) = s
+                && !s.is_empty()
+                && !paths.contains(&s)
+            {
+                paths.push(s);
+            }
+        };
+
+        for i in (0..=ctx.base_path.len()).rev() {
+            let base = ctx.base_path[..i].to_vec();
+            push_unique(Self::apply_segments_inner(base.clone(), &segments, true, true, false, ctx));
+            push_unique(Self::apply_segments_inner(base, &segments, false, false, false, ctx));
+        }
+
+        if let Some(idx) = ctx.base_path.iter().rposition(|x| {
+            let base_name = x.split('[').next().unwrap_or(x);
+            base_name == root_id
+        }) {
+            let mut replaced = segments.clone();
+            replaced[0] = PathSegment::Ident(ctx.base_path[idx].clone());
+            let base = ctx.base_path[..idx].to_vec();
+            push_unique(Self::apply_segments_inner(base.clone(), &replaced, true, true, false, ctx));
+            push_unique(Self::apply_segments_inner(base, &replaced, false, false, false, ctx));
+        }
+
+        Some((false, paths))
+    }
+
+    fn extract_enum_path(base: &ExprAST) -> Option<String> {
+        let mut parts = Vec::new();
+        let mut curr = base;
+        loop {
+            match curr {
+                ExprAST::Identifier(name) => {
+                    parts.push(name.as_str());
+                    break;
+                }
+                ExprAST::MemberAccess {
+                    base: inner,
+                    member,
+                    is_enum: true,
+                } => {
+                    parts.push(member.as_str());
+                    curr = inner;
+                }
+                _ => return None,
+            }
+        }
+        parts.reverse();
+        Some(parts.join("::"))
+    }
+
+    fn format_expr_path(&self) -> Option<String> {
+        match self {
+            ExprAST::Identifier(id) => Some(id.clone()),
+            ExprAST::MemberAccess { base, member, is_enum: false } => Some(format!("{}.{}", base.format_expr_path()?, member)),
+            ExprAST::IndexAccess { base, index } => {
+                if let ExprAST::Number(idx) = &**index {
+                    Some(format!("{}[{}]", base.format_expr_path()?, idx))
+                } else {
+                    Some(format!("{}[?]", base.format_expr_path()?))
+                }
+            }
+            _ => None,
+        }
     }
 
     pub fn eval(&self, ctx: &EvalContext) -> ExprValue {
@@ -1522,7 +1633,7 @@ impl ExprAST {
                         if val.is_float() {
                             ExprValue::Float(-val.to_f64())
                         } else {
-                            ExprValue::Int(-val.to_i64())
+                            ExprValue::Int(val.to_i64().wrapping_neg())
                         }
                     }
                     UnaryOp::BitNot => ExprValue::Int(!val.to_i64()),
@@ -1807,7 +1918,6 @@ impl ExprAST {
         if !id.starts_with('_')
             && id != "true"
             && id != "false"
-            && !full_id.contains("extra")
             && let Some(err_cell) = ctx.errors
         {
             err_cell.borrow_mut().push(crate::core::structure::types::ParseError {
@@ -1820,15 +1930,8 @@ impl ExprAST {
     }
 
     fn eval_member_access(&self, base: &ExprAST, member: &str, is_enum: bool, ctx: &EvalContext) -> ExprValue {
-        if is_enum {
-            let enum_name = match base {
-                ExprAST::Identifier(name) => Some(name.as_str()),
-                ExprAST::MemberAccess { member: name, .. } => Some(name.as_str()),
-                _ => None,
-            };
-            if let Some(ename) = enum_name
-                && let Some(enum_def) = ctx.enums.get(ename)
-            {
+        if is_enum && let Some(enum_path) = Self::extract_enum_path(base) {
+            if let Some(enum_def) = ctx.enums.get(&enum_path) {
                 for (key, label) in enum_def {
                     if label == member {
                         let v = parse_str_to_int(key, 10);
@@ -1837,6 +1940,13 @@ impl ExprAST {
                 }
                 return ExprValue::Int(0);
             }
+            if let Some(err_cell) = ctx.errors {
+                err_cell.borrow_mut().push(crate::core::structure::types::ParseError {
+                    message: format!("Unresolved identifier: {}::{}", enum_path, member),
+                    offset: ctx.stream_pos,
+                });
+            }
+            return ExprValue::Int(0);
         }
 
         if let ExprAST::Identifier(id) = base
@@ -1857,25 +1967,48 @@ impl ExprAST {
         } = base
             && io_member == "_io"
         {
-            if let Some(owner_candidates) = io_owner.collect_candidate_paths(ctx) {
-                for owner_path in &owner_candidates {
-                    if let Some(val) = Self::lookup_ctx_path(&format!("{owner_path}._io.{member}"), ctx) {
-                        return val;
-                    }
-                }
+            if !matches!(member, "eof" | "size" | "pos") {
+                return ExprValue::Int(0);
             }
-            if let ExprAST::Identifier(owner_id) = &**io_owner
-                && owner_id == "_root"
-                && let Some(val) = Self::lookup_ctx_path(&format!("_root._io.{member}"), ctx)
-            {
-                return val;
-            }
-            return match member {
+            let live_io_val = || match member {
                 "eof" => ExprValue::Bool(ctx.stream_eof),
                 "size" => ExprValue::Int(ctx.stream_size as i64),
                 "pos" => ExprValue::Int(ctx.stream_pos as i64),
                 _ => ExprValue::Int(0),
             };
+            if let Some((reaches_root, owner_candidates)) = io_owner.resolve_io_owner(ctx) {
+                if reaches_root {
+                    if ctx.active_io_prefixes.iter().any(|p| p == "_root") {
+                        return live_io_val();
+                    }
+                    if let Some(val) = Self::lookup_ctx_path(&format!("_root._io.{member}"), ctx) {
+                        return val;
+                    }
+                    if ctx.active_io_prefixes.is_empty() {
+                        return live_io_val();
+                    }
+                }
+                for owner_path in &owner_candidates {
+                    if ctx.active_io_prefixes.iter().any(|p| p == owner_path) {
+                        return live_io_val();
+                    }
+                    if let Some(val) = Self::lookup_ctx_path(&format!("{owner_path}._io.{member}"), ctx) {
+                        return val;
+                    }
+                }
+            }
+            let unresolved_path = io_owner
+                .collect_candidate_paths(ctx)
+                .and_then(|p| p.into_iter().next())
+                .or_else(|| io_owner.format_expr_path())
+                .unwrap_or_else(|| io_member.clone());
+            if let Some(err_cell) = ctx.errors {
+                err_cell.borrow_mut().push(crate::core::structure::types::ParseError {
+                    message: format!("Unresolved identifier: {unresolved_path}._io.{member}"),
+                    offset: ctx.stream_pos,
+                });
+            }
+            return ExprValue::Int(0);
         }
 
         let full_node = ExprAST::MemberAccess {
@@ -1901,8 +2034,7 @@ impl ExprAST {
         }
 
         let first_path = candidate_paths.and_then(|p| p.into_iter().next()).unwrap_or_else(|| member.to_string());
-        if !first_path.contains("extra")
-            && !first_path.starts_with('_')
+        if !first_path.starts_with('_')
             && let Some(err_cell) = ctx.errors
         {
             err_cell.borrow_mut().push(crate::core::structure::types::ParseError {
@@ -2284,5 +2416,104 @@ mod tests {
         }
 
         assert_eq!(ExprEvaluator::eval_i64("1 + 2 * 3", &ctx), 7);
+    }
+
+    #[test]
+    fn test_i64_min_negation_and_wrapping_arithmetic() {
+        let mut values = HashMap::new();
+        values.insert("min_v".to_string(), i64::MIN);
+        values.insert("max_v".to_string(), i64::MAX);
+        let ctx = EvalContext::simple(&values, &[]);
+
+        // Unary negation of i64::MIN wraps instead of panicking in both ExprAST and Parser
+        assert_eq!(ExprEvaluator::eval_i64("-min_v", &ctx), i64::MIN);
+        assert_eq!(Parser::new("-min_v", &ctx).parse_ternary().to_i64(), i64::MIN);
+
+        // parse_str_to_int handles signed i64::MIN bounds without panicking
+        assert_eq!(parse_str_to_int("-9223372036854775808", 10), i64::MIN);
+        assert_eq!(parse_str_to_int("-0x8000000000000000", 16), i64::MIN);
+        assert_eq!(ExprEvaluator::eval_string("'-9223372036854775808'.to_i.to_s", &ctx), i64::MIN.to_string());
+
+        // Legacy Parser +/-/* wrap consistently with ExprAST
+        assert_eq!(Parser::new("max_v + 1", &ctx).parse_ternary().to_i64(), i64::MIN);
+        assert_eq!(Parser::new("min_v - 1", &ctx).parse_ternary().to_i64(), i64::MAX);
+        assert_eq!(Parser::new("max_v * 2", &ctx).parse_ternary().to_i64(), i64::MAX.wrapping_mul(2));
+        assert_eq!(ExprEvaluator::eval_i64("max_v + 1", &ctx), i64::MIN);
+        assert_eq!(ExprEvaluator::eval_i64("min_v - 1", &ctx), i64::MAX);
+        assert_eq!(ExprEvaluator::eval_i64("max_v * 2", &ctx), i64::MAX.wrapping_mul(2));
+    }
+
+    #[test]
+    fn test_unresolved_extra_and_io_identifiers_report_errors() {
+        let values = HashMap::new();
+        let string_values = HashMap::new();
+        let byte_arrays = HashMap::new();
+        let enums = HashMap::new();
+        let base_path = vec!["hdr".to_string()];
+        let active_io = vec!["hdr".to_string()];
+        let errors = std::cell::RefCell::new(Vec::new());
+
+        let ctx = EvalContext {
+            values: &values,
+            string_values: &string_values,
+            byte_arrays: &byte_arrays,
+            base_path: &base_path,
+            active_io_prefixes: &active_io,
+            stream_eof: true,
+            stream_size: 99,
+            stream_pos: 12,
+            enums: &enums,
+            errors: Some(&errors),
+            instance_resolver: None,
+        };
+
+        assert_eq!(ExprEvaluator::eval_i64("extra", &ctx), 0);
+        assert_eq!(ExprEvaluator::eval_i64("has_extra", &ctx), 0);
+        assert_eq!(ExprEvaluator::eval_i64("sub.extra_field", &ctx), 0);
+        assert_eq!(ExprEvaluator::eval_i64("missing._io.pos", &ctx), 0);
+        assert_eq!(ExprEvaluator::eval_i64("_parent._parent._io.eof", &ctx), 0);
+
+        let msgs: Vec<String> = errors.borrow().iter().map(|e| e.message.clone()).collect();
+        assert_eq!(msgs.len(), 5, "Expected 5 errors, got: {msgs:?}");
+        assert!(msgs.iter().any(|m| m == "Unresolved identifier: hdr.extra"));
+        assert!(msgs.iter().any(|m| m == "Unresolved identifier: hdr.has_extra"));
+        assert!(msgs.iter().any(|m| m == "Unresolved identifier: hdr.sub.extra_field"));
+        assert!(msgs.iter().any(|m| m == "Unresolved identifier: hdr.missing._io.pos"));
+        assert!(msgs.iter().any(|m| m == "Unresolved identifier: _parent._parent._io.eof"));
+    }
+
+    #[test]
+    fn test_scoped_enum_path_lookup_and_error_reporting() {
+        let values = HashMap::new();
+        let string_values = HashMap::new();
+        let byte_arrays = HashMap::new();
+        let mut enums = HashMap::new();
+        let mut inner_animal = HashMap::new();
+        inner_animal.insert("7".to_string(), "horse".to_string());
+        enums.insert("pkg::inner::animal".to_string(), inner_animal);
+        let errors = std::cell::RefCell::new(Vec::new());
+
+        let ctx = EvalContext {
+            values: &values,
+            string_values: &string_values,
+            byte_arrays: &byte_arrays,
+            base_path: &[],
+            active_io_prefixes: &[],
+            stream_eof: false,
+            stream_size: 0,
+            stream_pos: 0,
+            enums: &enums,
+            errors: Some(&errors),
+            instance_resolver: None,
+        };
+
+        assert_eq!(ExprEvaluator::eval_i64("pkg::inner::animal::horse", &ctx), 7);
+        assert!(errors.borrow().is_empty());
+
+        // Must NOT match bare `animal::horse` or wrong scope `other::inner::animal::horse`
+        assert_eq!(ExprEvaluator::eval_i64("animal::horse", &ctx), 0);
+        assert_eq!(ExprEvaluator::eval_i64("other::inner::animal::horse", &ctx), 0);
+        let msgs: Vec<String> = errors.borrow().iter().map(|e| e.message.clone()).collect();
+        assert_eq!(msgs.len(), 2, "Expected 2 unresolved enum errors, got: {msgs:?}");
     }
 }

@@ -250,6 +250,7 @@ fn test_expression_bitwise() {
         string_values: &string_values,
         byte_arrays: &crate::core::structure::expression::G_EMPTY_BYTE_MAP,
         base_path: &base_path,
+        active_io_prefixes: &[],
         stream_eof: false,
         stream_size: 0,
         stream_pos: 0,
@@ -297,6 +298,7 @@ fn test_expression_zero_division() {
         string_values: &string_values,
         byte_arrays: &crate::core::structure::expression::G_EMPTY_BYTE_MAP,
         base_path: &base_path,
+        active_io_prefixes: &[],
         stream_eof: false,
         stream_size: 0,
         stream_pos: 0,
@@ -329,6 +331,7 @@ fn test_expr_ast_compilation_and_evaluation() {
         string_values: &string_values,
         byte_arrays: &crate::core::structure::expression::G_EMPTY_BYTE_MAP,
         base_path: &base_path,
+        active_io_prefixes: &[],
         stream_eof: false,
         stream_size: 100,
         stream_pos: 0,
@@ -359,6 +362,7 @@ fn test_ast_member_access_with_base_path() {
         string_values: &string_values,
         byte_arrays: &crate::core::structure::expression::G_EMPTY_BYTE_MAP,
         base_path: &base_path,
+        active_io_prefixes: &[],
         stream_eof: false,
         stream_size: 100,
         stream_pos: 0,
@@ -1489,6 +1493,7 @@ fn test_operator_precedence_bitwise_and_comparison() {
         string_values: &string_values,
         byte_arrays: &crate::core::structure::expression::G_EMPTY_BYTE_MAP,
         base_path: &base_path,
+        active_io_prefixes: &[],
         stream_eof: false,
         stream_size: 0,
         stream_pos: 0,
@@ -1813,6 +1818,7 @@ fn test_expression_overflow_division() {
         string_values: &string_values,
         byte_arrays: &crate::core::structure::expression::G_EMPTY_BYTE_MAP,
         base_path: &base_path,
+        active_io_prefixes: &[],
         stream_eof: false,
         stream_size: 0,
         stream_pos: 0,
@@ -1946,6 +1952,7 @@ fn test_expression_method_calls() {
         string_values: &string_map,
         byte_arrays: &byte_map,
         base_path: &base_path,
+        active_io_prefixes: &[],
         stream_eof: false,
         stream_size: 0,
         stream_pos: 0,
@@ -2281,4 +2288,754 @@ types:
         direct_children >= 65536 && direct_children < data.len(),
         "Expected non-substream nested parsing to cancel early after ~64 KiB, got {direct_children} items"
     );
+}
+
+#[test]
+fn test_m3_unresolved_extra_and_io_errors() {
+    let yaml = r#"
+meta:
+  id: unresolved_extra_io
+types:
+  sub_pair:
+    seq:
+      - id: v
+        type: u1
+  child_underflow:
+    seq:
+      - id: inner
+        type: u1
+      - id: bad_parent
+        type: u1
+        if: _parent._parent._io.eof == false
+seq:
+  - id: sub
+    type: sub_pair
+  - id: child
+    type: child_underflow
+  - id: skip_extra
+    type: u1
+    if: extra == 1
+  - id: skip_has_extra
+    type: u1
+    if: has_extra == 1
+  - id: skip_sub_extra
+    type: u1
+    if: sub.extra == 1
+  - id: skip_missing_io
+    type: u1
+    if: missing._io.pos == 0
+"#;
+    let ksy = parse_ksy_yaml(yaml);
+    let data = vec![0x01, 0x02, 0x03];
+    let mut stream = KaitaiStream::new(&data);
+    let res = KaitaiInterpreter::new(ksy).parse(&mut stream);
+
+    let messages: Vec<&str> = res.errors.iter().map(|e| e.message.as_str()).collect();
+    assert!(messages.contains(&"Unresolved identifier: _parent._parent._io.eof"), "errors: {messages:?}");
+    assert!(messages.contains(&"Unresolved identifier: extra"), "errors: {messages:?}");
+    assert!(messages.contains(&"Unresolved identifier: has_extra"), "errors: {messages:?}");
+    assert!(messages.contains(&"Unresolved identifier: sub.extra"), "errors: {messages:?}");
+    assert!(messages.contains(&"Unresolved identifier: missing._io.pos"), "errors: {messages:?}");
+}
+
+#[test]
+fn test_m3_io_state_tracking_substream_shared_and_root() {
+    let yaml = r#"
+meta:
+  id: io_scope_tracking
+  endian: le
+types:
+  root_peek:
+    seq:
+      - id: byte_val
+        type: u1
+    instances:
+      root_sz:
+        value: _io.size
+  sub_type:
+    seq:
+      - id: b0
+        type: u1
+      - id: tail
+        size-eos: true
+    instances:
+      sub_pos_after:
+        value: _io.pos
+      sub_size:
+        value: _io.size
+      sub_eof:
+        value: _io.eof
+      parent_pos_in_sub:
+        value: _parent._io.pos
+      parent_size_in_sub:
+        value: _parent._io.size
+      parent_eof_in_sub:
+        value: _parent._io.eof
+      root_pos_in_sub:
+        value: _root._io.pos
+      root_size_in_sub:
+        value: _root._io.size
+      root_eof_in_sub:
+        value: _root._io.eof
+      deep_root:
+        pos: 10
+        io: _root._io
+        type: root_peek
+  shared_type:
+    seq:
+      - id: x
+        type: u2
+    instances:
+      shared_pos_in:
+        value: _io.pos
+      shared_size_in:
+        value: _io.size
+      shared_eof_in:
+        value: _io.eof
+  chunk:
+    seq:
+      - id: val
+        type: u2be
+seq:
+  - id: sub
+    type: sub_type
+    size: 4
+  - id: shared
+    type: shared_type
+  - id: chunks
+    type: chunk
+    size: 2
+    repeat: expr
+    repeat-expr: 2
+  - id: tail_bytes
+    size: 2
+instances:
+  sub_pos_ext:
+    value: sub._io.pos
+  sub_size_ext:
+    value: sub._io.size
+  sub_eof_ext:
+    value: sub._io.eof
+  shared_pos_ext:
+    value: shared._io.pos
+  shared_size_ext:
+    value: shared._io.size
+  shared_eof_ext:
+    value: shared._io.eof
+  first_chunk_pos:
+    value: chunks.first._io.pos
+  first_chunk_eof:
+    value: chunks.first._io.eof
+  last_chunk_size:
+    value: chunks.last._io.size
+  last_chunk_eof:
+    value: chunks.last._io.eof
+  root_end_pos:
+    value: _root._io.pos
+  root_end_eof:
+    value: _root._io.eof
+"#;
+    let ksy = parse_ksy_yaml(yaml);
+    let data = vec![0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xAA, 0xBB, 0xCC];
+    let mut stream = KaitaiStream::new(&data);
+    let res = KaitaiInterpreter::new(ksy).parse(&mut stream);
+
+    assert!(res.errors.is_empty(), "Expected no parse errors, got {:?}", res.errors);
+
+    let find_child = |parent_id: &str, child_id: &str| {
+        let parent = res.fields.iter().find(|f| f.id == parent_id).expect(parent_id);
+        parent.children.iter().find(|c| c.id == child_id).expect(child_id).value.clone()
+    };
+    let find_root = |id: &str| res.fields.iter().find(|f| f.id == id).expect(id).value.clone();
+
+    // Inside `sub` (4-byte substream after reading 4 bytes from 12-byte parent/root stream):
+    assert_eq!(find_child("sub", "sub_pos_after").to_i64(), 4);
+    assert_eq!(find_child("sub", "sub_size").to_i64(), 4);
+    assert_eq!(find_child("sub", "sub_eof"), FieldValue::Bool(true));
+    assert_eq!(find_child("sub", "parent_pos_in_sub").to_i64(), 4);
+    assert_eq!(find_child("sub", "parent_size_in_sub").to_i64(), 12);
+    assert_eq!(find_child("sub", "parent_eof_in_sub"), FieldValue::Bool(false));
+    assert_eq!(find_child("sub", "root_pos_in_sub").to_i64(), 4);
+    assert_eq!(find_child("sub", "root_size_in_sub").to_i64(), 12);
+    assert_eq!(find_child("sub", "root_eof_in_sub"), FieldValue::Bool(false));
+
+    let sub_field = res.fields.iter().find(|f| f.id == "sub").unwrap();
+    let deep_root = sub_field.children.iter().find(|c| c.id == "deep_root").unwrap();
+    assert_eq!(deep_root.offset, 10);
+    assert_eq!(deep_root.children.iter().find(|c| c.id == "byte_val").unwrap().value.to_i64(), 0xBB);
+    assert_eq!(deep_root.children.iter().find(|c| c.id == "root_sz").unwrap().value.to_i64(), 12);
+
+    // Inside `shared` (no size:, shared root stream advancing from offset 4 to 6):
+    assert_eq!(find_child("shared", "shared_pos_in").to_i64(), 6);
+    assert_eq!(find_child("shared", "shared_size_in").to_i64(), 12);
+    assert_eq!(find_child("shared", "shared_eof_in"), FieldValue::Bool(false));
+
+    // Root-level access to child/array/root `_io` properties:
+    assert_eq!(find_root("sub_pos_ext").to_i64(), 4);
+    assert_eq!(find_root("sub_size_ext").to_i64(), 4);
+    assert_eq!(find_root("sub_eof_ext"), FieldValue::Bool(true));
+    assert_eq!(find_root("shared_pos_ext").to_i64(), 6);
+    assert_eq!(find_root("shared_size_ext").to_i64(), 12);
+    assert_eq!(find_root("shared_eof_ext"), FieldValue::Bool(false));
+    assert_eq!(find_root("first_chunk_pos").to_i64(), 2);
+    assert_eq!(find_root("first_chunk_eof"), FieldValue::Bool(true));
+    assert_eq!(find_root("last_chunk_size").to_i64(), 2);
+    assert_eq!(find_root("last_chunk_eof"), FieldValue::Bool(true));
+    assert_eq!(find_root("root_end_pos").to_i64(), 12);
+    assert_eq!(find_root("root_end_eof"), FieldValue::Bool(true));
+}
+
+#[test]
+fn test_m3_max_recursion_records_error() {
+    let yaml = r#"
+meta:
+  id: recursive_chain
+types:
+  node:
+    seq:
+      - id: byte
+        type: u1
+      - id: next
+        type: node
+seq:
+  - id: head
+    type: node
+"#;
+    let ksy = parse_ksy_yaml(yaml);
+    let data = vec![0x42u8; 64];
+    let mut stream = KaitaiStream::new(&data);
+    let res = KaitaiInterpreter::new(ksy).parse(&mut stream);
+
+    assert!(
+        res.errors.iter().any(|e| e.message.contains("Maximum recursion depth (24) exceeded")),
+        "Expected max recursion error, got {:?}",
+        res.errors
+    );
+}
+
+#[test]
+fn test_m3_param_and_enum_scope_isolation() {
+    // 1. Valid shadowing & restoration across normal exit, zero-size exit, and failed mid-parse exit.
+    let valid_yaml = r#"
+meta:
+  id: valid_scope_isolation
+enums:
+  shared_enum:
+    1: root_one
+types:
+  inner_param:
+    params:
+      - id: p
+    seq:
+      - id: b
+        type: u1
+  inner_zero:
+    params:
+      - id: p
+    enums:
+      zero_enum:
+        5: zero_label
+    seq:
+      - id: ignored
+        type: u1
+  inner_fail:
+    params:
+      - id: p
+    enums:
+      fail_enum:
+        6: fail_label
+    seq:
+      - id: ok_byte
+        type: u1
+      - id: missing_byte
+        type: u4be
+  inner_with_enum:
+    enums:
+      shared_enum:
+        9: inner_nine
+      local_enum:
+        7: lucky
+        8: eight
+    types:
+      deep_child:
+        enums:
+          deep_enum:
+            3: three
+        seq:
+          - id: v
+            type: u1
+    seq:
+      - id: tag
+        type: u1
+        enum: shared_enum
+    instances:
+      inside_shadowed:
+        value: shared_enum::inner_nine
+      inside_local:
+        value: local_enum::lucky
+      inside_deep:
+        value: deep_child::deep_enum::three
+  outer_param:
+    params:
+      - id: p
+    seq:
+      - id: inner
+        type: inner_param(99)
+      - id: empty_sub
+        type: inner_zero(123)
+        size: 0
+      - id: shadowed
+        type: inner_with_enum
+    instances:
+      p_after_inner:
+        value: p
+      shadowed_ext_missing:
+        value: shared_enum::inner_nine
+      root_restored:
+        value: shared_enum::root_one
+seq:
+  - id: outer
+    type: outer_param(42)
+  - id: maybe_fail
+    type: inner_fail(777)
+    size: 1
+instances:
+  root_enum_ok:
+    value: shared_enum::root_one
+"#;
+    let valid_data = vec![0x01, 0x09, 0xFF];
+    let mut valid_stream = KaitaiStream::new(&valid_data);
+    let valid_res = KaitaiInterpreter::new(parse_ksy_yaml(valid_yaml)).parse(&mut valid_stream);
+
+    assert!(
+        valid_res.errors.is_empty(),
+        "Expected no errors in valid scope test, got {:?}",
+        valid_res.errors
+    );
+
+    let outer = valid_res.fields.iter().find(|f| f.id == "outer").unwrap();
+    let shadowed = outer.children.iter().find(|c| c.id == "shadowed").unwrap();
+    assert_eq!(shadowed.children.iter().find(|c| c.id == "inside_shadowed").unwrap().value.to_i64(), 9);
+    assert_eq!(shadowed.children.iter().find(|c| c.id == "inside_local").unwrap().value.to_i64(), 7);
+    assert_eq!(shadowed.children.iter().find(|c| c.id == "inside_deep").unwrap().value.to_i64(), 3);
+
+    // Outer's `p` must remain 42 after inner(99) and zero-sized inner_zero(123) return.
+    assert_eq!(outer.children.iter().find(|c| c.id == "p_after_inner").unwrap().value.to_i64(), 42);
+    // Outer must see root's shared_enum (1), not inner's shadowed shared_enum.
+    assert_eq!(outer.children.iter().find(|c| c.id == "root_restored").unwrap().value.to_i64(), 1);
+    assert_eq!(outer.children.iter().find(|c| c.id == "shadowed_ext_missing").unwrap().value.to_i64(), 0);
+    assert_eq!(valid_res.fields.iter().find(|f| f.id == "root_enum_ok").unwrap().value.to_i64(), 1);
+
+    // 2. Exiting param/local/zero/fail scopes must NOT leak into subsequent sibling or root scopes.
+    let leak_check_yaml = r#"
+meta:
+  id: leak_check
+types:
+  helper:
+    params:
+      - id: secret_param
+    enums:
+      secret_enum:
+        11: val_eleven
+    seq:
+      - id: v
+        type: u1
+  helper_zero:
+    params:
+      - id: zero_param
+    enums:
+      zero_enum:
+        12: val_twelve
+    seq:
+      - id: v
+        type: u1
+  helper_fail:
+    params:
+      - id: fail_param
+    enums:
+      fail_enum:
+        13: val_thirteen
+    seq:
+      - id: ok
+        type: u1
+      - id: oob
+        type: u8
+seq:
+  - id: h
+    type: helper(55)
+  - id: hz
+    type: helper_zero(66)
+    size: 0
+  - id: hf
+    type: helper_fail(77)
+    size: 1
+instances:
+  leaked_param:
+    value: secret_param
+  leaked_zero_param:
+    value: zero_param
+  leaked_fail_param:
+    value: fail_param
+  leaked_enum:
+    value: secret_enum::val_eleven
+  leaked_zero_enum:
+    value: zero_enum::val_twelve
+  leaked_fail_enum:
+    value: fail_enum::val_thirteen
+"#;
+    let leak_data = vec![0x01, 0x02];
+    let mut leak_stream = KaitaiStream::new(&leak_data);
+    let leak_res = KaitaiInterpreter::new(parse_ksy_yaml(leak_check_yaml)).parse(&mut leak_stream);
+    let messages: Vec<&str> = leak_res.errors.iter().map(|e| e.message.as_str()).collect();
+
+    assert!(messages.contains(&"Unresolved identifier: secret_param"), "errors: {messages:?}");
+    assert!(messages.contains(&"Unresolved identifier: zero_param"), "errors: {messages:?}");
+    assert!(messages.contains(&"Unresolved identifier: fail_param"), "errors: {messages:?}");
+    assert!(messages.contains(&"Unresolved identifier: secret_enum::val_eleven"), "errors: {messages:?}");
+    assert!(messages.contains(&"Unresolved identifier: zero_enum::val_twelve"), "errors: {messages:?}");
+    assert!(messages.contains(&"Unresolved identifier: fail_enum::val_thirteen"), "errors: {messages:?}");
+}
+
+#[test]
+fn test_m3_clamped_pos_offset_no_overflow() {
+    let yaml = r#"
+meta:
+  id: clamped_pos_test
+types:
+  empty_struct:
+    seq: []
+    instances:
+      tag:
+        value: 1
+  sub_container:
+    seq:
+      - id: item
+        type: u1
+    instances:
+      far_zero:
+        pos: 0x7fffffffffffffff
+        size: 0
+      far_struct:
+        pos: 0x7fffffffffffffff
+        type: empty_struct
+seq:
+  - id: c0
+    type: sub_container
+    size: 2
+  - id: c1
+    pos: 2
+    type: sub_container
+    size: 2
+instances:
+  root_far_zero:
+    pos: 0x7fffffffffffffff
+    size: 0
+  root_far_struct_zero:
+    pos: 0x7fffffffffffffff
+    size: 0
+    type: empty_struct
+  root_far_struct:
+    pos: 0x7fffffffffffffff
+    type: empty_struct
+"#;
+    let ksy = parse_ksy_yaml(yaml);
+    let data = vec![0x11, 0x22, 0x33, 0x44];
+    let mut stream = KaitaiStream::new(&data);
+    let res = KaitaiInterpreter::new(ksy).parse(&mut stream);
+
+    assert!(res.errors.is_empty(), "Unexpected errors: {:?}", res.errors);
+
+    let root_far_zero = res.fields.iter().find(|f| f.id == "root_far_zero").unwrap();
+    assert_eq!(root_far_zero.offset, data.len());
+    assert_eq!(root_far_zero.size, 0);
+
+    let root_far_struct_zero = res.fields.iter().find(|f| f.id == "root_far_struct_zero").unwrap();
+    assert_eq!(root_far_struct_zero.offset, data.len());
+    assert_eq!(root_far_struct_zero.size, 0);
+
+    let root_far_struct = res.fields.iter().find(|f| f.id == "root_far_struct").unwrap();
+    assert_eq!(root_far_struct.offset, data.len());
+    assert_eq!(root_far_struct.children[0].offset, data.len());
+
+    let c0 = res.fields.iter().find(|f| f.id == "c0").unwrap();
+    assert_eq!(c0.children.iter().find(|c| c.id == "far_zero").unwrap().offset, 2);
+    assert_eq!(c0.children.iter().find(|c| c.id == "far_struct").unwrap().offset, 2);
+
+    let c1 = res.fields.iter().find(|f| f.id == "c1").unwrap();
+    assert_eq!(c1.offset, 2);
+    assert_eq!(c1.children.iter().find(|c| c.id == "far_zero").unwrap().offset, 4);
+    assert_eq!(c1.children.iter().find(|c| c.id == "far_struct").unwrap().offset, 4);
+}
+
+#[test]
+fn test_m3_process_rol_ror_negative_parity() {
+    let yaml = r#"
+meta:
+  id: process_rot_parity
+types:
+  byte_pair:
+    seq:
+      - id: b0
+        type: u1
+      - id: b1
+        type: u1
+seq:
+  - id: neg_val
+    size: 0
+  - id: str_rol_neg1
+    pos: 0
+    size: 3
+    process: rol(-1)
+  - id: map_rol_neg1
+    pos: 0
+    size: 3
+    process:
+      algo: rol
+      amount: -1
+  - id: str_ror_pos1
+    pos: 0
+    size: 3
+    process: ror(1)
+  - id: str_ror_neg2
+    pos: 0
+    size: 3
+    process: ror(-2)
+  - id: map_ror_neg2_n
+    pos: 0
+    size: 3
+    process:
+      algo: ror
+      n: -2
+  - id: str_rol_pos2
+    pos: 0
+    size: 3
+    process: rol(2)
+  - id: str_rol_i64_min
+    pos: 0
+    size: 3
+    process: rol(-9223372036854775807 - 1)
+  - id: map_rol_i64_min
+    pos: 0
+    size: 3
+    process:
+      algo: rol
+      amount: -9223372036854775808
+  - id: str_rol_i64_min_plus1
+    pos: 0
+    size: 3
+    process: rol(-9223372036854775807)
+  - id: map_rol_i64_min_plus1
+    pos: 0
+    size: 3
+    process:
+      algo: rol
+      amount: -9223372036854775807
+  - id: str_rol_pos1
+    pos: 0
+    size: 3
+    process: rol(1)
+  - id: str_rol_neg9
+    pos: 0
+    size: 3
+    process: rol(-9)
+  - id: map_rol_neg9
+    pos: 0
+    size: 3
+    process:
+      algo: rol
+      amount: -9
+  - id: sub_str_rol_neg1
+    pos: 0
+    size: 2
+    type: byte_pair
+    process: rol(-1)
+  - id: sub_map_rol_neg1
+    pos: 0
+    size: 2
+    type: byte_pair
+    process:
+      algo: rol
+      amount: -1
+"#;
+    let ksy = parse_ksy_yaml(yaml);
+    let data = vec![0xB5, 0x4E, 0x0F];
+    let mut stream = KaitaiStream::new(&data);
+    let res = KaitaiInterpreter::new(ksy).parse(&mut stream);
+
+    assert!(res.errors.is_empty(), "Unexpected errors: {:?}", res.errors);
+    let bytes_of = |id: &str| match &res.fields.iter().find(|f| f.id == id).unwrap().value {
+        FieldValue::Bytes(b) => b.clone(),
+        other => panic!("expected bytes for {id}, got {other:?}"),
+    };
+
+    assert_eq!(bytes_of("str_rol_neg1"), bytes_of("map_rol_neg1"));
+    assert_eq!(bytes_of("str_rol_neg1"), bytes_of("str_ror_pos1"));
+    assert_eq!(bytes_of("str_rol_neg9"), bytes_of("map_rol_neg9"));
+    assert_eq!(bytes_of("str_rol_neg9"), bytes_of("str_rol_neg1"));
+    assert_eq!(bytes_of("str_ror_neg2"), bytes_of("map_ror_neg2_n"));
+    assert_eq!(bytes_of("str_ror_neg2"), bytes_of("str_rol_pos2"));
+    assert_eq!(bytes_of("str_rol_i64_min"), data);
+    assert_eq!(bytes_of("map_rol_i64_min"), data);
+    // |-9223372036854775807| % 8 == 7 with negative sign -> ror(7) == rol(1)
+    assert_eq!(bytes_of("str_rol_i64_min_plus1"), bytes_of("map_rol_i64_min_plus1"));
+    assert_eq!(bytes_of("str_rol_i64_min_plus1"), bytes_of("str_rol_pos1"));
+
+    let sub_str = res.fields.iter().find(|f| f.id == "sub_str_rol_neg1").unwrap();
+    let sub_map = res.fields.iter().find(|f| f.id == "sub_map_rol_neg1").unwrap();
+    assert_eq!(sub_str.children[0].value, sub_map.children[0].value);
+    assert_eq!(sub_str.children[1].value, sub_map.children[1].value);
+}
+
+#[test]
+fn test_m3_validate_contents_empty() {
+    // 1. Empty contents on 0-byte field succeeds.
+    let ok_yaml = r#"
+meta:
+  id: empty_contents_ok
+seq:
+  - id: empty_arr
+    contents: []
+  - id: empty_str
+    contents: ""
+  - id: empty_sized
+    size: 0
+    contents: []
+  - id: next_byte
+    type: u1
+"#;
+    let data = vec![0x7A];
+    let ok_res = KaitaiInterpreter::new(parse_ksy_yaml(ok_yaml)).parse(&mut KaitaiStream::new(&data));
+    assert!(ok_res.errors.is_empty(), "Expected no errors, got {:?}", ok_res.errors);
+    assert_eq!(ok_res.fields.len(), 4);
+    assert_eq!(ok_res.fields[3].value.to_i64(), 0x7A);
+
+    // 2. Non-empty bytes compared against contents: [] must fail.
+    let mismatch_arr_yaml = r#"
+meta:
+  id: empty_contents_mismatch_arr
+seq:
+  - id: header
+    size: 2
+    contents: []
+"#;
+    let two_bytes = vec![0x01, 0x02];
+    let err_arr = KaitaiInterpreter::new(parse_ksy_yaml(mismatch_arr_yaml)).parse(&mut KaitaiStream::new(&two_bytes));
+    assert!(
+        err_arr.errors.iter().any(|e| e.message == "contents mismatch"),
+        "Expected contents mismatch for sized field with contents: [], got {:?}",
+        err_arr.errors
+    );
+    assert!(err_arr.fields.is_empty());
+
+    // 3. Non-empty bytes compared against contents: "" must fail.
+    let mismatch_str_yaml = r#"
+meta:
+  id: empty_contents_mismatch_str
+seq:
+  - id: header
+    size: 2
+    contents: ""
+"#;
+    let err_str = KaitaiInterpreter::new(parse_ksy_yaml(mismatch_str_yaml)).parse(&mut KaitaiStream::new(&two_bytes));
+    assert!(
+        err_str.errors.iter().any(|e| e.message == "contents mismatch"),
+        "Expected contents mismatch for sized field with contents: \"\", got {:?}",
+        err_str.errors
+    );
+    assert!(err_str.fields.is_empty());
+
+    // 4. Scalar field with contents: [] must fail.
+    let mismatch_scalar_yaml = r#"
+meta:
+  id: empty_contents_mismatch_scalar
+seq:
+  - id: scalar
+    type: u1
+    contents: []
+"#;
+    let err_scalar = KaitaiInterpreter::new(parse_ksy_yaml(mismatch_scalar_yaml)).parse(&mut KaitaiStream::new(&two_bytes));
+    assert!(
+        err_scalar.errors.iter().any(|e| e.message == "contents mismatch: actual value is not bytes"),
+        "Expected type mismatch for scalar field with contents: [], got {:?}",
+        err_scalar.errors
+    );
+}
+
+#[test]
+fn test_m3_condition_evaluated_once() {
+    // 1. Root skipped condition + substream + shared-stream + non-_index repeated attr each evaluate `if:` only once.
+    let yaml = r#"
+meta:
+  id: cond_once_test
+types:
+  sub_type:
+    seq:
+      - id: sub_skipped
+        type: u1
+        if: missing_sub == 1
+  shared_type:
+    seq:
+      - id: shared_skipped
+        type: u1
+        if: missing_shared == 1
+seq:
+  - id: root_skipped
+    type: u1
+    if: missing_root == 1
+  - id: sub
+    type: sub_type
+    size: 1
+  - id: shared
+    type: shared_type
+  - id: rep_items
+    type: u1
+    repeat: expr
+    repeat-expr: 4
+    if: missing_rep == 0
+"#;
+    let ksy = parse_ksy_yaml(yaml);
+    let data = vec![0xAA, 0x01, 0x02, 0x03, 0x04];
+    let mut stream = KaitaiStream::new(&data);
+    let res = KaitaiInterpreter::new(ksy).parse(&mut stream);
+
+    let count_err = |ident: &str| res.errors.iter().filter(|e| e.message == format!("Unresolved identifier: {ident}")).count();
+    assert_eq!(res.errors.len(), 4, "errors: {:?}", res.errors);
+    assert_eq!(count_err("missing_root"), 1, "errors: {:?}", res.errors);
+    assert_eq!(count_err("sub.missing_sub"), 1, "errors: {:?}", res.errors);
+    assert_eq!(count_err("shared.missing_shared"), 1, "errors: {:?}", res.errors);
+    assert_eq!(count_err("missing_rep"), 1, "errors: {:?}", res.errors);
+
+    let rep_count = res.fields.iter().filter(|f| f.id.starts_with("rep_items[")).count();
+    assert_eq!(rep_count, 4);
+
+    // 2. Non-repeated field whose `if:` passes (missing_eof == 0) but parsing fails on EOF evaluates `if:` only once.
+    let eof_yaml = r#"
+meta:
+  id: cond_once_eof
+seq:
+  - id: only_byte
+    type: u1
+    if: missing_eof == 0
+"#;
+    let empty = Vec::new();
+    let eof_res = KaitaiInterpreter::new(parse_ksy_yaml(eof_yaml)).parse(&mut KaitaiStream::new(&empty));
+    assert_eq!(eof_res.errors.len(), 1, "errors: {:?}", eof_res.errors);
+    assert_eq!(eof_res.errors[0].message, "Unresolved identifier: missing_eof");
+
+    // 3. `_index`-dependent `if:` inside repeat must still be evaluated on each iteration.
+    let idx_yaml = r#"
+meta:
+  id: cond_per_index_test
+seq:
+  - id: items
+    type: u1
+    repeat: expr
+    repeat-expr: 3
+    if: missing_idx + _index == 0
+"#;
+    let idx_res = KaitaiInterpreter::new(parse_ksy_yaml(idx_yaml)).parse(&mut KaitaiStream::new(&data));
+    assert_eq!(idx_res.errors.len(), 3, "errors: {:?}", idx_res.errors);
+    assert!(idx_res.errors.iter().all(|e| e.message == "Unresolved identifier: missing_idx"));
+    assert_eq!(idx_res.fields.len(), 1);
+    assert_eq!(idx_res.fields[0].id, "items[0]");
 }
