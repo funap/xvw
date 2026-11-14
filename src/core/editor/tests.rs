@@ -1418,7 +1418,7 @@ fn test_custom_bookmarks() {
 }
 
 #[test]
-fn test_editor_bookmarks_crud_and_file_io() {
+fn test_editor_bookmarks_crud_and_yaml_round_trip() {
     let mut editor = create_editor_with_content(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"); // 36 bytes
 
     // Add bookmarks
@@ -1445,14 +1445,12 @@ fn test_editor_bookmarks_crud_and_file_io() {
     assert_eq!(editor.bookmarks().snapshot()[1].offset, 12);
     assert_eq!(editor.bookmarks().snapshot()[1].size, 10);
 
-    // Test export and import
-    let temp_file = std::env::temp_dir().join("editor_bookmarks_test.bookmark.yaml");
-    crate::service::BookmarkService::export_to_file(&temp_file, &editor.bookmarks().snapshot(), None).unwrap();
-    assert!(temp_file.exists());
+    // Test export and import serialization round-trip
+    let yaml = crate::core::bookmark::BookmarkFile::to_yaml(&editor.bookmarks().snapshot(), None).unwrap();
 
     // Create new editor and import
     let mut editor2 = create_editor_with_content(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
-    let loaded = crate::service::BookmarkService::import_from_file(&temp_file).unwrap();
+    let loaded = crate::core::bookmark::BookmarkFile::from_yaml(&yaml).unwrap();
     let count = editor2.bookmarks_mut().import_items(loaded);
     assert_eq!(count, 2);
     assert_eq!(editor2.bookmarks().snapshot().len(), 2);
@@ -1470,8 +1468,6 @@ fn test_editor_bookmarks_crud_and_file_io() {
     let removed = editor.bookmarks_mut().remove_by_index(0);
     assert!(removed.is_some());
     assert!(editor.bookmarks().snapshot().is_empty());
-
-    let _ = std::fs::remove_file(temp_file);
 }
 
 #[test]
@@ -1480,11 +1476,10 @@ fn test_import_and_add_bookmark_no_id_collision() {
     let item1 = BookmarkItem::new(0, 4, BookmarkColor::Red, "Magic bytes");
     editor.bookmarks_mut().add(item1);
 
-    let temp_file = std::env::temp_dir().join("collision_test.bookmark.yaml");
-    crate::service::BookmarkService::export_to_file(&temp_file, &editor.bookmarks().snapshot(), None).unwrap();
+    let yaml = crate::core::bookmark::BookmarkFile::to_yaml(&editor.bookmarks().snapshot(), None).unwrap();
 
     let mut editor2 = create_editor_with_content(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
-    let loaded = crate::service::BookmarkService::import_from_file(&temp_file).unwrap();
+    let loaded = crate::core::bookmark::BookmarkFile::from_yaml(&yaml).unwrap();
     editor2.bookmarks_mut().import_items(loaded);
     assert_eq!(editor2.bookmarks().snapshot().len(), 1);
 
@@ -1506,8 +1501,6 @@ fn test_import_and_add_bookmark_no_id_collision() {
     assert!(editor2.bookmarks_mut().remove_by_id(&added_id));
     assert_eq!(editor2.bookmarks().snapshot().len(), 1);
     assert_eq!(editor2.bookmarks().snapshot()[0].comment, "Magic bytes");
-
-    let _ = std::fs::remove_file(temp_file);
 }
 
 #[test]
