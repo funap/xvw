@@ -110,6 +110,50 @@ pub struct StructureIndex {
     pub(crate) leaf_max_tree: Vec<usize>,
 }
 
+const INLINE_SEGMENT_STACK_CAP: usize = 64;
+
+/// Inline DFS work stack for segment-tree traversals that spills lazily to the heap beyond 64 entries.
+pub(crate) struct SegmentWorkStack {
+    inline: [(usize, usize, usize); INLINE_SEGMENT_STACK_CAP],
+    inline_len: usize,
+    spill: Vec<(usize, usize, usize)>,
+}
+
+impl SegmentWorkStack {
+    #[inline]
+    pub(crate) fn new(root: (usize, usize, usize)) -> Self {
+        let mut inline = [(0, 0, 0); INLINE_SEGMENT_STACK_CAP];
+        inline[0] = root;
+        Self {
+            inline,
+            inline_len: 1,
+            spill: Vec::new(),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn push(&mut self, item: (usize, usize, usize)) {
+        if self.spill.is_empty() && self.inline_len < self.inline.len() {
+            self.inline[self.inline_len] = item;
+            self.inline_len += 1;
+        } else {
+            self.spill.push(item);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn pop(&mut self) -> Option<(usize, usize, usize)> {
+        if let Some(item) = self.spill.pop() {
+            return Some(item);
+        }
+        if self.inline_len == 0 {
+            return None;
+        }
+        self.inline_len -= 1;
+        Some(self.inline[self.inline_len])
+    }
+}
+
 impl StructureIndex {
     pub fn find_deepest_leaf_at(&self, offset: usize) -> Option<&IndexedField> {
         let idx = self.leaf_fields.partition_point(|f| f.offset <= offset);
@@ -131,38 +175,31 @@ impl StructureIndex {
                 if self.leaf_prefix_max_end[i] <= offset {
                     break;
                 }
-                if offset < field.offset + field.size && best.is_none_or(|b| field.depth > b.depth) {
+                if offset < field.offset.saturating_add(field.size) && best.is_none_or(|b| field.depth > b.depth) {
                     best = Some(field);
                 }
             }
             return best;
         }
 
-        let mut work = [(0usize, 0usize, 0usize); 64];
-        let mut work_len = 1;
-        work[0] = (1, 0, self.leaf_tree_base);
-        while work_len > 0 {
-            work_len -= 1;
-            let (node, segment_start, segment_end) = work[work_len];
+        let mut work = SegmentWorkStack::new((1, 0, self.leaf_tree_base));
+        while let Some((node, segment_start, segment_end)) = work.pop() {
             if segment_start >= idx || tree[node] <= offset {
                 continue;
             }
 
             if segment_end - segment_start == 1 {
                 let field = &self.leaf_fields[segment_start];
-                if offset < field.offset + field.size && best.is_none_or(|b| field.depth > b.depth) {
+                if offset < field.offset.saturating_add(field.size) && best.is_none_or(|b| field.depth > b.depth) {
                     best = Some(field);
                 }
                 continue;
             }
 
             let middle = segment_start + (segment_end - segment_start) / 2;
-            if work_len + 2 <= work.len() {
-                // Push left first, then right so right is popped first (matching .iter().rev() order).
-                work[work_len] = (node * 2, segment_start, middle);
-                work[work_len + 1] = (node * 2 + 1, middle, segment_end);
-                work_len += 2;
-            }
+            // Push left first, then right so right is popped first (matching .iter().rev() order).
+            work.push((node * 2, segment_start, middle));
+            work.push((node * 2 + 1, middle, segment_end));
         }
         best
     }
@@ -177,7 +214,7 @@ impl StructureIndex {
             .collect()
     }
 
-    /// Counts active structure ranges intersecting `[start_offset, start_offset + len)` without allocation.
+    /// Counts active structure ranges intersecting `[start_offset, start_offset + len)` without heap allocation in common cases.
     pub fn count_active_struct_ranges(&self, start_offset: usize, len: usize) -> usize {
         let row_end = start_offset.saturating_add(len);
         let ranges = &self.active_ranges;
@@ -186,13 +223,13 @@ impl StructureIndex {
         }
 
         let tree = &self.active_range_max_tree;
-        let mut work = [(0usize, 0usize, 0usize); 64];
-        let mut work_len = 1;
-        work[0] = (1, 0, self.active_range_tree_base);
-        let mut count = 0;
-        while work_len > 0 {
-            work_len -= 1;
-            let (node, segment_start, segment_end) = work[work_len];
+        if tree.is_empty() {
+            return ranges.iter().filter(|r| r.start < row_end && r.end > start_offset).count();
+        }
+
+        let mut work = SegmentWorkStack::new((1, 0, self.active_range_tree_base));
+        let mut count: usize = 0;
+        while let Some((node, segment_start, segment_end)) = work.pop() {
             if segment_start >= ranges.len() || ranges[segment_start].start >= row_end || tree[node] <= start_offset {
                 continue;
             }
@@ -200,17 +237,14 @@ impl StructureIndex {
             if segment_end - segment_start == 1 {
                 let range = &ranges[segment_start];
                 if range.start < row_end && range.end > start_offset {
-                    count += 1;
+                    count = count.saturating_add(1);
                 }
                 continue;
             }
 
             let middle = segment_start + (segment_end - segment_start) / 2;
-            if work_len + 2 <= work.len() {
-                work[work_len] = (node * 2 + 1, middle, segment_end);
-                work[work_len + 1] = (node * 2, segment_start, middle);
-                work_len += 2;
-            }
+            work.push((node * 2 + 1, middle, segment_end));
+            work.push((node * 2, segment_start, middle));
         }
         count
     }
@@ -312,24 +346,24 @@ impl StructureIndexBuilder {
 
         while let Some((field, depth)) = work.pop() {
             let is_str = field.is_struct();
+            let field_end = field.offset.saturating_add(field.size);
             if self.collect_layout && !field.is_instance && field.size > 0 {
                 self.field_breaks.push(field.offset);
-                self.field_breaks.push(field.offset + field.size);
+                self.field_breaks.push(field_end);
             }
             if self.collect_layout && field.size > 0 && !is_str {
-                self.highlights.push((field.offset..field.offset + field.size, field.color));
+                self.highlights.push((field.offset..field_end, field.color));
             }
 
             if is_str {
-                let end = field.offset + field.size;
                 let id_key = self.id_key(&field.id);
                 if self.container_seen.insert((field.offset, field.size, id_key)) {
                     self.container_structs.push(IndexedField::container(field, depth));
                 }
-                if self.collect_layout && self.range_seen.insert((field.offset, end, id_key)) {
+                if self.collect_layout && self.range_seen.insert((field.offset, field_end, id_key)) {
                     self.active_ranges.push(ActiveStructRange {
                         start: field.offset,
-                        end,
+                        end: field_end,
                         depth,
                         id: field.id.clone(),
                     });
@@ -343,8 +377,9 @@ impl StructureIndexBuilder {
 
             // LIFO traversal needs children in reverse order to retain the
             // same source order as the former recursive implementation.
+            let child_depth = depth.saturating_add(1);
             for child in field.children.iter().rev() {
-                work.push((child, depth + 1));
+                work.push((child, child_depth));
             }
         }
     }
@@ -367,7 +402,7 @@ impl StructureIndexBuilder {
         let mut prefix = Vec::with_capacity(leaves.len());
         let mut running_max = 0;
         for leaf in leaves {
-            running_max = running_max.max(leaf.offset + leaf.size);
+            running_max = running_max.max(leaf.offset.saturating_add(leaf.size));
             prefix.push(running_max);
         }
         prefix
@@ -380,7 +415,7 @@ impl StructureIndexBuilder {
         let base = leaves.len().next_power_of_two();
         let mut tree = vec![0; base * 2];
         for (index, leaf) in leaves.iter().enumerate() {
-            tree[base + index] = leaf.offset + leaf.size;
+            tree[base + index] = leaf.offset.saturating_add(leaf.size);
         }
         for index in (1..base).rev() {
             tree[index] = tree[index * 2].max(tree[index * 2 + 1]);
@@ -461,11 +496,101 @@ impl LiveStructureIndex {
                 if batch.leaf_prefix_max_end[i] <= offset {
                     break;
                 }
-                if offset < field.offset + field.size && best.as_ref().is_none_or(|b| field.depth > b.depth) {
+                if offset < field.offset.saturating_add(field.size) && best.as_ref().is_none_or(|b| field.depth > b.depth) {
                     best = Some(field.clone());
                 }
             }
         }
         best
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn segment_work_stack_preserves_lifo_beyond_inline_capacity() {
+        let mut stack = SegmentWorkStack::new((0, 0, 1));
+        for i in 1..=160 {
+            stack.push((i, i, i + 1));
+        }
+
+        for expected in (110..=160).rev() {
+            assert_eq!(stack.pop(), Some((expected, expected, expected + 1)));
+        }
+
+        for i in 500..540 {
+            stack.push((i, i, i + 1));
+        }
+        for expected in (500..540).rev() {
+            assert_eq!(stack.pop(), Some((expected, expected, expected + 1)));
+        }
+
+        // Drain back into the inline buffer, then push past inline capacity again.
+        for expected in (40..=109).rev() {
+            assert_eq!(stack.pop(), Some((expected, expected, expected + 1)));
+        }
+        for i in 700..740 {
+            stack.push((i, i, i + 1));
+        }
+        for expected in (700..740).rev() {
+            assert_eq!(stack.pop(), Some((expected, expected, expected + 1)));
+        }
+
+        for expected in (0..=39).rev() {
+            assert_eq!(stack.pop(), Some((expected, expected, expected + 1)));
+        }
+        assert_eq!(stack.pop(), None);
+    }
+
+    #[test]
+    fn structure_index_handles_saturating_offset_bounds() {
+        let leaf = ParsedField {
+            id: "tail".into(),
+            field_type: "bytes".into(),
+            offset: usize::MAX - 2,
+            size: 16,
+            value: FieldValue::Bytes(vec![1, 2]),
+            color: RgbaColor::default(),
+            description: None,
+            children: Vec::new(),
+            enum_label: None,
+            is_instance: false,
+        };
+        let parent = ParsedField {
+            id: "wrap".into(),
+            field_type: "wrap_t".into(),
+            offset: usize::MAX - 4,
+            size: 32,
+            value: FieldValue::Struct,
+            color: RgbaColor::default(),
+            description: None,
+            children: vec![leaf],
+            enum_label: None,
+            is_instance: false,
+        };
+
+        let mut builder = StructureIndexBuilder::new();
+        builder.add_field(&parent);
+        let mut index = builder.finish();
+
+        assert_eq!(index.find_deepest_leaf_at(usize::MAX - 1).map(|f| f.id.as_str()), Some("tail"));
+        assert_eq!(index.count_active_struct_ranges(usize::MAX - 2, 16), 1);
+
+        // Clearing precomputed segment trees should still yield exact results via linear fallback.
+        index.leaf_max_tree.clear();
+        index.active_range_max_tree.clear();
+        assert_eq!(index.find_deepest_leaf_at(usize::MAX - 1).map(|f| f.id.as_str()), Some("tail"));
+        assert_eq!(index.count_active_struct_ranges(usize::MAX - 2, 16), 1);
+
+        let parse_result = crate::core::structure::types::ParseResult::new_with_index(
+            "test".into(),
+            crate::core::structure::types::FieldCollection::default(),
+            0,
+            Vec::new(),
+            index,
+        );
+        assert_eq!(parse_result.find_active_struct_ranges(usize::MAX - 2, 16).len(), 1);
     }
 }

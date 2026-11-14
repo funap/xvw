@@ -636,12 +636,13 @@ impl ParseResult {
         }
 
         let tree = &self.index.active_range_max_tree;
-        let mut work = [(0usize, 0usize, 0usize); 64];
-        let mut work_len = 1;
-        work[0] = (1, 0, self.index.active_range_tree_base);
-        while work_len > 0 {
-            work_len -= 1;
-            let (node, segment_start, segment_end) = work[work_len];
+        if tree.is_empty() {
+            result.extend(ranges.iter().filter(|r| r.start < row_end && r.end > start_offset));
+            return result;
+        }
+
+        let mut work = crate::core::structure::index::SegmentWorkStack::new((1, 0, self.index.active_range_tree_base));
+        while let Some((node, segment_start, segment_end)) = work.pop() {
             if segment_start >= ranges.len() || ranges[segment_start].start >= row_end || tree[node] <= start_offset {
                 continue;
             }
@@ -655,12 +656,9 @@ impl ParseResult {
             }
 
             let middle = segment_start + (segment_end - segment_start) / 2;
-            if work_len + 2 <= work.len() {
-                // Push right first so results remain sorted by the range start.
-                work[work_len] = (node * 2 + 1, middle, segment_end);
-                work[work_len + 1] = (node * 2, segment_start, middle);
-                work_len += 2;
-            }
+            // Push right first so results remain sorted by the range start.
+            work.push((node * 2 + 1, middle, segment_end));
+            work.push((node * 2, segment_start, middle));
         }
         result
     }
