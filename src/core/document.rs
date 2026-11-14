@@ -253,6 +253,9 @@ impl Document {
             return None;
         }
         let delta = command.execute(self)?;
+        if command.is_noop() {
+            return None;
+        }
         self.history.push(command);
         Some(delta)
     }
@@ -263,7 +266,19 @@ impl Document {
             return None;
         }
         let mut command = self.history.pop_undo()?;
+        if command.is_noop() {
+            self.history.discard_pending_redo();
+            return None;
+        }
         let delta = command.undo(self);
+        if delta.is_none() || command.is_noop() {
+            if command.is_noop() {
+                self.history.discard_pending_redo();
+            } else {
+                self.history.restore_undo(command);
+            }
+            return None;
+        }
         self.history.push_redo(command);
         delta
     }
@@ -274,8 +289,17 @@ impl Document {
             return None;
         }
         let mut command = self.history.pop_redo()?;
+        if command.is_noop() {
+            self.history.discard_pending_undo();
+            return None;
+        }
         let delta = command.execute(self);
         if delta.is_none() || command.is_noop() {
+            if command.is_noop() {
+                self.history.discard_pending_undo();
+            } else {
+                self.history.restore_redo(command);
+            }
             return None;
         }
         self.history.push_undo(command);
@@ -495,5 +519,211 @@ mod tests {
         assert!(!doc.is_empty());
         assert_eq!(doc.data(), b"test data");
         assert_eq!(doc.buffer().len(), 9);
+    }
+
+    #[test]
+    fn test_undo_redo_empty_and_read_only_preserve_state() {
+        use crate::core::command::ReplaceRangeCommand;
+
+        let mut doc = Document::new(PathBuf::from("test.bin"), Buffer::new(b"hello".to_vec()));
+        assert_eq!(doc.undo(), None);
+        assert_eq!(doc.redo(), None);
+        assert!(!doc.can_undo());
+        assert!(!doc.can_redo());
+        assert!(!doc.is_dirty());
+
+        doc.execute_command(Box::new(ReplaceRangeCommand::new(0, b"h".to_vec(), b"H".to_vec())))
+            .expect("first edit");
+        doc.mark_as_saved();
+        assert!(!doc.is_dirty());
+
+        doc.execute_command(Box::new(ReplaceRangeCommand::new(1, b"e".to_vec(), b"E".to_vec())))
+            .expect("second edit");
+        assert_eq!(doc.data(), b"HEllo");
+        assert!(doc.is_dirty());
+
+        doc.set_read_only(true);
+        assert_eq!(doc.undo(), None);
+        assert_eq!(doc.data(), b"HEllo");
+        assert!(doc.can_undo());
+        assert!(!doc.can_redo());
+        assert!(doc.is_dirty());
+
+        doc.set_read_only(false);
+        assert!(doc.undo().is_some());
+        assert_eq!(doc.data(), b"Hello");
+        assert!(!doc.is_dirty());
+        assert!(doc.can_redo());
+
+        doc.set_read_only(true);
+        assert_eq!(doc.redo(), None);
+        assert_eq!(doc.data(), b"Hello");
+        assert!(doc.can_redo());
+        assert!(!doc.is_dirty());
+
+        doc.set_read_only(false);
+        assert!(doc.redo().is_some());
+        assert_eq!(doc.data(), b"HEllo");
+        assert!(!doc.can_redo());
+        assert!(doc.is_dirty());
+    }
+
+    #[test]
+    fn test_execute_noop_command_does_not_pollute_history() {
+        use crate::core::command::ReplaceRangeCommand;
+
+        struct NoopCommandWithDelta;
+        impl Command for NoopCommandWithDelta {
+            fn execute(&mut self, _doc: &mut Document) -> Option<EditDelta> {
+                Some(EditDelta {
+                    offset: 0,
+                    old_len: 0,
+                    new_len: 0,
+                })
+            }
+
+            fn undo(&mut self, _doc: &mut Document) -> Option<EditDelta> {
+                None
+            }
+
+            fn is_noop(&self) -> bool {
+                true
+            }
+        }
+
+        let mut doc = Document::new(PathBuf::from("test.bin"), Buffer::new(b"abc".to_vec()));
+        doc.execute_command(Box::new(ReplaceRangeCommand::new(0, b"a".to_vec(), b"z".to_vec())))
+            .expect("edit");
+        assert!(doc.undo().is_some());
+        assert!(!doc.can_undo());
+        assert!(doc.can_redo());
+        assert!(!doc.is_dirty());
+
+        // Same-bytes ReplaceRangeCommand and explicit `is_noop() == true` commands must not record
+        // history entries or clear existing redo history.
+        assert_eq!(doc.execute_command(Box::new(ReplaceRangeCommand::new(0, b"a".to_vec(), b"a".to_vec()))), None);
+        assert_eq!(doc.execute_command(Box::new(NoopCommandWithDelta)), None);
+        assert!(!doc.can_undo());
+        assert!(doc.can_redo());
+        assert!(!doc.is_dirty());
+    }
+
+    #[test]
+    fn test_failed_undo_and_redo_preserve_history_stack_and_dirty_state() {
+        use crate::core::command::ReplaceRangeCommand;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct ConditionalReplaceCommand {
+            allow_execute: Arc<AtomicBool>,
+            allow_undo: Arc<AtomicBool>,
+        }
+
+        impl Command for ConditionalReplaceCommand {
+            fn execute(&mut self, doc: &mut Document) -> Option<EditDelta> {
+                if !self.allow_execute.load(Ordering::SeqCst) {
+                    return None;
+                }
+                if !doc.replace_bytes(0, 1, b"B") {
+                    return None;
+                }
+                Some(EditDelta {
+                    offset: 0,
+                    old_len: 1,
+                    new_len: 1,
+                })
+            }
+
+            fn undo(&mut self, doc: &mut Document) -> Option<EditDelta> {
+                if !self.allow_undo.load(Ordering::SeqCst) {
+                    return None;
+                }
+                if !doc.replace_bytes(0, 1, b"A") {
+                    return None;
+                }
+                Some(EditDelta {
+                    offset: 0,
+                    old_len: 1,
+                    new_len: 1,
+                })
+            }
+        }
+
+        let allow_execute = Arc::new(AtomicBool::new(true));
+        let allow_undo = Arc::new(AtomicBool::new(false));
+        let mut doc = Document::new(PathBuf::from("test.bin"), Buffer::new(b"_tail".to_vec()));
+
+        doc.execute_command(Box::new(ReplaceRangeCommand::new(0, b"_".to_vec(), b"A".to_vec())))
+            .expect("base edit");
+        doc.mark_as_saved();
+        assert!(!doc.is_dirty());
+
+        doc.execute_command(Box::new(ConditionalReplaceCommand {
+            allow_execute: Arc::clone(&allow_execute),
+            allow_undo: Arc::clone(&allow_undo),
+        }))
+        .expect("conditional edit");
+        assert_eq!(doc.data(), b"Btail");
+        assert!(doc.is_dirty());
+
+        // Failing undo must restore the command on the undo stack and keep `is_dirty()` true.
+        assert_eq!(doc.undo(), None);
+        assert_eq!(doc.data(), b"Btail");
+        assert!(doc.can_undo());
+        assert!(!doc.can_redo());
+        assert!(doc.is_dirty());
+
+        // Allowing undo now reverts the document cleanly back to the saved state.
+        allow_undo.store(true, Ordering::SeqCst);
+        assert!(doc.undo().is_some());
+        assert_eq!(doc.data(), b"Atail");
+        assert!(!doc.is_dirty());
+        assert!(doc.can_redo());
+
+        // Failing redo must keep the entry on the redo stack and preserve `!is_dirty()`.
+        allow_execute.store(false, Ordering::SeqCst);
+        assert_eq!(doc.redo(), None);
+        assert_eq!(doc.data(), b"Atail");
+        assert!(doc.can_redo());
+        assert!(!doc.is_dirty());
+
+        // Allowing redo re-applies the command and marks the document dirty again.
+        allow_execute.store(true, Ordering::SeqCst);
+        assert!(doc.redo().is_some());
+        assert_eq!(doc.data(), b"Btail");
+        assert!(!doc.can_redo());
+        assert!(doc.is_dirty());
+    }
+
+    #[test]
+    fn test_stale_noop_entries_discarded_cleanly_on_undo_and_redo() {
+        struct StaleNoop;
+        impl Command for StaleNoop {
+            fn execute(&mut self, _doc: &mut Document) -> Option<EditDelta> {
+                unreachable!("is_noop commands should not be executed on redo")
+            }
+
+            fn undo(&mut self, _doc: &mut Document) -> Option<EditDelta> {
+                unreachable!("is_noop commands should not be undone")
+            }
+
+            fn is_noop(&self) -> bool {
+                true
+            }
+        }
+
+        let mut doc = Document::new(PathBuf::from("test.bin"), Buffer::new(b"abc".to_vec()));
+        doc.history.push(Box::new(MockCommand));
+        doc.mark_as_saved();
+        doc.history.push(Box::new(StaleNoop));
+
+        assert_eq!(doc.undo(), None);
+        assert!(!doc.can_redo());
+        assert!(!doc.is_dirty());
+
+        doc.history.push_redo(Box::new(StaleNoop));
+        assert_eq!(doc.redo(), None);
+        assert!(!doc.can_redo());
+        assert!(!doc.is_dirty());
+        assert_eq!(doc.history.version(), 1);
     }
 }

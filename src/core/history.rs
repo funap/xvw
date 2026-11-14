@@ -55,6 +55,21 @@ impl History {
         self.redo_stack.push(HistoryEntry { command, state_id });
     }
 
+    /// Restores a command popped via [`Self::pop_undo`] back onto the undo stack with its original state ID.
+    pub fn restore_undo(&mut self, command: Box<dyn Command>) {
+        let state_id = self.pending_redo_state_id.take().unwrap_or_else(|| {
+            self.next_state_id = self.next_state_id.wrapping_add(1).max(1);
+            self.next_state_id
+        });
+        self.current_state_id = state_id;
+        self.undo_stack.push(HistoryEntry { command, state_id });
+    }
+
+    /// Discards the pending redo state ID after a popped undo command is dropped as a no-op.
+    pub fn discard_pending_redo(&mut self) {
+        self.pending_redo_state_id = None;
+    }
+
     /// Pops the last command from the redo stack.
     pub fn pop_redo(&mut self) -> Option<Box<dyn Command>> {
         let entry = self.redo_stack.pop()?;
@@ -70,6 +85,20 @@ impl History {
         });
         self.current_state_id = state_id;
         self.undo_stack.push(HistoryEntry { command, state_id });
+    }
+
+    /// Restores a command popped via [`Self::pop_redo`] back onto the redo stack with its original state ID.
+    pub fn restore_redo(&mut self, command: Box<dyn Command>) {
+        let state_id = self.pending_undo_state_id.take().unwrap_or_else(|| {
+            self.next_state_id = self.next_state_id.wrapping_add(1).max(1);
+            self.next_state_id
+        });
+        self.redo_stack.push(HistoryEntry { command, state_id });
+    }
+
+    /// Discards the pending undo state ID after a popped redo command is dropped as a no-op.
+    pub fn discard_pending_undo(&mut self) {
+        self.pending_undo_state_id = None;
     }
 
     /// Clears the history.
@@ -139,5 +168,39 @@ mod tests {
 
         history.clear();
         assert_eq!(history.version(), 0);
+    }
+
+    #[test]
+    fn test_history_restore_preserves_state_ids() {
+        let mut history = History::new();
+        history.push(Box::new(DummyCommand));
+        let first_id = history.state_id();
+        history.push(Box::new(DummyCommand));
+        let second_id = history.state_id();
+        assert_ne!(first_id, second_id);
+
+        // Simulated failed undo restores the entry and its state_id onto the undo stack.
+        let popped = history.pop_undo().expect("undo entry");
+        assert_eq!(history.state_id(), first_id);
+        history.restore_undo(popped);
+        assert_eq!(history.state_id(), second_id);
+        assert_eq!(history.version(), 2);
+        assert!(!history.can_redo());
+
+        // Move second entry cleanly to redo, then simulate a failed redo restore.
+        let popped = history.pop_undo().expect("undo entry");
+        history.push_redo(popped);
+        assert_eq!(history.state_id(), first_id);
+
+        let redo_cmd = history.pop_redo().expect("redo entry");
+        history.restore_redo(redo_cmd);
+        assert_eq!(history.state_id(), first_id);
+        assert!(history.can_redo());
+
+        // Succeeding redo afterwards must restore exact `second_id`.
+        let redo_cmd = history.pop_redo().expect("redo entry");
+        history.push_undo(redo_cmd);
+        assert_eq!(history.state_id(), second_id);
+        assert!(!history.can_redo());
     }
 }
