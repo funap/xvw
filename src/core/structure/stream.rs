@@ -65,23 +65,37 @@ impl<'a> KaitaiStream<'a> {
             return Some(0);
         }
 
-        while self.bits_left < n {
-            if self.pos >= self.data.len() {
-                return None;
-            }
-            let byte = self.data[self.pos] as u64;
-            self.pos += 1;
-            self.bits = (self.bits << 8) | byte;
-            self.bits_left += 8;
+        let needed_bits = n.saturating_sub(self.bits_left);
+        let needed_bytes = needed_bits.div_ceil(8);
+        if needed_bytes > self.data.len().saturating_sub(self.pos) {
+            return None;
         }
 
-        let shift = self.bits_left - n;
-        let mask = if n == 64 { u64::MAX } else { (1u64 << n) - 1 };
-        let res = (self.bits >> shift) & mask;
-        self.bits_left -= n;
-        if self.bits_left < 64 {
-            self.bits &= (1u64 << self.bits_left) - 1;
+        let mut bits = self.bits as u128;
+        let mut bits_left = self.bits_left;
+        let mut pos = self.pos;
+
+        while bits_left < n {
+            let byte = self.data[pos] as u128;
+            pos += 1;
+            bits = (bits << 8) | byte;
+            bits_left += 8;
         }
+
+        let shift = bits_left - n;
+        let mask = if n == 64 { u128::from(u64::MAX) } else { (1u128 << n) - 1 };
+        let res = ((bits >> shift) & mask) as u64;
+        bits_left -= n;
+        let rem_mask = if bits_left == 0 {
+            0
+        } else if bits_left >= 128 {
+            u128::MAX
+        } else {
+            (1u128 << bits_left) - 1
+        };
+        self.pos = pos;
+        self.bits = (bits & rem_mask) as u64;
+        self.bits_left = bits_left;
         Some(res)
     }
 
@@ -93,39 +107,49 @@ impl<'a> KaitaiStream<'a> {
             return Some(0);
         }
 
+        let needed_bits = n.saturating_sub(self.bits_left);
+        let needed_bytes = needed_bits.div_ceil(8);
+        if needed_bytes > self.data.len().saturating_sub(self.pos) {
+            return None;
+        }
+
+        let mut bits = self.bits;
+        let mut bits_left = self.bits_left;
+        let mut pos = self.pos;
         let mut bits_read = 0;
         let mut res: u64 = 0;
 
         while bits_read < n {
-            if self.bits_left == 0 {
-                if self.pos >= self.data.len() {
-                    return None;
-                }
-                self.bits = self.data[self.pos] as u64;
-                self.pos += 1;
-                self.bits_left = 8;
+            if bits_left == 0 {
+                bits = self.data[pos] as u64;
+                pos += 1;
+                bits_left = 8;
             }
 
-            let count = (n - bits_read).min(self.bits_left);
+            let count = (n - bits_read).min(bits_left);
             let mask = if count == 64 { u64::MAX } else { (1u64 << count) - 1 };
-            let chunk = self.bits & mask;
+            let chunk = bits & mask;
 
             res |= chunk << bits_read;
-            self.bits >>= count;
-            self.bits_left -= count;
+            bits = if count >= 64 { 0 } else { bits >> count };
+            bits_left -= count;
             bits_read += count;
         }
 
+        self.pos = pos;
+        self.bits = bits;
+        self.bits_left = bits_left;
         Some(res)
     }
 
     #[inline(always)]
     fn read_fixed<const N: usize>(&mut self) -> Option<[u8; N]> {
         self.align_to_byte();
-        if self.pos + N <= self.data.len() {
+        let end = self.pos.checked_add(N)?;
+        if end <= self.data.len() {
             let mut bytes = [0u8; N];
-            bytes.copy_from_slice(&self.data[self.pos..self.pos + N]);
-            self.pos += N;
+            bytes.copy_from_slice(&self.data[self.pos..end]);
+            self.pos = end;
             Some(bytes)
         } else {
             None
@@ -219,9 +243,10 @@ impl<'a> KaitaiStream<'a> {
     #[inline(always)]
     pub fn read_bytes_slice(&mut self, size: usize) -> Option<&'a [u8]> {
         self.align_to_byte();
-        if self.pos + size <= self.data.len() {
-            let slice = &self.data[self.pos..self.pos + size];
-            self.pos += size;
+        let end = self.pos.checked_add(size)?;
+        if end <= self.data.len() {
+            let slice = &self.data[self.pos..end];
+            self.pos = end;
             Some(slice)
         } else {
             None
@@ -238,19 +263,20 @@ impl<'a> KaitaiStream<'a> {
     /// substream contents.
     pub fn take_substream(&mut self, size: usize) -> Option<KaitaiStream<'a>> {
         self.align_to_byte();
-        if self.pos + size > self.data.len() {
+        let end = self.pos.checked_add(size)?;
+        if end > self.data.len() {
             return None;
         }
 
         let start = self.pos;
-        self.pos += size;
-        Some(KaitaiStream::new_with_root(&self.data[start..start + size], self.root_data))
+        self.pos = end;
+        Some(KaitaiStream::new_with_root(&self.data[start..end], self.root_data))
     }
 
     #[inline(always)]
     pub fn read_bytes_remaining_slice(&mut self) -> Option<&'a [u8]> {
         self.align_to_byte();
-        let size = self.data.len() - self.pos;
+        let size = self.data.len().saturating_sub(self.pos);
         self.read_bytes_slice(size)
     }
 
@@ -305,10 +331,11 @@ impl<'a> KaitaiStream<'a> {
 
     pub fn ensure_fixed_contents(&mut self, expected: &[u8]) -> Option<Vec<u8>> {
         self.align_to_byte();
-        if self.pos + expected.len() <= self.data.len() {
-            let slice = &self.data[self.pos..self.pos + expected.len()];
+        let end = self.pos.checked_add(expected.len())?;
+        if end <= self.data.len() {
+            let slice = &self.data[self.pos..end];
             if slice == expected {
-                self.pos += expected.len();
+                self.pos = end;
                 return Some(slice.to_vec());
             }
         }
@@ -475,5 +502,75 @@ mod tests {
         assert_eq!(byte_array_compare(b"a", b"b"), -1);
         assert_eq!(byte_array_compare(b"a", b"a"), 0);
         assert_eq!(byte_array_compare(b"b", b"a"), 1);
+    }
+
+    #[test]
+    fn read_bits_int_be_preserves_high_bits_with_unaligned_accumulator() {
+        for prefix_bits in 1..=7 {
+            let rem_bits = 8 - prefix_bits;
+            // Prefix bits = all 0s so byte 0's lower `rem_bits` (all 1s) form the high bits of the 64-bit read.
+            let first_byte = (1u8 << rem_bits) - 1;
+            let last_byte = ((0xA5u8 >> prefix_bits) << prefix_bits) | ((1u8 << prefix_bits) - 1);
+            let mut data = vec![first_byte, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, last_byte];
+
+            let mut stream = KaitaiStream::new(&data);
+            assert_eq!(stream.read_bits_int_be(prefix_bits), Some(0));
+
+            let expected_val: u64 =
+                ((u64::from(first_byte)) << (64 - rem_bits)) | ((0x0012_3456_789A_BCDE_u64) << prefix_bits) | u64::from(last_byte >> rem_bits);
+            assert_eq!(stream.read_bits_int_be(64), Some(expected_val), "high bits lost for prefix_bits={prefix_bits}");
+            assert_eq!(stream.read_bits_int_be(rem_bits), Some(u64::from(last_byte & ((1u8 << rem_bits) - 1))));
+            assert!(stream.is_eof());
+
+            // Also test when first remaining bit is explicitly 1 followed by zeros.
+            data[0] = 1 << (rem_bits - 1);
+            let mut stream2 = KaitaiStream::new(&data);
+            assert_eq!(stream2.read_bits_int_be(prefix_bits), Some(0));
+            let expected2: u64 = (1u64 << 63) | ((0x0012_3456_789A_BCDE_u64) << prefix_bits) | u64::from(last_byte >> rem_bits);
+            assert_eq!(stream2.read_bits_int_be(64), Some(expected2));
+        }
+    }
+
+    #[test]
+    fn bit_readers_keep_stream_state_unchanged_on_eof() {
+        let mut be = KaitaiStream::new(&[0b1011_0100, 0xF1]);
+        assert_eq!(be.read_bits_int_be(3), Some(0b101));
+        assert_eq!(be.pos(), 1);
+        assert_eq!(be.read_bits_int_be(16), None);
+        assert_eq!(be.pos(), 1);
+        assert!(!be.is_eof());
+        assert_eq!(be.read_bits_int_be(13), Some((0b1_0100 << 8) | 0xF1));
+        assert!(be.is_eof());
+        assert_eq!(be.read_bits_int_be(1), None);
+        assert_eq!(be.pos(), 2);
+
+        let mut le = KaitaiStream::new(&[0b1011_0100, 0xA5]);
+        assert_eq!(le.read_bits_int_le(3), Some(0b100));
+        assert_eq!(le.pos(), 1);
+        assert_eq!(le.read_bits_int_le(16), None);
+        assert_eq!(le.pos(), 1);
+        assert!(!le.is_eof());
+        assert_eq!(le.read_bits_int_le(13), Some((0xA5 << 5) | 0b1_0110));
+        assert!(le.is_eof());
+        assert_eq!(le.read_bits_int_le(1), None);
+        assert_eq!(le.pos(), 2);
+    }
+
+    #[test]
+    fn byte_and_substream_reads_prevent_size_overflow() {
+        let mut stream = KaitaiStream::new(&[1, 2, 3, 4]);
+        assert_eq!(stream.read_u1(), Some(1));
+        assert_eq!(stream.pos(), 1);
+
+        assert_eq!(stream.read_bytes_slice(usize::MAX), None);
+        assert_eq!(stream.pos(), 1);
+        assert_eq!(stream.read_bytes(usize::MAX), None);
+        assert_eq!(stream.pos(), 1);
+        assert!(stream.take_substream(usize::MAX).is_none());
+        assert_eq!(stream.pos(), 1);
+        assert_eq!(stream.ensure_fixed_contents(&[2, 3, 4, 5]), None);
+        assert_eq!(stream.pos(), 1);
+        assert_eq!(stream.ensure_fixed_contents(&[2, 3]), Some(vec![2, 3]));
+        assert_eq!(stream.pos(), 3);
     }
 }
