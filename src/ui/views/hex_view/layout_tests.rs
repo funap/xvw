@@ -1242,3 +1242,32 @@ fn test_for_each_ascii_char_matches_map_fast_and_multibyte_paths() {
         }
     }
 }
+
+#[test]
+fn test_comment_content_width_in_range_accumulates_same_row_and_skips_empty_comments() {
+    use crate::core::bookmark::model::{BookmarkColor, BookmarkItem};
+
+    let buffer = Buffer::new(vec![0u8; 64]);
+    let mut doc = Document::new(PathBuf::from("test.bin"), buffer);
+    doc.metadata.bookmarks.add(BookmarkItem::new(4, 2, BookmarkColor::Yellow, "alpha"), 64);
+    doc.metadata.bookmarks.add(BookmarkItem::new(8, 2, BookmarkColor::Blue, "   "), 64);
+    doc.metadata.bookmarks.add(BookmarkItem::new(10, 2, BookmarkColor::Green, "beta"), 64);
+    doc.metadata
+        .bookmarks
+        .add(BookmarkItem::new(16, 4, BookmarkColor::Red, "wide_comment_on_next_row"), 64);
+    let editor = Editor::new(Arc::new(RwLock::new(doc)));
+
+    let char_w = 8.0;
+    assert_eq!(HexView::comment_content_width_in_range(&editor, &(0..0), char_w), 0.0);
+
+    // Row 0 has "alpha" + "beta" (skipping whitespace-only comment); row 1 has "wide_comment_on_next_row".
+    let w_row0 = HexView::comment_content_width_in_range(&editor, &(0..16), char_w);
+    let expected_row0 = 8.0 + (8.0 + 5.0 + weighted_text_width("alpha", char_w) + 14.0) + (8.0 + 5.0 + weighted_text_width("beta", char_w) + 14.0);
+    assert!((w_row0 - expected_row0).abs() < 1e-4, "w_row0={w_row0} expected={expected_row0}");
+
+    // Whitespace-only comments alone return 0.0 cleanly.
+    let mut ws_doc = Document::new(PathBuf::from("ws.bin"), Buffer::new(vec![0u8; 32]));
+    ws_doc.metadata.bookmarks.add(BookmarkItem::new(4, 2, BookmarkColor::Blue, "   \n\t "), 32);
+    let ws_editor = Editor::new(Arc::new(RwLock::new(ws_doc)));
+    assert_eq!(HexView::comment_content_width_in_range(&ws_editor, &(0..32), char_w), 0.0);
+}

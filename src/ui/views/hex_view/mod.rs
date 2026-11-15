@@ -650,31 +650,54 @@ impl HexView {
             return 0.0;
         }
 
-        let line_starts = editor.line_starts();
-        let bookmarks = editor.bookmarks().snapshot();
-        let mut start_idx = bookmarks.partition_point(|bookmark| bookmark.offset < scan_range.start);
-        start_idx = start_idx.saturating_sub(1);
-        let end_idx = bookmarks.partition_point(|bookmark| bookmark.offset < scan_range.end);
+        let bookmarks_ref = editor.bookmarks();
+        let bookmarks = bookmarks_ref.items();
+        if bookmarks.is_empty() {
+            return 0.0;
+        }
 
-        use std::collections::HashMap;
-        let mut row_widths: HashMap<usize, f32> = HashMap::new();
-        for bookmark in bookmarks[start_idx..end_idx].iter().take(AUTO_FIT_MAX_ITEMS) {
+        let start_idx = bookmarks.partition_point(|bookmark| bookmark.offset < scan_range.start).saturating_sub(1);
+        let end_idx = bookmarks.partition_point(|bookmark| bookmark.offset < scan_range.end);
+        let candidates = &bookmarks[start_idx..end_idx];
+
+        let mut line_starts: Option<crate::core::layout::LineMap> = None;
+        let mut max_width: f32 = 0.0;
+        let mut current_row: Option<(usize, f32)> = None;
+        for bookmark in candidates.iter().take(AUTO_FIT_MAX_ITEMS) {
             let trimmed = bookmark.comment.trim();
             if trimmed.is_empty() {
                 continue;
             }
-            let row = Editor::find_line_index(bookmark.offset, &line_starts);
+            let starts = line_starts.get_or_insert_with(|| editor.line_starts());
+            let row = Editor::find_line_index(bookmark.offset, starts);
             let item_width = 8.0 + 5.0 + weighted_text_width(trimmed, char_w) + 14.0;
-            *row_widths.entry(row).or_insert(8.0) += item_width;
+            // Bookmarks are ordered by `(offset, size)` and `find_line_index` is non-decreasing.
+            match current_row {
+                Some((prev_row, prev_w)) if prev_row == row => {
+                    let next_w = prev_w + item_width;
+                    current_row = Some((row, next_w));
+                    max_width = max_width.max(next_w);
+                }
+                _ => {
+                    let next_w = 8.0 + item_width;
+                    current_row = Some((row, next_w));
+                    max_width = max_width.max(next_w);
+                }
+            }
         }
 
-        row_widths.values().copied().fold(0.0, f32::max)
+        max_width
     }
 
     pub fn max_comment_scroll(&self, cx: &App) -> f32 {
         if let Some(max_content_w) = self.cached_comment_content_width.get() {
             let max_w = (max_content_w + 32.0).max(self.comment_col_width);
             return (max_w - self.comment_col_width).max(0.0);
+        }
+
+        if self.editor.read(cx).bookmarks().items().is_empty() {
+            self.cached_comment_content_width.set(Some(0.0));
+            return 0.0;
         }
 
         let scan_range = self.auto_fit_scan_range(cx);
@@ -744,6 +767,10 @@ impl HexView {
                 editor.structure.show_inline_structure_view && editor.parse_result().is_some(),
             )
         };
+        self.current_layout_with(max_bytes_per_row, is_struct_mode, cx)
+    }
+
+    fn current_layout_with(&self, max_bytes_per_row: usize, is_struct_mode: bool, cx: &App) -> HexViewLayout {
         let bounds_width = self
             .list_bounds
             .get()
@@ -1185,15 +1212,7 @@ impl HexView {
         (start_byte, end_byte)
     }
 
-    fn effective_total_rows(&self, cx: &App) -> usize {
-        let editor = self.editor.read(cx);
-        let line_starts = editor.line_starts();
-        let total_size = editor.total_size();
-        let cursor_offset = if InsertModeState::is_enabled(cx) {
-            editor.insert_cursor_offset()
-        } else {
-            editor.cursor.offset
-        };
+    fn effective_total_rows_for(line_starts: &crate::core::layout::LineMap, total_size: usize, cursor_offset: usize) -> usize {
         let bytes_per_row = line_starts.max_bytes_per_row();
         let last_line_idx = line_starts.len().saturating_sub(1);
         let last_line_start = line_starts.get(last_line_idx).unwrap_or(0);
@@ -1203,6 +1222,18 @@ impl HexView {
         } else {
             line_starts.len().max(1)
         }
+    }
+
+    fn effective_total_rows(&self, cx: &App) -> usize {
+        let editor = self.editor.read(cx);
+        let line_starts = editor.line_starts();
+        let total_size = editor.total_size();
+        let cursor_offset = if InsertModeState::is_enabled(cx) {
+            editor.insert_cursor_offset()
+        } else {
+            editor.cursor.offset
+        };
+        Self::effective_total_rows_for(&line_starts, total_size, cursor_offset)
     }
 
     pub fn scroll_to_row(&mut self, row: usize, cx: &mut Context<Self>) {
@@ -2702,14 +2733,20 @@ impl Render for HexView {
         let font_family = self.font_family_prop.clone();
         let font_size = self.font_size_prop;
 
-        let total_rows = self.effective_total_rows(cx);
-        let (bytes_per_row, max_bytes_per_row, is_struct_mode) = {
+        let (total_rows, bytes_per_row, max_bytes_per_row, is_struct_mode, total_size, line_starts, reveal_cursor_offset) = {
             let editor = self.editor.read(cx);
             let line_starts = editor.line_starts();
+            let total_size = editor.total_size();
+            let reveal_cursor_offset = if insert_mode { editor.insert_cursor_offset() } else { editor.cursor.offset };
+            let total_rows = Self::effective_total_rows_for(&line_starts, total_size, reveal_cursor_offset);
             (
+                total_rows,
                 line_starts.bytes_per_row(),
                 line_starts.max_bytes_per_row(),
                 editor.structure.show_inline_structure_view && editor.parse_result().is_some(),
+                total_size,
+                line_starts,
+                reveal_cursor_offset,
             )
         };
         let bytes_per_row_changed = self.last_bytes_per_row != Some(bytes_per_row) || self.last_max_bytes_per_row != Some(max_bytes_per_row);
@@ -2750,25 +2787,18 @@ impl Render for HexView {
         }
         let max_hex_scroll = (total_data_width - self.hex_col_width).max(0.0);
         self.scroll.hex_scroll_x = self.scroll.hex_scroll_x.clamp(0.0, max_hex_scroll);
-        let layout = self.current_layout(cx);
+        let layout = self.current_layout_with(max_bytes_per_row, is_struct_mode, cx);
         self.scroll.outer_scroll_x = self.scroll.outer_scroll_x.clamp(0.0, layout.outer_max);
         self.scroll.outer_scroll_handle.set_offset(point(-px(self.scroll.outer_scroll_x), px(0.0)));
 
         // Keep the cursor visible using the same fixed grid as the paint pass.
-        let (cursor_offset, insert_cursor_offset) = {
-            let editor = self.editor.read(cx);
-            (editor.cursor.offset, editor.insert_cursor_offset())
-        };
-        let reveal_cursor_offset = if insert_mode { insert_cursor_offset } else { cursor_offset };
         let should_reveal_cursor = self.cursor_reveal_pending || self.last_cursor_offset != Some(reveal_cursor_offset);
         if should_reveal_cursor {
+            let row = Editor::find_line_index(reveal_cursor_offset, &line_starts);
+            let line_offset = line_starts.get(row).unwrap_or(0);
+            let next_offset = line_starts.get(row + 1).unwrap_or(total_size);
             let cursor_layout = {
                 let editor = self.editor.read(cx);
-                let total_size = editor.total_size();
-                let line_starts = editor.line_starts();
-                let row = Editor::find_line_index(reveal_cursor_offset, &line_starts);
-                let line_offset = line_starts.get(row).unwrap_or(0);
-                let next_offset = line_starts.get(row + 1).unwrap_or(total_size);
                 if editor.is_folded(line_offset) {
                     None
                 } else {
@@ -2782,11 +2812,11 @@ impl Render for HexView {
                             self.is_big_endian,
                             hex_case,
                         );
-                        (reveal_cursor_offset.saturating_sub(line_offset), source, total_size, next_offset)
+                        (reveal_cursor_offset.saturating_sub(line_offset), source)
                     })
                 }
             };
-            if let Some((cursor_in_row, source, total_size, next_offset)) = cursor_layout {
+            if let Some((cursor_in_row, source)) = cursor_layout {
                 let cursor_range = source
                     .groups
                     .iter()
@@ -2831,12 +2861,7 @@ impl Render for HexView {
             .unwrap_or(false);
 
         let header = if self.show_header {
-            let cursor_in_row = {
-                let editor = self.editor.read(cx);
-                let total_size = editor.total_size();
-                let line_starts = editor.line_starts();
-                cursor_in_row_offset(reveal_cursor_offset, total_size, &line_starts)
-            };
+            let cursor_in_row = cursor_in_row_offset(reveal_cursor_offset, total_size, &line_starts);
             let probe = self.cached_header_probe.as_ref().expect("header probe cached");
             let total_groups = probe.source.groups.len();
             let mut hex_cols = Vec::with_capacity(probe.col_labels.len());
