@@ -33,6 +33,7 @@ pub struct LeftPanel {
     pub checksum_panel: Entity<ChecksumPanel>,
     pub bookmark_panel: Entity<BookmarkPanel>,
     pub active_tab: LeftPanelTab,
+    is_panel_visible: bool,
 }
 
 impl EventEmitter<FileTreeViewEvent> for LeftPanel {}
@@ -48,11 +49,7 @@ impl LeftPanel {
         let struct_tree = cx.new(|cx| StructTreeView::new(None, None, window, cx));
         let data_inspector = cx.new(|cx| DataInspector::new(None, window, cx));
         let visual_map = cx.new(|cx| VisualMapPanel::new(None, cx));
-        let checksum_panel = cx.new(|cx| {
-            let mut panel = ChecksumPanel::new(None, window, cx);
-            panel.set_panel_active(false, cx);
-            panel
-        });
+        let checksum_panel = cx.new(|cx| ChecksumPanel::new(None, window, cx));
         let bookmark_panel = cx.new(|cx| BookmarkPanel::new(None, window, cx));
 
         cx.subscribe(&file_tree, |_, _, event: &FileTreeViewEvent, cx| match event {
@@ -84,7 +81,7 @@ impl LeftPanel {
         })
         .detach();
 
-        Self {
+        let this = Self {
             file_tree,
             search_panel,
             strings_panel,
@@ -94,7 +91,10 @@ impl LeftPanel {
             checksum_panel,
             bookmark_panel,
             active_tab: LeftPanelTab::Files,
-        }
+            is_panel_visible: true,
+        };
+        this.sync_active_panels(cx);
+        this
     }
 
     pub fn set_editor(&mut self, editor: Option<Entity<Editor>>, cx: &mut Context<Self>) {
@@ -135,12 +135,40 @@ impl LeftPanel {
         });
     }
 
+    pub fn set_panel_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if self.is_panel_visible == visible {
+            return;
+        }
+        self.is_panel_visible = visible;
+        self.sync_active_panels(cx);
+    }
+
+    fn sync_active_panels(&self, cx: &mut Context<Self>) {
+        let active_tab = self.active_tab;
+        let visible = self.is_panel_visible;
+        self.search_panel.update(cx, |panel, cx| {
+            panel.set_panel_active(visible && active_tab == LeftPanelTab::Search, cx);
+        });
+        self.struct_tree.update(cx, |panel, cx| {
+            panel.set_panel_active(visible && active_tab == LeftPanelTab::Structure, cx);
+        });
+        self.data_inspector.update(cx, |panel, cx| {
+            panel.set_panel_active(visible && active_tab == LeftPanelTab::Inspector, cx);
+        });
+        self.visual_map.update(cx, |panel, cx| {
+            panel.set_panel_active(visible && active_tab == LeftPanelTab::Map, cx);
+        });
+        self.checksum_panel.update(cx, |panel, cx| {
+            panel.set_panel_active(visible && active_tab == LeftPanelTab::Checksum, cx);
+        });
+        self.bookmark_panel.update(cx, |panel, cx| {
+            panel.set_panel_active(visible && active_tab == LeftPanelTab::Bookmarks, cx);
+        });
+    }
+
     pub fn set_tab(&mut self, tab: LeftPanelTab, cx: &mut Context<Self>) {
         self.active_tab = tab;
-        let is_checksum = tab == LeftPanelTab::Checksum;
-        self.checksum_panel.update(cx, |panel, cx| {
-            panel.set_panel_active(is_checksum, cx);
-        });
+        self.sync_active_panels(cx);
         cx.notify();
     }
 }

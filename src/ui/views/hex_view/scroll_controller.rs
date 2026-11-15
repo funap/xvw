@@ -87,10 +87,26 @@ impl ScrollController {
         (true, new_offset)
     }
 
-    pub fn clamp_scroll_offsets(&mut self, max_hex: f32, max_desc: f32, max_comment: f32, layout: HexViewLayout) {
-        self.hex_scroll_x = self.hex_scroll_x.clamp(0.0, max_hex);
-        self.desc_scroll_x = self.desc_scroll_x.clamp(0.0, max_desc);
-        self.comment_scroll_x = self.comment_scroll_x.clamp(0.0, max_comment);
+    /// Returns true if any horizontal scroll state differs from its zero origin.
+    pub fn has_nonzero_horizontal_scroll(&self) -> bool {
+        self.hex_scroll_x != 0.0
+            || self.desc_scroll_x != 0.0
+            || self.comment_scroll_x != 0.0
+            || self.ascii_scroll_x != 0.0
+            || self.outer_scroll_x != 0.0
+            || self.outer_scroll_handle.offset() != point(px(0.0), px(0.0))
+    }
+
+    pub fn clamp_scroll_offsets(&mut self, layout: HexViewLayout) {
+        self.hex_scroll_x = self
+            .hex_scroll_x
+            .clamp(0.0, layout.max_offset(HorizontalScrollTarget::Column(ScrollColumn::Hex)));
+        self.desc_scroll_x = self
+            .desc_scroll_x
+            .clamp(0.0, layout.max_offset(HorizontalScrollTarget::Column(ScrollColumn::Description)));
+        self.comment_scroll_x = self
+            .comment_scroll_x
+            .clamp(0.0, layout.max_offset(HorizontalScrollTarget::Column(ScrollColumn::Comment)));
         self.ascii_scroll_x = self
             .ascii_scroll_x
             .clamp(0.0, layout.max_offset(HorizontalScrollTarget::Column(ScrollColumn::Ascii)));
@@ -288,5 +304,35 @@ mod tests {
         controller.scroll_to_row(10, 100, 20);
         assert_eq!(controller.scroll_offset, 10);
         assert_eq!(controller.top_overscroll_rows, 0);
+    }
+
+    #[test]
+    fn test_has_nonzero_horizontal_scroll_and_clamp() {
+        use super::super::types::ColumnLayout;
+
+        let mut controller = ScrollController::new();
+        assert!(!controller.has_nonzero_horizontal_scroll());
+
+        controller.comment_scroll_x = 120.0;
+        assert!(controller.has_nonzero_horizontal_scroll());
+
+        let layout = HexViewLayout {
+            outer_max: 50.0,
+            hex: ColumnLayout {
+                inner_max: 20.0,
+                ..Default::default()
+            },
+            comment: ColumnLayout {
+                inner_max: 40.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        controller.outer_scroll_x = 80.0;
+        controller.clamp_scroll_offsets(layout);
+
+        assert_eq!(controller.comment_scroll_x, 40.0);
+        assert_eq!(controller.outer_scroll_x, 50.0);
+        assert_eq!(controller.outer_scroll_handle.offset(), point(-px(50.0), px(0.0)));
     }
 }

@@ -72,6 +72,8 @@ pub struct VisualMapPanel {
     last_bounds: std::cell::Cell<Option<Bounds<Pixels>>>,
     cached_image: RefCell<Option<CachedImage>>,
     is_dragging: bool,
+    is_panel_active: bool,
+    needs_editor_sync: bool,
     _editor_subscription: Option<Subscription>,
     _width_repeat_task: Option<Task<()>>,
     _offset_repeat_task: Option<Task<()>>,
@@ -89,11 +91,7 @@ impl EventEmitter<VisualMapPanelEvent> for VisualMapPanel {}
 
 impl VisualMapPanel {
     pub fn new(editor: Option<Entity<Editor>>, cx: &mut Context<Self>) -> Self {
-        let _editor_subscription = editor.as_ref().map(|ed| {
-            cx.observe(ed, |_, _, cx| {
-                cx.notify();
-            })
-        });
+        let _editor_subscription = editor.as_ref().map(|ed| Self::subscribe_editor(ed, cx));
 
         let is_big_endian = editor.as_ref().map(|ed| ed.read(cx).options.is_big_endian).unwrap_or(false);
 
@@ -116,9 +114,33 @@ impl VisualMapPanel {
             last_bounds: std::cell::Cell::new(None),
             cached_image: RefCell::new(None),
             is_dragging: false,
+            is_panel_active: true,
+            needs_editor_sync: false,
             _editor_subscription,
             _width_repeat_task: None,
             _offset_repeat_task: None,
+        }
+    }
+
+    fn subscribe_editor(ed: &Entity<Editor>, cx: &mut Context<Self>) -> Subscription {
+        cx.observe(ed, |this, _, cx| {
+            if !this.is_panel_active {
+                this.needs_editor_sync = true;
+                return;
+            }
+            cx.notify();
+        })
+    }
+
+    /// Controls whether editor updates redraw the map eagerly or defer until activated.
+    pub fn set_panel_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.is_panel_active == active {
+            return;
+        }
+        self.is_panel_active = active;
+        if active && self.needs_editor_sync {
+            self.needs_editor_sync = false;
+            cx.notify();
         }
     }
 
@@ -126,12 +148,15 @@ impl VisualMapPanel {
         self._editor_subscription = None;
         self.editor = editor.clone();
         if let Some(ed) = &editor {
-            self._editor_subscription = Some(cx.observe(ed, |_, _, cx| {
-                cx.notify();
-            }));
+            self._editor_subscription = Some(Self::subscribe_editor(ed, cx));
         }
         self.cached_image.borrow_mut().take();
-        cx.notify();
+        if self.is_panel_active {
+            self.needs_editor_sync = false;
+            cx.notify();
+        } else {
+            self.needs_editor_sync = true;
+        }
     }
 
     fn file_path(&self, cx: &App) -> Option<std::path::PathBuf> {

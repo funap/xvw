@@ -59,12 +59,13 @@ impl<'a> BookmarkSessionRef<'a> {
         self.guard.metadata.bookmarks.snapshot_arc()
     }
 
-    pub fn by_id(&self, id: &str) -> Option<BookmarkItem> {
-        self.guard.metadata.bookmarks.by_id_cloned(id)
+    /// Returns the document's bookmarks slice sorted by `(offset, size)`.
+    pub fn items(&self) -> &[BookmarkItem] {
+        self.guard.metadata.bookmarks.items()
     }
 
-    pub fn custom_bookmarks_for_rendering(&self) -> Vec<(Range<usize>, RgbaColor)> {
-        self.guard.metadata.bookmarks.custom_bookmarks_for_rendering()
+    pub fn by_id(&self, id: &str) -> Option<BookmarkItem> {
+        self.guard.metadata.bookmarks.by_id_cloned(id)
     }
 
     pub fn to_yaml(&self) -> anyhow::Result<String> {

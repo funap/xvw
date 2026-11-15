@@ -621,6 +621,8 @@ pub struct StructTreeView {
     last_selection_scan_len: usize,
     export_status: StructureExportStatus,
     export_request_id: u64,
+    is_panel_active: bool,
+    needs_editor_sync: bool,
     _table_subscription: Option<Subscription>,
     _editor_subscription: Option<Subscription>,
 }
@@ -708,18 +710,42 @@ impl StructTreeView {
             last_selection_scan_len: 0,
             export_status: StructureExportStatus::default(),
             export_request_id: 0,
+            is_panel_active: true,
+            needs_editor_sync: false,
             _table_subscription: Some(table_subscription),
             _editor_subscription: None,
         };
 
         if let Some(ed) = editor {
-            this._editor_subscription = Some(cx.observe(&ed, |this, editor, cx| {
-                this.sync_fields(&editor, cx);
-            }));
+            this._editor_subscription = Some(Self::subscribe_editor(&ed, cx));
             this.sync_fields(&ed, cx);
         }
 
         this
+    }
+
+    fn subscribe_editor(ed: &Entity<Editor>, cx: &mut Context<Self>) -> Subscription {
+        cx.observe(ed, |this, editor, cx| {
+            if !this.is_panel_active {
+                this.needs_editor_sync = true;
+                return;
+            }
+            this.sync_fields(&editor, cx);
+        })
+    }
+
+    /// Controls whether this panel tracks editor updates eagerly or defers sync until activated.
+    pub fn set_panel_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.is_panel_active == active {
+            return;
+        }
+        self.is_panel_active = active;
+        if active && self.needs_editor_sync {
+            self.needs_editor_sync = false;
+            if let Some(editor) = self.editor.clone() {
+                self.sync_fields(&editor, cx);
+            }
+        }
     }
 
     pub fn set_editor(&mut self, editor: Option<Entity<Editor>>, cx: &mut Context<Self>) {
@@ -736,15 +762,21 @@ impl StructTreeView {
         self.editor = editor.clone();
 
         if let Some(ed) = &editor {
-            self._editor_subscription = Some(cx.observe(ed, |this, editor, cx| {
-                this.sync_fields(&editor, cx);
-            }));
-            self.sync_fields(ed, cx);
+            self._editor_subscription = Some(Self::subscribe_editor(ed, cx));
+            if self.is_panel_active {
+                self.needs_editor_sync = false;
+                self.sync_fields(ed, cx);
+            } else {
+                self.needs_editor_sync = true;
+            }
         } else {
+            self.needs_editor_sync = false;
             self.last_parse_id = None;
             self.set_parse_result(None, cx);
         }
-        cx.notify();
+        if self.is_panel_active {
+            cx.notify();
+        }
     }
 
     /// Updates the recent structure definition paths displayed in the empty state.

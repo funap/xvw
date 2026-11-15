@@ -1,6 +1,11 @@
-use super::layout::{build_ascii_char_map, calculate_scroll_top_for_range, centered_glyph_offset, cursor_in_row_offset, is_cursor_header_column};
+use super::layout::{
+    build_ascii_char_map, calculate_scroll_top_for_range, centered_glyph_offset, cursor_in_row_offset, for_each_ascii_char, is_cursor_header_column,
+};
 use super::paint::{highlight_color_for_range, is_cursor_row};
-use super::types::{AUTO_FIT_SCAN_BYTES, AsciiChar, HexGroupInfo, HexViewLayout, HexViewLayoutState, HorizontalScrollTarget, LayoutInput, ScrollColumn};
+use super::types::{
+    AUTO_FIT_SCAN_BYTES, AsciiChar, CachedActiveLeafField, CachedCommentContentWidth, HexGroupInfo, HexViewLayout, HexViewLayoutState, HorizontalScrollTarget,
+    LayoutInput, ScrollColumn,
+};
 use super::{
     HexView, ascii_byte_index_from_world_x, bounded_auto_fit_range, build_hex_text_source, can_chain_to_outer, hex_grid_width, hex_grid_x,
     make_hex_view_layout, weighted_text_width,
@@ -748,9 +753,9 @@ fn check_row_render_cache() {
                 text: gpui_kit::SharedString::from("00 01"),
                 groups: Vec::new(),
             },
-            shaped_hex: None,
+            hex_glyphs: None,
             ascii_cells: Vec::new(),
-            shaped_ascii: None,
+            ascii_glyphs: None,
             structure_fields: None,
             desc: None,
         }
@@ -990,9 +995,9 @@ fn check_bytes_per_row_lifecycle() {
                 text: gpui_kit::SharedString::from("AA ".repeat(16)),
                 groups: Vec::new(),
             },
-            shaped_hex: None,
+            hex_glyphs: None,
             ascii_cells: Vec::new(),
-            shaped_ascii: None,
+            ascii_glyphs: None,
             structure_fields: None,
             desc: None,
         },
@@ -1037,9 +1042,9 @@ fn check_bytes_per_row_lifecycle() {
                 text: gpui_kit::SharedString::from("AA ".repeat(8)),
                 groups: Vec::new(),
             },
-            shaped_hex: None,
+            hex_glyphs: None,
             ascii_cells: Vec::new(),
-            shaped_ascii: None,
+            ascii_glyphs: None,
             structure_fields: None,
             desc: None,
         },
@@ -1219,4 +1224,146 @@ fn check_search_visibility_lifecycle() {
     assert_eq!(highlight_color_for_range(10, 11, &merged3), Some(find_prominent));
     // Byte 13 is overridden again by Find Widget
     assert_eq!(highlight_color_for_range(13, 14, &merged3), Some(find_prominent));
+}
+
+#[test]
+fn test_for_each_ascii_char_matches_map_fast_and_multibyte_paths() {
+    let sample = b"\x00AB\x7f\xe3\x81\x82CD\x82\xa0\xff";
+    for encoding in [Encoding::Ascii, Encoding::Utf8, Encoding::ShiftJis] {
+        for row_offset in [0, 3, 5, sample.len()] {
+            let row_len = 6;
+            let expected: Vec<(usize, AsciiChar)> = build_ascii_char_map(encoding, sample, row_offset, row_len)
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, opt)| opt.map(|ch| (i, ch)))
+                .collect();
+            let mut visited = Vec::new();
+            for_each_ascii_char(encoding, sample, row_offset, row_len, |idx, ch| {
+                visited.push((idx, ch));
+            });
+            assert_eq!(visited, expected, "mismatch for {encoding:?} at offset {row_offset}");
+        }
+    }
+}
+
+#[test]
+fn test_comment_content_width_in_range_accumulates_same_row_and_skips_empty_comments() {
+    use crate::core::bookmark::model::{BookmarkColor, BookmarkItem};
+
+    let buffer = Buffer::new(vec![0u8; 64]);
+    let mut doc = Document::new(PathBuf::from("test.bin"), buffer);
+    doc.metadata.bookmarks.add(BookmarkItem::new(4, 2, BookmarkColor::Yellow, "alpha"), 64);
+    doc.metadata.bookmarks.add(BookmarkItem::new(8, 2, BookmarkColor::Blue, "   "), 64);
+    doc.metadata.bookmarks.add(BookmarkItem::new(10, 2, BookmarkColor::Green, "beta"), 64);
+    doc.metadata
+        .bookmarks
+        .add(BookmarkItem::new(16, 4, BookmarkColor::Red, "wide_comment_on_next_row"), 64);
+    let editor = Editor::new(Arc::new(RwLock::new(doc)));
+
+    let char_w = 8.0;
+    assert_eq!(HexView::comment_content_width_in_range(&editor, &(0..0), char_w), 0.0);
+
+    // Row 0 has "alpha" + "beta" (skipping whitespace-only comment); row 1 has "wide_comment_on_next_row".
+    let w_row0 = HexView::comment_content_width_in_range(&editor, &(0..16), char_w);
+    let expected_row0 = 8.0 + (8.0 + 5.0 + weighted_text_width("alpha", char_w) + 14.0) + (8.0 + 5.0 + weighted_text_width("beta", char_w) + 14.0);
+    assert!((w_row0 - expected_row0).abs() < 1e-4, "w_row0={w_row0} expected={expected_row0}");
+
+    // Whitespace-only comments alone return 0.0 cleanly.
+    let mut ws_doc = Document::new(PathBuf::from("ws.bin"), Buffer::new(vec![0u8; 32]));
+    ws_doc.metadata.bookmarks.add(BookmarkItem::new(4, 2, BookmarkColor::Blue, "   \n\t "), 32);
+    let ws_editor = Editor::new(Arc::new(RwLock::new(ws_doc)));
+    assert_eq!(HexView::comment_content_width_in_range(&ws_editor, &(0..32), char_w), 0.0);
+}
+
+#[test]
+fn test_cached_comment_content_width_reuse_and_invalidation() {
+    let cached = CachedCommentContentWidth {
+        width: 140.0,
+        scan_start: 1024,
+        scan_end: 1024 + AUTO_FIT_SCAN_BYTES,
+        total_size: 256 * 1024,
+        bookmark_version: 3,
+        layout_version: 7,
+        bytes_per_row: 16,
+        top_row: 100,
+        visible_rows: 30,
+    };
+
+    assert!(cached.matches_row_state(3, 16, 100, 30));
+    assert!(!cached.matches_row_state(4, 16, 100, 30));
+    assert!(!cached.matches_row_state(3, 32, 100, 30));
+    assert!(!cached.matches_row_state(3, 16, 101, 30));
+    assert!(!cached.matches_row_state(3, 16, 100, 31));
+
+    // Scrolling within the cached 64 KiB scan window hits without recomputation.
+    assert!(cached.covers_viewport(1024, 2048, 256 * 1024, 3, 7, 16));
+    assert!(cached.covers_viewport(4096, 1024 + AUTO_FIT_SCAN_BYTES, 256 * 1024, 3, 7, 16));
+
+    // Scrolling past either scan boundary or mutating version/size invalidates coverage.
+    assert!(!cached.covers_viewport(1008, 2048, 256 * 1024, 3, 7, 16));
+    assert!(!cached.covers_viewport(1024, 1024 + AUTO_FIT_SCAN_BYTES + 16, 256 * 1024, 3, 7, 16));
+    assert!(!cached.covers_viewport(1024, 2048, 256 * 1024, 4, 7, 16));
+    assert!(!cached.covers_viewport(1024, 2048, 256 * 1024, 3, 8, 16));
+    assert!(!cached.covers_viewport(1024, 2048, 256 * 1024, 3, 7, 32));
+    assert!(!cached.covers_viewport(1024, 2048, 256 * 1024 + 1, 3, 7, 16));
+}
+
+#[test]
+fn test_byte_range_for_rows_clamps_virtual_eof_row() {
+    let line_starts = LineMap::Standard {
+        total_size: 64,
+        bytes_per_row: 16,
+    };
+    assert_eq!(HexView::byte_range_for_rows(&line_starts, 64, 1, 2), (16, 64));
+    // Virtual EOF row at index == line_starts.len() stays clamped at total_size instead of wrapping to 0.
+    assert_eq!(HexView::byte_range_for_rows(&line_starts, 64, 4, 2), (64, 64));
+}
+
+#[test]
+fn test_cached_active_leaf_field_hits_and_invalidates() {
+    let field_a = ParsedField {
+        id: "magic".into(),
+        field_type: "u4".into(),
+        offset: 0,
+        size: 4,
+        value: FieldValue::U32(1),
+        color: crate::core::color::RgbaColor::default(),
+        description: None,
+        children: vec![],
+        enum_label: None,
+        is_instance: false,
+    };
+    let field_b = ParsedField {
+        id: "flags".into(),
+        field_type: "u4".into(),
+        offset: 4,
+        size: 4,
+        value: FieldValue::U32(2),
+        color: crate::core::color::RgbaColor::default(),
+        description: None,
+        children: vec![],
+        enum_label: None,
+        is_instance: false,
+    };
+
+    let pr1 = Arc::new(ParseResult::new("s1".into(), vec![field_a.clone(), field_b], 8, vec![]));
+    let mut cache = CachedActiveLeafField::default();
+
+    let first = cache.resolve(Some(&pr1), 2).expect("leaf at offset 2");
+    assert_eq!(first.id, "magic");
+    let ptr1 = first as *const _;
+
+    // Reusing same ParseResult Arc and cursor offset returns the exact cached entry pointer.
+    let second = cache.resolve(Some(&pr1), 2).expect("cached leaf");
+    assert_eq!(second as *const _, ptr1);
+
+    // Moving cursor resolves the new leaf field cleanly.
+    assert_eq!(cache.resolve(Some(&pr1), 5).map(|f| f.id.as_str()), Some("flags"));
+
+    // Replacing ParseResult Arc invalidates previous entry even at identical cursor offset.
+    let mut field_v2 = field_a;
+    field_v2.id = "header_v2".into();
+    let pr2 = Arc::new(ParseResult::new("s2".into(), vec![field_v2], 4, vec![]));
+    assert_eq!(cache.resolve(Some(&pr2), 2).map(|f| f.id.as_str()), Some("header_v2"));
+    assert!(cache.resolve(None, 2).is_none());
 }

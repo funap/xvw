@@ -20,7 +20,8 @@ use crate::actions::{
 };
 use crate::app_state::{AppState, InsertModeState};
 use crate::core::editor::Editor;
-use crate::core::search::SearchMode;
+use crate::core::encoding::Encoding;
+use crate::core::search::{PatternByte, SearchMode};
 use crate::service::DocumentService;
 use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
@@ -55,6 +56,92 @@ pub fn init(cx: &mut App) {
     search_bar::init(cx);
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HighlightSyncState {
+    cursor_offset: Option<usize>,
+    search_generation: usize,
+    search_current_result: Option<usize>,
+    search_results_len: usize,
+    find_generation: usize,
+    has_search: bool,
+    scroll_top_row: Option<usize>,
+}
+
+impl HighlightSyncState {
+    fn from_snapshot(ed: &Editor, has_search: bool, scroll_top_row: Option<usize>) -> Self {
+        Self {
+            cursor_offset: Some(ed.cursor.offset),
+            search_generation: ed.search_state.generation,
+            search_current_result: ed.search_state.current_result(),
+            search_results_len: ed.search_state.results.len(),
+            find_generation: ed.find_state.generation,
+            has_search,
+            scroll_top_row,
+        }
+    }
+
+    fn needs_editor_refresh(self, last: Self) -> bool {
+        let search_changed = self.search_generation != last.search_generation
+            || self.search_current_result != last.search_current_result
+            || self.search_results_len != last.search_results_len;
+        let find_changed = self.find_generation != last.find_generation;
+        let cursor_changed_with_search = self.has_search && self.cursor_offset != last.cursor_offset;
+        let search_visibility_changed = self.has_search != last.has_search;
+        cursor_changed_with_search || search_changed || find_changed || search_visibility_changed
+    }
+
+    fn needs_scroll_refresh(self, last: Self) -> bool {
+        self.has_search && self != last
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct CachedSearchPattern {
+    query: String,
+    mode: SearchMode,
+    encoding: Encoding,
+    pattern: Option<Vec<PatternByte>>,
+}
+
+impl CachedSearchPattern {
+    fn resolve(&mut self, query: &str, mode: SearchMode, encoding: Encoding) -> Option<&[PatternByte]> {
+        let encoding_relevant = mode == SearchMode::Text;
+        if self.query != query || self.mode != mode || (encoding_relevant && self.encoding != encoding) {
+            self.query.clear();
+            self.query.push_str(query);
+            self.mode = mode;
+            self.encoding = encoding;
+            self.pattern = if query.is_empty() {
+                None
+            } else {
+                match mode {
+                    SearchMode::Text => crate::core::search::parse_text_pattern(query, encoding),
+                    SearchMode::Hex => crate::core::search::parse_hex_pattern(query),
+                }
+            };
+        }
+        self.pattern.as_deref().filter(|p| !p.is_empty())
+    }
+}
+
+/// Returns the subslice of sorted match offsets whose intervals `[m, m + pattern_len)` intersect `viewport`.
+#[inline]
+fn viewport_match_slice(results: &[usize], pattern_len: usize, viewport: Range<usize>) -> &[usize] {
+    if results.is_empty() || pattern_len == 0 || viewport.is_empty() {
+        return &[];
+    }
+    let lo = results.partition_point(|&m| m.saturating_add(pattern_len) <= viewport.start);
+    let hi = results.partition_point(|&m| m < viewport.end);
+    if lo >= hi { &[] } else { &results[lo..hi] }
+}
+
+fn scan_viewport_matches(data: &[u8], pattern: &[PatternByte], segments: &[Range<usize>], start: usize, end: usize) -> Vec<usize> {
+    let pattern_len = pattern.len();
+    let scan_start = start.saturating_sub(pattern_len);
+    let scan_end = end.saturating_add(pattern_len);
+    crate::core::search::find_occurrences_segmented(data, pattern, crate::core::search::SearchLimit::Unlimited, segments, Some(scan_start..scan_end))
+}
+
 pub struct EditorView {
     editor: Entity<Editor>,
     focus_handle: FocusHandle,
@@ -65,12 +152,9 @@ pub struct EditorView {
     goto_bar: Entity<GotoOffsetBar>,
     structure_reparse_task: Option<Task<()>>,
     tab_group: Option<WeakEntity<TabGroup>>,
-    last_bookmark_version: u64,
-    last_cursor_offset: Option<usize>,
-    last_search_generation: usize,
-    last_search_current_result: Option<usize>,
-    last_search_results_len: usize,
-    last_find_generation: usize,
+    last_highlight_sync: HighlightSyncState,
+    cached_search_pattern: CachedSearchPattern,
+    cached_find_pattern: CachedSearchPattern,
     _appearance_subscription: Subscription,
     _bytes_per_row_subscription: Subscription,
     _editor_subscription: Subscription,
@@ -172,11 +256,9 @@ impl EditorView {
 
         // Subscribe to HexView scroll events to update highlights when scrolling
         cx.subscribe(&hex_view, |this, _, event: &crate::ui::views::hex_view::HexViewEvent, cx| {
-            if let crate::ui::views::hex_view::HexViewEvent::Scrolled(_) = event {
-                let has_search = (this.is_search_visible
-                    && (!this.search_bar.read(cx).query(cx).is_empty() || !this.editor.read(cx).find_state.query.is_empty()))
-                    || !this.editor.read(cx).search_state.query.is_empty();
-                if has_search {
+            if let crate::ui::views::hex_view::HexViewEvent::Scrolled(scroll_row) = event {
+                let current = this.capture_highlight_sync_state(this.editor.read(cx), Some(*scroll_row), cx);
+                if current.needs_scroll_refresh(this.last_highlight_sync) {
                     this.update_highlights(cx);
                 }
             }
@@ -214,33 +296,16 @@ impl EditorView {
         });
 
         let _editor_subscription = cx.observe(&editor, |this, editor, cx| {
-            let (bm_ver, cur, search_gen, search_current, search_results_len, find_gen, has_editor_search, has_find_search, pending_reparse) = {
+            let (current, pending_reparse) = {
                 let ed = editor.read(cx);
-                (
-                    ed.bookmarks().version(),
-                    ed.cursor.offset,
-                    ed.search_state.generation,
-                    ed.search_state.current_result(),
-                    ed.search_state.results.len(),
-                    ed.find_state.generation,
-                    !ed.search_state.query.is_empty(),
-                    !ed.find_state.query.is_empty(),
-                    ed.pending_structure_reparse(),
-                )
+                let scroll_top_row = Some(this.hex_view.read(cx).current_scroll_top_row());
+                (this.capture_highlight_sync_state(ed, scroll_top_row, cx), ed.pending_structure_reparse())
             };
-            let has_search = (this.is_search_visible && (!this.search_bar.read(cx).query(cx).is_empty() || has_find_search)) || has_editor_search;
 
-            let search_changed = search_gen != this.last_search_generation
-                || search_current != this.last_search_current_result
-                || search_results_len != this.last_search_results_len;
-            let find_changed = find_gen != this.last_find_generation;
-            let bookmark_changed = bm_ver != this.last_bookmark_version;
-            let cursor_changed_with_search = has_search && Some(cur) != this.last_cursor_offset;
-
-            if bookmark_changed || cursor_changed_with_search || search_changed || find_changed {
+            if current.needs_editor_refresh(this.last_highlight_sync) {
                 this.update_highlights(cx);
             } else {
-                this.last_cursor_offset = Some(cur);
+                this.last_highlight_sync.cursor_offset = current.cursor_offset;
             }
 
             if let Some((_, generation)) = pending_reparse {
@@ -275,12 +340,10 @@ impl EditorView {
             }
         });
 
-        let last_bookmark_version = editor.read(cx).bookmarks().version();
-        let last_cursor_offset = Some(editor.read(cx).cursor.offset);
-        let last_search_generation = editor.read(cx).search_state.generation;
-        let last_search_current_result = editor.read(cx).search_state.current_result();
-        let last_search_results_len = editor.read(cx).search_state.results.len();
-        let last_find_generation = editor.read(cx).find_state.generation;
+        let last_highlight_sync = {
+            let ed = editor.read(cx);
+            HighlightSyncState::from_snapshot(ed, !ed.search_state.query.is_empty(), None)
+        };
 
         Self {
             editor,
@@ -292,12 +355,9 @@ impl EditorView {
             goto_bar,
             structure_reparse_task: None,
             tab_group: None,
-            last_bookmark_version,
-            last_cursor_offset,
-            last_search_generation,
-            last_search_current_result,
-            last_search_results_len,
-            last_find_generation,
+            last_highlight_sync,
+            cached_search_pattern: CachedSearchPattern::default(),
+            cached_find_pattern: CachedSearchPattern::default(),
             _appearance_subscription,
             _bytes_per_row_subscription,
             _editor_subscription,
@@ -462,67 +522,79 @@ impl EditorView {
         self.update_highlights(cx);
     }
 
+    fn has_active_search(&self, editor: &Editor, cx: &App) -> bool {
+        (self.is_search_visible && (!self.search_bar.read(cx).query(cx).is_empty() || !editor.find_state.query.is_empty()))
+            || !editor.search_state.query.is_empty()
+    }
+
+    fn capture_highlight_sync_state(&self, editor: &Editor, scroll_top_row: Option<usize>, cx: &App) -> HighlightSyncState {
+        let has_search = self.has_active_search(editor, cx);
+        HighlightSyncState::from_snapshot(editor, has_search, scroll_top_row)
+    }
+
     fn update_highlights(&mut self, cx: &mut Context<Self>) {
+        let scroll_top_row = Some(self.hex_view.read(cx).current_scroll_top_row());
         let editor = self.editor.read(cx);
-        self.last_bookmark_version = editor.bookmarks().version();
-        self.last_cursor_offset = Some(editor.cursor.offset);
-        self.last_search_generation = editor.search_state.generation;
-        self.last_search_current_result = editor.search_state.current_result();
-        self.last_search_results_len = editor.search_state.results.len();
-        self.last_find_generation = editor.find_state.generation;
-        let mut highlights = Vec::new();
+        let sync_state = self.capture_highlight_sync_state(editor, scroll_top_row, cx);
+        self.last_highlight_sync = sync_state;
 
-        // 1. Add user custom bookmarks from editor
-        highlights.extend(
-            editor
-                .bookmarks()
-                .custom_bookmarks_for_rendering()
-                .into_iter()
-                .map(|(range, color)| (range, color.into())),
-        );
+        if !sync_state.has_search {
+            self.hex_view.update(cx, |view, cx| {
+                view.set_highlights(Vec::new(), cx);
+            });
+            return;
+        }
 
-        let (start, end) = self.hex_view.read(cx).viewport_byte_range(cx);
-        let theme = cx.theme();
+        let (search_highlights, find_highlights) = {
+            let (start, end) = self.hex_view.read(cx).viewport_byte_range(cx);
+            let editor = self.editor.read(cx);
+            let encoding = editor.options.encoding;
+            let search_pattern = self
+                .cached_search_pattern
+                .resolve(&editor.search_state.query, editor.search_state.mode, encoding);
+            let find_query = if self.is_search_visible {
+                let bar = self.search_bar.read(cx);
+                let query = bar.query(cx);
+                if query.is_empty() { None } else { Some((query, bar.mode())) }
+            } else {
+                None
+            };
+            let find_pattern = find_query.as_ref().and_then(|(q, mode)| self.cached_find_pattern.resolve(q, *mode, encoding));
 
-        let (search_highlights, find_highlights) = if let Ok(doc) = editor.document.read() {
-            let data = doc.buffer.data();
-            let segments = doc.address_map.segment_ranges();
+            let search_needs_scan = search_pattern.is_some() && !editor.search_state.is_full_search_complete;
+            let find_needs_scan = find_pattern.is_some();
+            let doc_guard = if search_needs_scan || find_needs_scan {
+                editor.document.read().ok()
+            } else {
+                None
+            };
+            let segments = doc_guard.as_ref().map(|doc| doc.address_map.segment_ranges()).unwrap_or_default();
+            let theme = cx.theme();
 
-            // 2. Scan SearchPanel highlights (if search_state has a query)
-            let search_hl = if !editor.search_state.query.is_empty() {
-                let pattern = match editor.search_state.mode {
-                    SearchMode::Text => crate::core::search::parse_text_pattern(&editor.search_state.query, editor.options.encoding),
-                    SearchMode::Hex => crate::core::search::parse_hex_pattern(&editor.search_state.query),
-                };
+            // 1. SearchPanel highlights: slice completed results in O(log R), or scan viewport when streaming/truncated
+            let search_hl = if let Some(pattern) = search_pattern {
+                let pattern_len = pattern.len();
+                let search_panel_color = theme.warning;
+                let search_panel_active_color = theme.warning_active;
+                let current_result = editor.search_state.current_result();
+                let selection_range = editor.selection_range();
 
-                if let Some(pattern) = pattern
-                    && !pattern.is_empty()
-                {
-                    let pattern_len = pattern.len();
-                    let scan_start = start.saturating_sub(pattern_len);
-                    let scan_end = end.saturating_add(pattern_len);
-
-                    let matches = crate::core::search::find_occurrences_segmented(
-                        data,
-                        &pattern,
-                        crate::core::search::SearchLimit::Unlimited,
-                        &segments,
-                        Some(scan_start..scan_end),
-                    );
-
-                    let search_panel_color = theme.warning;
-                    let search_panel_active_color = theme.warning_active;
-                    let current_result = editor.search_state.current_result();
-                    let selection_range = editor.selection_range();
-
+                let build_search_hl = |matches: &[usize]| -> Vec<(Range<usize>, Hsla)> {
                     let mut list = Vec::with_capacity(matches.len());
-                    for result_offset in matches {
+                    for &result_offset in matches {
                         let range = result_offset..result_offset + pattern_len;
                         let is_current = Some(result_offset) == current_result || selection_range.as_ref() == Some(&range);
                         let color = if is_current { search_panel_active_color } else { search_panel_color };
                         list.push((range, color));
                     }
                     list
+                };
+
+                if editor.search_state.is_full_search_complete {
+                    build_search_hl(viewport_match_slice(&editor.search_state.results, pattern_len, start..end))
+                } else if let Some(doc) = doc_guard.as_deref() {
+                    let matches = scan_viewport_matches(doc.buffer.data(), pattern, &segments, start, end);
+                    build_search_hl(&matches)
                 } else {
                     Vec::new()
                 }
@@ -530,54 +602,28 @@ impl EditorView {
                 Vec::new()
             };
 
-            // 3. Scan Find Widget highlights (ONLY IF self.is_search_visible && search_bar has query)
-            let find_hl = if self.is_search_visible && !self.search_bar.read(cx).query(cx).is_empty() {
-                let query = self.search_bar.read(cx).query(cx);
-                let mode = self.search_bar.read(cx).mode();
-                let pattern = match mode {
-                    SearchMode::Text => crate::core::search::parse_text_pattern(&query, editor.options.encoding),
-                    SearchMode::Hex => crate::core::search::parse_hex_pattern(&query),
-                };
-
-                if let Some(pattern) = pattern
-                    && !pattern.is_empty()
-                {
-                    let pattern_len = pattern.len();
-                    let scan_start = start.saturating_sub(pattern_len);
-                    let scan_end = end.saturating_add(pattern_len);
-
-                    let matches = crate::core::search::find_occurrences_segmented(
-                        data,
-                        &pattern,
-                        crate::core::search::SearchLimit::Unlimited,
-                        &segments,
-                        Some(scan_start..scan_end),
-                    );
-
-                    let (search_color, current_result_color) = (theme.warning, theme.warning_active);
-                    let cursor_offset = editor.cursor.offset;
-
-                    let mut list = Vec::with_capacity(matches.len());
-                    for result_offset in matches {
-                        let is_current = cursor_offset >= result_offset && cursor_offset < result_offset + pattern_len;
-                        let color = if is_current { current_result_color } else { search_color };
-                        list.push((result_offset..result_offset + pattern_len, color));
-                    }
-                    list
-                } else {
-                    Vec::new()
+            // 2. Find Widget highlights (ONLY IF self.is_search_visible && search_bar has query)
+            let find_hl = if let (Some(pattern), Some(doc)) = (find_pattern, doc_guard.as_deref()) {
+                let pattern_len = pattern.len();
+                let matches = scan_viewport_matches(doc.buffer.data(), pattern, &segments, start, end);
+                let (search_color, current_result_color) = (theme.warning, theme.warning_active);
+                let cursor_offset = editor.cursor.offset;
+                let mut list = Vec::with_capacity(matches.len());
+                for result_offset in matches {
+                    let is_current = cursor_offset >= result_offset && cursor_offset < result_offset + pattern_len;
+                    let color = if is_current { current_result_color } else { search_color };
+                    list.push((result_offset..result_offset + pattern_len, color));
                 }
+                list
             } else {
                 Vec::new()
             };
 
             (search_hl, find_hl)
-        } else {
-            (Vec::new(), Vec::new())
         };
 
-        // 4. Merge highlights: Find Widget highlights take precedence over SearchPanel highlights where they overlap
-        highlights.extend(compose_search_highlights(search_highlights, find_highlights));
+        // Merge highlights: Find Widget highlights take precedence over SearchPanel highlights where they overlap
+        let highlights = compose_search_highlights(search_highlights, find_highlights);
 
         self.hex_view.update(cx, |view, cx| {
             view.set_highlights(highlights, cx);
@@ -1210,6 +1256,12 @@ impl crate::ui::pane::WorkspaceTab for Entity<EditorView> {
 /// Composes search panel highlights and find widget highlights, giving precedence
 /// to find widget highlights where they overlap.
 pub fn compose_search_highlights(search_panel_highlights: Vec<(Range<usize>, Hsla)>, find_highlights: Vec<(Range<usize>, Hsla)>) -> Vec<(Range<usize>, Hsla)> {
+    if find_highlights.is_empty() {
+        return search_panel_highlights;
+    }
+    if search_panel_highlights.is_empty() {
+        return find_highlights;
+    }
     let find_mask: Vec<Range<usize>> = find_highlights.iter().map(|(r, _)| r.clone()).collect();
     let effective_search_highlights = subtract_ranges(search_panel_highlights, &find_mask);
     let mut combined = effective_search_highlights;
@@ -1382,5 +1434,55 @@ mod tests {
         let find = vec![(15..25, find_color)];
         let composed = compose_search_highlights(search, find.clone());
         assert_eq!(composed, vec![(10..15, search_color), (25..30, search_color), (15..25, find_color)]);
+    }
+
+    #[test]
+    fn test_highlight_sync_state_skips_redundant_scroll_after_editor_refresh() {
+        let last = super::HighlightSyncState {
+            cursor_offset: Some(0x2000),
+            search_generation: 5,
+            search_current_result: Some(0x2000),
+            search_results_len: 12,
+            find_generation: 1,
+            has_search: true,
+            scroll_top_row: Some(128),
+        };
+
+        // Scrolled event arriving for the same scroll row and editor snapshot should not rescan.
+        assert!(!last.needs_scroll_refresh(last));
+        assert!(!last.needs_editor_refresh(last));
+
+        // Scrolling to a new row with active search triggers a refresh.
+        let mut moved_scroll = last;
+        moved_scroll.scroll_top_row = Some(140);
+        assert!(moved_scroll.needs_scroll_refresh(last));
+
+        // Moving cursor without active search only tracks cursor unless search changed.
+        let mut no_search = last;
+        no_search.has_search = false;
+        let mut cursor_moved = no_search;
+        cursor_moved.cursor_offset = Some(0x2010);
+        assert!(!cursor_moved.needs_editor_refresh(no_search));
+        assert!(!cursor_moved.needs_scroll_refresh(no_search));
+    }
+
+    #[test]
+    fn test_viewport_match_slice_and_cached_search_pattern() {
+        let results = [0, 8, 12, 16, 28, 64];
+        assert_eq!(super::viewport_match_slice(&results, 4, 10..20), &[8, 12, 16]);
+        assert_eq!(super::viewport_match_slice(&results, 4, 12..16), &[12]);
+        assert_eq!(super::viewport_match_slice(&results, 4, 20..28), &[] as &[usize]);
+        assert_eq!(super::viewport_match_slice(&results, 4, 16..16), &[] as &[usize]);
+
+        let mut cache = super::CachedSearchPattern::default();
+        let hex_a = cache.resolve("41 42", super::SearchMode::Hex, super::Encoding::Ascii).unwrap().to_vec();
+        assert_eq!(hex_a.len(), 2);
+        // Hex mode reuses cached pattern even if display encoding changes.
+        assert_eq!(cache.resolve("41 42", super::SearchMode::Hex, super::Encoding::Utf8).map(|p| p.len()), Some(2));
+        // Text mode re-parses when encoding or query changes.
+        let text_ascii = cache.resolve("AB", super::SearchMode::Text, super::Encoding::Ascii).unwrap().to_vec();
+        assert_eq!(text_ascii.len(), 2);
+        let text_utf16 = cache.resolve("AB", super::SearchMode::Text, super::Encoding::Utf16Le).unwrap().to_vec();
+        assert_eq!(text_utf16.len(), 4);
     }
 }

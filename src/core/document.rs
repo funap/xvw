@@ -324,6 +324,12 @@ impl Document {
         self.metadata.bookmarks.computed_folded_regions(self.buffer.len())
     }
 
+    /// Returns true if any bookmark folding mode is active.
+    #[inline]
+    pub fn has_folded_regions(&self) -> bool {
+        self.metadata.bookmarks.has_folded_regions()
+    }
+
     /// Returns summary details for a folded region starting at `offset`.
     pub fn fold_bookmark_summary_at(&self, offset: usize) -> Option<FoldedBookmarkSummary> {
         self.metadata.bookmarks.fold_bookmark_summary_at(offset, self.buffer.len())
