@@ -1175,6 +1175,77 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
     }
 }
 
+struct BannerRowSpec<'a> {
+    addr_text: &'a str,
+    addr_color: Hsla,
+    show_left_col: bool,
+    offset_w: f32,
+    gap: f32,
+    divider_color: Hsla,
+    label: &'a str,
+    fill_bg: Hsla,
+    border_tint: Hsla,
+    label_color: Hsla,
+}
+
+fn paint_special_banner_row(
+    spec: BannerRowSpec<'_>,
+    bounds: Bounds<Pixels>,
+    font: &Font,
+    font_size: Pixels,
+    row_cache: &mut RowRenderCache,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let line_height = px(ROW_HEIGHT);
+    let base_x = bounds.left() + px(8.0);
+    if spec.show_left_col {
+        let (shaped, _) = row_cache.get_or_shape_special(spec.addr_text, spec.addr_color, font, font_size, window);
+        let addr_pos = point(base_x, bounds.top() + px(2.0));
+        let _ = shaped.paint(addr_pos, line_height, TextAlign::Left, None, window, cx);
+
+        let div1_x = base_x + px(spec.offset_w + (spec.gap / 2.0));
+        window.paint_quad(fill(
+            Bounds::new(point(div1_x, bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+            spec.divider_color,
+        ));
+    }
+
+    let bar_start_x = base_x + px(spec.offset_w + spec.gap);
+    let bar_end_x = bounds.right() - px(VERTICAL_SCROLLBAR_WIDTH + 8.0);
+    let bar_width = (bar_end_x - bar_start_x).max(px(0.0));
+    let bar_bounds = Bounds::new(point(bar_start_x, bounds.top() + px(2.0)), size(bar_width, px(ROW_HEIGHT - 4.0)));
+    window.paint_quad(fill(bar_bounds, spec.fill_bg));
+    paint_border_box(window, bar_bounds, px(1.0), spec.border_tint);
+
+    let (shaped_label, _) = row_cache.get_or_shape_special(spec.label, spec.label_color, font, font_size * 0.9, window);
+    let text_pos = point(bar_start_x + px(12.0), bounds.top() + px(2.0));
+    let _ = shaped_label.paint(text_pos, line_height, TextAlign::Left, None, window, cx);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_row_address(
+    is_cursor_row: bool,
+    physical_address: usize,
+    addr_color: Hsla,
+    hex_case: HexCase,
+    font: &Font,
+    font_size: Pixels,
+    line_height: Pixels,
+    addr_pos: Point<Pixels>,
+    cached_addr: Option<&ShapedLine>,
+    cursor_addr_cache: &mut CursorAddrShapeCache,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if is_cursor_row {
+        let shaped = cursor_addr_cache.get_or_shape(physical_address, addr_color, font, font_size, |addr| format_offset_08(addr, hex_case), window);
+        let _ = shaped.paint(addr_pos, line_height, TextAlign::Left, None, window, cx);
+    } else if let Some(shaped) = cached_addr {
+        let _ = shaped.paint(addr_pos, line_height, TextAlign::Left, None, window, cx);
+    }
+}
+
 pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) {
     let total_size = params.doc.buffer.len();
     let Some((offset, next_offset)) = row_byte_range(params.line_starts, params.row_idx, total_size) else {
@@ -1226,35 +1297,14 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
         let fold_start_addr = params.doc.offset_to_address(offset);
         let fold_end_addr = params.doc.offset_to_address(fold_end);
-
-        if is_struct_mode || params.show_offset {
-            let is_cursor_in_fold = active_cursor_offset >= offset && active_cursor_offset < fold_end;
-            let addr_color = if is_cursor_in_fold { fg_color } else { muted_color };
-            let addr_str = format_offset_08(fold_start_addr, params.hex_case);
-            let run = TextRun {
-                len: addr_str.len(),
-                font: font.clone(),
-                color: addr_color,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            let shaped = window.text_system().shape_line(addr_str, params.font_size, &[run], None);
-            let addr_pos = point(params.bounds.left() + px(8.0), params.bounds.top() + px(2.0));
-            let _ = shaped.paint(addr_pos, line_height, TextAlign::Left, None, window, cx);
-
-            let base_x = params.bounds.left() + px(8.0);
-            let div1_x = base_x + px(offset_w + (gap / 2.0));
-            window.paint_quad(fill(
-                Bounds::new(point(div1_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
-                border_color,
-            ));
-        }
-
-        let base_x = params.bounds.left() + px(8.0);
-        let bar_start_x = base_x + px(offset_w + gap);
-        let bar_end_x = params.bounds.right() - px(VERTICAL_SCROLLBAR_WIDTH + 8.0);
-        let bar_width = (bar_end_x - bar_start_x).max(px(0.0));
+        let show_left_col = is_struct_mode || params.show_offset;
+        let is_cursor_in_fold = active_cursor_offset >= offset && active_cursor_offset < fold_end;
+        let addr_color = if is_cursor_in_fold { fg_color } else { muted_color };
+        let addr_str = if show_left_col {
+            format_offset_08(fold_start_addr, params.hex_case)
+        } else {
+            SharedString::default()
+        };
 
         let fold_size = fold_end.saturating_sub(offset);
         let fold_label = if is_unbookmarked {
@@ -1297,26 +1347,26 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             (theme.secondary, border_color, muted_color)
         };
 
-        let run = TextRun {
-            len: fold_label.len(),
-            font: font.clone(),
-            color: text_tint,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let shaped_label = window
-            .text_system()
-            .shape_line(SharedString::from(fold_label), params.font_size * 0.9, &[run], None);
-
-        let bar_bounds = Bounds::new(point(bar_start_x, params.bounds.top() + px(2.0)), size(bar_width, px(ROW_HEIGHT - 4.0)));
-        window.paint_quad(fill(bar_bounds, fill_bg));
-        let outline = outline(bar_bounds, border_tint, BorderStyle::Solid).border_widths(px(1.0));
-        window.paint_quad(outline);
-
-        let text_x = bar_start_x + px(12.0);
-        let text_pos = point(text_x, params.bounds.top() + px(2.0));
-        let _ = shaped_label.paint(text_pos, line_height, TextAlign::Left, None, window, cx);
+        paint_special_banner_row(
+            BannerRowSpec {
+                addr_text: addr_str.as_ref(),
+                addr_color,
+                show_left_col,
+                offset_w,
+                gap,
+                divider_color: border_color,
+                label: &fold_label,
+                fill_bg,
+                border_tint,
+                label_color: text_tint,
+            },
+            params.bounds,
+            &font,
+            params.font_size,
+            params.row_cache,
+            window,
+            cx,
+        );
         return;
     }
 
@@ -1334,33 +1384,6 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             (if params.show_offset { OFFSET_WIDTH } else { 0.0 }, SECTION_GAP)
         };
 
-        if is_struct_mode || params.show_offset {
-            let addr_str = SharedString::from("--------");
-            let run = TextRun {
-                len: addr_str.len(),
-                font: font.clone(),
-                color: muted_color,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            let shaped = window.text_system().shape_line(addr_str, params.font_size, &[run], None);
-            let addr_pos = point(params.bounds.left() + px(8.0), params.bounds.top() + px(2.0));
-            let _ = shaped.paint(addr_pos, line_height, TextAlign::Left, None, window, cx);
-
-            let base_x = params.bounds.left() + px(8.0);
-            let div1_x = base_x + px(offset_w + (gap / 2.0));
-            window.paint_quad(fill(
-                Bounds::new(point(div1_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
-                border_color,
-            ));
-        }
-
-        let base_x = params.bounds.left() + px(8.0);
-        let bar_start_x = base_x + px(offset_w + gap);
-        let bar_end_x = params.bounds.right() - px(VERTICAL_SCROLLBAR_WIDTH + 8.0);
-        let bar_width = (bar_end_x - bar_start_x).max(px(0.0));
-
         let gap_size = gap_end.saturating_sub(gap_start);
         let gap_label = format!(
             "── Address Gap: {} - {} ({} / {} bytes unmapped) ──",
@@ -1369,27 +1392,27 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             params.hex_case.format_prefixed(gap_size),
             gap_size
         );
-        let run = TextRun {
-            len: gap_label.len(),
-            font: font.clone(),
-            color: accent_fg_color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let shaped_label = window
-            .text_system()
-            .shape_line(SharedString::from(gap_label), params.font_size * 0.9, &[run], None);
-
-        let bar_bounds = Bounds::new(point(bar_start_x, params.bounds.top() + px(2.0)), size(bar_width, px(ROW_HEIGHT - 4.0)));
         let theme = cx.theme();
-        window.paint_quad(fill(bar_bounds, theme.secondary));
-        let outline = outline(bar_bounds, border_color, BorderStyle::Solid).border_widths(px(1.0));
-        window.paint_quad(outline);
-
-        let text_x = bar_start_x + px(12.0);
-        let text_pos = point(text_x, params.bounds.top() + px(2.0));
-        let _ = shaped_label.paint(text_pos, line_height, TextAlign::Left, None, window, cx);
+        paint_special_banner_row(
+            BannerRowSpec {
+                addr_text: "--------",
+                addr_color: muted_color,
+                show_left_col: is_struct_mode || params.show_offset,
+                offset_w,
+                gap,
+                divider_color: border_color,
+                label: &gap_label,
+                fill_bg: theme.secondary,
+                border_tint: border_color,
+                label_color: accent_fg_color,
+            },
+            params.bounds,
+            &font,
+            params.font_size,
+            params.row_cache,
+            window,
+            cx,
+        );
         return;
     }
 
@@ -1400,6 +1423,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let (cached, caches) = params.row_cache.row_and_caches_mut(params.row_idx).expect("cached row inserted");
     let contrast_cache = caches.contrast;
     let comment_shapes = caches.comment_shapes;
+    let cursor_addr_cache = caches.cursor_addr;
 
     let physical_address = cached.physical_address;
     let (is_structure_header_row, is_collapsed_struct_row) = cached
@@ -1416,44 +1440,27 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     // 1. Draw Left Columns (Address OR Offset)
     let addr_color = if is_cursor_row { fg_color } else { muted_color };
     let (offset_w, gap) = if is_struct_mode {
-        let addr_pos = point(params.bounds.left() + px(8.0), params.bounds.top() + px(2.0));
-        if is_cursor_row {
-            let addr_str = format_offset_08(physical_address, params.hex_case);
-            let run = TextRun {
-                len: addr_str.len(),
-                font: font.clone(),
-                color: addr_color,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            let shaped = window.text_system().shape_line(addr_str, params.font_size, &[run], None);
-            let _ = shaped.paint(addr_pos, line_height, TextAlign::Left, None, window, cx);
-        } else if let Some(ref shaped) = cached.shaped_addr {
-            let _ = shaped.paint(addr_pos, line_height, TextAlign::Left, None, window, cx);
-        }
         (params.address_col_width, SECTION_GAP)
     } else {
-        if params.show_offset {
-            let offset_pos = point(params.bounds.left() + px(8.0), params.bounds.top() + px(2.0));
-            if is_cursor_row {
-                let offset_str = format_offset_08(physical_address, params.hex_case);
-                let run = TextRun {
-                    len: offset_str.len(),
-                    font: font.clone(),
-                    color: addr_color,
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                };
-                let shaped = window.text_system().shape_line(offset_str, params.font_size, &[run], None);
-                let _ = shaped.paint(offset_pos, line_height, TextAlign::Left, None, window, cx);
-            } else if let Some(ref shaped) = cached.shaped_addr {
-                let _ = shaped.paint(offset_pos, line_height, TextAlign::Left, None, window, cx);
-            }
-        }
         (if params.show_offset { OFFSET_WIDTH } else { 0.0 }, SECTION_GAP)
     };
+    if is_struct_mode || params.show_offset {
+        let addr_pos = point(params.bounds.left() + px(8.0), params.bounds.top() + px(2.0));
+        paint_row_address(
+            is_cursor_row,
+            physical_address,
+            addr_color,
+            params.hex_case,
+            &font,
+            params.font_size,
+            line_height,
+            addr_pos,
+            cached.shaped_addr.as_ref(),
+            cursor_addr_cache,
+            window,
+            cx,
+        );
+    }
 
     let base_x = params.bounds.left() + px(8.0);
     let hex_start_x = base_x + px(offset_w + gap) - px(params.outer_scroll_x);
@@ -2261,7 +2268,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     let dot_y = params.bounds.top() + px((ROW_HEIGHT - dot_size) / 2.0);
 
                     for item in params.bookmark_comments {
-                        let Some((shaped_comment, text_w)) = comment_shapes.get(item.clean_text, muted_color) else {
+                        let Some((shaped_comment, text_w)) = comment_shapes.get(item.clean_text, muted_color, params.font_size) else {
                             continue;
                         };
                         let dot_bounds = Bounds::new(point(cur_x, dot_y), size(px(dot_size), px(dot_size)));

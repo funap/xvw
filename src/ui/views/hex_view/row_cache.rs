@@ -172,18 +172,26 @@ pub fn collect_visible_comment_refs<'a>(
 }
 
 /// Caches shaped single-line bookmark comments keyed by text and foreground color bits.
+#[inline]
+fn hsla_key(color: Hsla) -> [u32; 4] {
+    [color.h.to_bits(), color.s.to_bits(), color.l.to_bits(), color.a.to_bits()]
+}
+
+struct ShapedLabelVariant {
+    size_key: u32,
+    color_key: [u32; 4],
+    shaped: ShapedLine,
+    width: f32,
+}
+
+/// Bounded cache of shaped single-line labels keyed by clean text, font size, and color.
 #[derive(Default)]
 pub struct CommentShapeCache {
-    entries: HashMap<String, Vec<([u32; 4], ShapedLine, f32)>>,
+    entries: HashMap<String, Vec<ShapedLabelVariant>>,
 }
 
 impl CommentShapeCache {
     const MAX_UNIQUE_TEXTS: usize = 256;
-
-    #[inline]
-    fn color_key(color: Hsla) -> [u32; 4] {
-        [color.h.to_bits(), color.s.to_bits(), color.l.to_bits(), color.a.to_bits()]
-    }
 
     #[inline]
     pub fn clear(&mut self) {
@@ -191,18 +199,28 @@ impl CommentShapeCache {
     }
 
     #[inline]
-    pub fn get(&self, text: &str, color: Hsla) -> Option<(&ShapedLine, f32)> {
-        let key = Self::color_key(color);
+    pub fn get(&self, text: &str, color: Hsla, font_size: Pixels) -> Option<(&ShapedLine, f32)> {
+        let size_key = f32::from(font_size).to_bits();
+        let key = hsla_key(color);
         let variants = self.entries.get(text)?;
-        variants.iter().find(|(k, _, _)| *k == key).map(|(_, shaped, width)| (shaped, *width))
+        variants
+            .iter()
+            .find(|variant| variant.size_key == size_key && variant.color_key == key)
+            .map(|variant| (&variant.shaped, variant.width))
+    }
+
+    pub fn get_or_shape(&mut self, text: &str, color: Hsla, font: &Font, font_size: Pixels, window: &mut Window) -> (&ShapedLine, f32) {
+        let _ = self.ensure_shaped_width(text, color, font, font_size, window);
+        self.get(text, color, font_size).expect("shaped entry just inserted")
     }
 
     pub fn ensure_shaped_width(&mut self, text: &str, color: Hsla, font: &Font, font_size: Pixels, window: &mut Window) -> f32 {
-        let key = Self::color_key(color);
+        let size_key = f32::from(font_size).to_bits();
+        let key = hsla_key(color);
         if let Some(variants) = self.entries.get(text)
-            && let Some((_, _, width)) = variants.iter().find(|(k, _, _)| *k == key)
+            && let Some(variant) = variants.iter().find(|variant| variant.size_key == size_key && variant.color_key == key)
         {
-            return *width;
+            return variant.width;
         }
 
         if self.entries.len() >= Self::MAX_UNIQUE_TEXTS && !self.entries.contains_key(text) {
@@ -220,13 +238,59 @@ impl CommentShapeCache {
         };
         let shaped = window.text_system().shape_line(shared, font_size, &[run], None);
         let width = f32::from(shaped.width);
+        let variant = ShapedLabelVariant {
+            size_key,
+            color_key: key,
+            shaped,
+            width,
+        };
 
         if let Some(variants) = self.entries.get_mut(text) {
-            variants.push((key, shaped, width));
+            variants.push(variant);
         } else {
-            self.entries.insert(text.to_string(), vec![(key, shaped, width)]);
+            self.entries.insert(text.to_string(), vec![variant]);
         }
         width
+    }
+}
+
+/// Single-entry cache for the active cursor row's formatted address line.
+#[derive(Default)]
+pub struct CursorAddrShapeCache {
+    entry: Option<(usize, [u32; 4], ShapedLine)>,
+}
+
+impl CursorAddrShapeCache {
+    #[inline]
+    pub fn clear(&mut self) {
+        self.entry = None;
+    }
+
+    pub fn get_or_shape(
+        &mut self,
+        physical_address: usize,
+        color: Hsla,
+        font: &Font,
+        font_size: Pixels,
+        format_addr: impl FnOnce(usize) -> SharedString,
+        window: &mut Window,
+    ) -> &ShapedLine {
+        let key = hsla_key(color);
+        let hit = self.entry.as_ref().is_some_and(|(addr, c_key, _)| *addr == physical_address && *c_key == key);
+        if !hit {
+            let addr_str = format_addr(physical_address);
+            let run = TextRun {
+                len: addr_str.len(),
+                font: font.clone(),
+                color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let shaped = window.text_system().shape_line(addr_str, font_size, &[run], None);
+            self.entry = Some((physical_address, key, shaped));
+        }
+        &self.entry.as_ref().expect("cursor address shape populated").2
     }
 }
 
@@ -234,6 +298,7 @@ impl CommentShapeCache {
 pub struct RowPaintCaches<'a> {
     pub contrast: &'a mut HighlightContrastCache,
     pub comment_shapes: &'a mut CommentShapeCache,
+    pub cursor_addr: &'a mut CursorAddrShapeCache,
 }
 
 /// Frame-to-frame row render cache for HexView to minimize text shaping and layout allocations.
@@ -257,6 +322,8 @@ pub struct RowRenderCache {
     access_tick: Cell<u64>,
     contrast_cache: HighlightContrastCache,
     comment_shapes: CommentShapeCache,
+    special_shapes: CommentShapeCache,
+    cursor_addr_cache: CursorAddrShapeCache,
 }
 
 impl RowRenderCache {
@@ -305,6 +372,11 @@ impl RowRenderCache {
     ) {
         if self.font_size != font_size || &self.font_family != font_family {
             self.comment_shapes.clear();
+            self.special_shapes.clear();
+            self.cursor_addr_cache.clear();
+        }
+        if self.hex_case != hex_case {
+            self.cursor_addr_cache.clear();
         }
         if self.generation != generation
             || self.layout_version != layout_version
@@ -347,11 +419,17 @@ impl RowRenderCache {
     }
 
     #[inline]
+    pub fn get_or_shape_special(&mut self, text: &str, color: Hsla, font: &Font, font_size: Pixels, window: &mut Window) -> (&ShapedLine, f32) {
+        self.special_shapes.get_or_shape(text, color, font, font_size, window)
+    }
+
+    #[inline]
     pub fn row_and_caches_mut(&mut self, row_idx: usize) -> Option<(&CachedRow, RowPaintCaches<'_>)> {
         let tick = self.next_tick();
         let caches = RowPaintCaches {
             contrast: &mut self.contrast_cache,
             comment_shapes: &mut self.comment_shapes,
+            cursor_addr: &mut self.cursor_addr_cache,
         };
         self.rows.get(&row_idx).map(|entry| {
             entry.last_used.set(tick);
