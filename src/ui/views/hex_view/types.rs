@@ -339,3 +339,45 @@ impl RowThemeColors {
         }
     }
 }
+
+/// Cached comment column content width covering a bounded byte scan window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CachedCommentContentWidth {
+    pub width: f32,
+    pub scan_start: usize,
+    pub scan_end: usize,
+    pub total_size: usize,
+    pub bookmark_version: u64,
+    pub layout_version: usize,
+    pub bytes_per_row: usize,
+    pub top_row: usize,
+    pub visible_rows: usize,
+}
+
+impl CachedCommentContentWidth {
+    /// Returns true when the cached width remains valid for the exact same visible row state.
+    #[inline]
+    pub fn matches_row_state(&self, bookmark_version: u64, bytes_per_row: usize, top_row: usize, visible_rows: usize) -> bool {
+        self.bookmark_version == bookmark_version && self.bytes_per_row == bytes_per_row && self.top_row == top_row && self.visible_rows == visible_rows
+    }
+
+    /// Returns true when `visible_start..visible_end` remains inside the scanned byte window
+    /// and bookmark/layout inputs have not changed.
+    #[inline]
+    pub fn covers_viewport(
+        &self,
+        visible_start: usize,
+        visible_end: usize,
+        total_size: usize,
+        bookmark_version: u64,
+        layout_version: usize,
+        bytes_per_row: usize,
+    ) -> bool {
+        self.bookmark_version == bookmark_version
+            && self.layout_version == layout_version
+            && self.bytes_per_row == bytes_per_row
+            && self.total_size == total_size
+            && visible_start >= self.scan_start
+            && visible_end <= self.scan_end
+    }
+}

@@ -2,7 +2,10 @@ use super::layout::{
     build_ascii_char_map, calculate_scroll_top_for_range, centered_glyph_offset, cursor_in_row_offset, for_each_ascii_char, is_cursor_header_column,
 };
 use super::paint::{highlight_color_for_range, is_cursor_row};
-use super::types::{AUTO_FIT_SCAN_BYTES, AsciiChar, HexGroupInfo, HexViewLayout, HexViewLayoutState, HorizontalScrollTarget, LayoutInput, ScrollColumn};
+use super::types::{
+    AUTO_FIT_SCAN_BYTES, AsciiChar, CachedCommentContentWidth, HexGroupInfo, HexViewLayout, HexViewLayoutState, HorizontalScrollTarget, LayoutInput,
+    ScrollColumn,
+};
 use super::{
     HexView, ascii_byte_index_from_world_x, bounded_auto_fit_range, build_hex_text_source, can_chain_to_outer, hex_grid_width, hex_grid_x,
     make_hex_view_layout, weighted_text_width,
@@ -1270,4 +1273,48 @@ fn test_comment_content_width_in_range_accumulates_same_row_and_skips_empty_comm
     ws_doc.metadata.bookmarks.add(BookmarkItem::new(4, 2, BookmarkColor::Blue, "   \n\t "), 32);
     let ws_editor = Editor::new(Arc::new(RwLock::new(ws_doc)));
     assert_eq!(HexView::comment_content_width_in_range(&ws_editor, &(0..32), char_w), 0.0);
+}
+
+#[test]
+fn test_cached_comment_content_width_reuse_and_invalidation() {
+    let cached = CachedCommentContentWidth {
+        width: 140.0,
+        scan_start: 1024,
+        scan_end: 1024 + AUTO_FIT_SCAN_BYTES,
+        total_size: 256 * 1024,
+        bookmark_version: 3,
+        layout_version: 7,
+        bytes_per_row: 16,
+        top_row: 100,
+        visible_rows: 30,
+    };
+
+    assert!(cached.matches_row_state(3, 16, 100, 30));
+    assert!(!cached.matches_row_state(4, 16, 100, 30));
+    assert!(!cached.matches_row_state(3, 32, 100, 30));
+    assert!(!cached.matches_row_state(3, 16, 101, 30));
+    assert!(!cached.matches_row_state(3, 16, 100, 31));
+
+    // Scrolling within the cached 64 KiB scan window hits without recomputation.
+    assert!(cached.covers_viewport(1024, 2048, 256 * 1024, 3, 7, 16));
+    assert!(cached.covers_viewport(4096, 1024 + AUTO_FIT_SCAN_BYTES, 256 * 1024, 3, 7, 16));
+
+    // Scrolling past either scan boundary or mutating version/size invalidates coverage.
+    assert!(!cached.covers_viewport(1008, 2048, 256 * 1024, 3, 7, 16));
+    assert!(!cached.covers_viewport(1024, 1024 + AUTO_FIT_SCAN_BYTES + 16, 256 * 1024, 3, 7, 16));
+    assert!(!cached.covers_viewport(1024, 2048, 256 * 1024, 4, 7, 16));
+    assert!(!cached.covers_viewport(1024, 2048, 256 * 1024, 3, 8, 16));
+    assert!(!cached.covers_viewport(1024, 2048, 256 * 1024, 3, 7, 32));
+    assert!(!cached.covers_viewport(1024, 2048, 256 * 1024 + 1, 3, 7, 16));
+}
+
+#[test]
+fn test_byte_range_for_rows_clamps_virtual_eof_row() {
+    let line_starts = LineMap::Standard {
+        total_size: 64,
+        bytes_per_row: 16,
+    };
+    assert_eq!(HexView::byte_range_for_rows(&line_starts, 64, 1, 2), (16, 64));
+    // Virtual EOF row at index == line_starts.len() stays clamped at total_size instead of wrapping to 0.
+    assert_eq!(HexView::byte_range_for_rows(&line_starts, 64, 4, 2), (64, 64));
 }

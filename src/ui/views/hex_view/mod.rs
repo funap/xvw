@@ -197,7 +197,7 @@ pub struct HexView {
     pub ascii_col_width: f32,
     pub desc_col_width: f32,
     pub comment_col_width: f32,
-    cached_comment_content_width: std::cell::Cell<Option<f32>>,
+    cached_comment_content_width: std::cell::Cell<Option<CachedCommentContentWidth>>,
     cached_desc_content_width: std::cell::Cell<Option<f32>>,
     cached_header_probe: Option<CachedHeaderProbe>,
     resizing_column: Option<(ResizingColumn, f32, f32)>,
@@ -205,6 +205,7 @@ pub struct HexView {
     last_bytes_per_row: Option<usize>,
     last_max_bytes_per_row: Option<usize>,
     last_bookmark_version: u64,
+    last_layout_version: usize,
     last_structure_generation: usize,
     cached_desc_palette: CachedDescPalette,
     row_cache: std::rc::Rc<std::cell::RefCell<RowRenderCache>>,
@@ -224,7 +225,7 @@ impl EventEmitter<HexViewEvent> for HexView {}
 #[allow(dead_code)]
 impl HexView {
     pub fn new(editor: Entity<Editor>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (radix, group_size, is_big_endian, encoding, last_bookmark_version, last_structure_generation) = {
+        let (radix, group_size, is_big_endian, encoding, last_bookmark_version, last_layout_version, last_structure_generation) = {
             let ed = editor.read(cx);
             (
                 ed.options.radix,
@@ -232,6 +233,7 @@ impl HexView {
                 ed.options.is_big_endian,
                 ed.options.encoding,
                 ed.bookmarks().version(),
+                ed.document.read().ok().map(|d| d.layout_version()).unwrap_or(0),
                 ed.structure.generation,
             )
         };
@@ -278,76 +280,84 @@ impl HexView {
         })
         .detach();
 
-        let _editor_subscription =
-            cx.observe(&editor, |this, editor_entity, cx| {
-                let (
-                    current_bm_version,
-                    current_generation,
-                    is_read_only,
-                    new_encoding,
-                    new_radix,
-                    new_group_size,
-                    new_endian,
-                    new_bytes_per_row,
-                    cursor_offset,
-                ) = {
-                    let ed = editor_entity.read(cx);
-                    let cursor_offset = if InsertModeState::is_enabled(cx) {
-                        ed.insert_cursor_offset()
-                    } else {
-                        ed.cursor.offset
-                    };
-                    (
-                        ed.bookmarks().version(),
-                        ed.structure.generation,
-                        ed.is_read_only(),
-                        ed.options.encoding,
-                        ed.options.radix,
-                        ed.options.group_size,
-                        ed.options.is_big_endian,
-                        ed.bytes_per_row(),
-                        cursor_offset,
-                    )
+        let _editor_subscription = cx.observe(&editor, |this, editor_entity, cx| {
+            let (
+                current_bm_version,
+                current_layout_version,
+                current_generation,
+                is_read_only,
+                new_encoding,
+                new_radix,
+                new_group_size,
+                new_endian,
+                new_bytes_per_row,
+                cursor_offset,
+            ) = {
+                let ed = editor_entity.read(cx);
+                let cursor_offset = if InsertModeState::is_enabled(cx) {
+                    ed.insert_cursor_offset()
+                } else {
+                    ed.cursor.offset
                 };
+                (
+                    ed.bookmarks().version(),
+                    ed.document.read().ok().map(|d| d.layout_version()),
+                    ed.structure.generation,
+                    ed.is_read_only(),
+                    ed.options.encoding,
+                    ed.options.radix,
+                    ed.options.group_size,
+                    ed.options.is_big_endian,
+                    ed.bytes_per_row(),
+                    cursor_offset,
+                )
+            };
 
-                if this.last_bookmark_version != current_bm_version {
-                    this.last_bookmark_version = current_bm_version;
-                    this.cached_comment_content_width.set(None);
-                }
-                if this.last_structure_generation != current_generation {
-                    this.last_structure_generation = current_generation;
-                    this.clear_desc_content_width_cache();
-                }
-                if is_read_only {
-                    this.clear_pending_hex_input();
-                }
-                let cursor_changed = this.last_cursor_offset != Some(cursor_offset);
-                if cursor_changed {
-                    this.cursor_reveal_pending = true;
-                    this.pause_cursor_blink(cx);
-                }
+            if this.last_bookmark_version != current_bm_version {
+                this.last_bookmark_version = current_bm_version;
+                this.cached_comment_content_width.set(None);
+            }
+            if let Some(current_lv) = current_layout_version
+                && this.last_layout_version != current_lv
+            {
+                this.last_layout_version = current_lv;
+                this.cached_comment_content_width.set(None);
+            }
+            if this.last_structure_generation != current_generation {
+                this.last_structure_generation = current_generation;
+                this.clear_desc_content_width_cache();
+            }
+            if is_read_only {
+                this.clear_pending_hex_input();
+            }
+            let cursor_changed = this.last_cursor_offset != Some(cursor_offset);
+            if cursor_changed {
+                this.cursor_reveal_pending = true;
+                this.pause_cursor_blink(cx);
+            }
 
-                if this.encoding != new_encoding {
-                    this.encoding = new_encoding;
-                }
-                if this.radix != new_radix || this.group_size != new_group_size || this.is_big_endian != new_endian {
-                    this.radix = new_radix;
-                    this.group_size = new_group_size;
-                    this.is_big_endian = new_endian;
-                    this.hex_content_width = 0.0;
-                    this.cursor_reveal_pending = true;
-                }
-                if this.last_bytes_per_row != Some(new_bytes_per_row) {
-                    this.last_bytes_per_row = Some(new_bytes_per_row);
-                    this.hex_content_width = 0.0;
-                    this.cursor_reveal_pending = true;
-                }
-                if cursor_changed {
-                    this.ensure_cursor_visible(cx);
-                }
-                this.clamp_scroll_offsets(cx);
-                cx.notify();
-            });
+            if this.encoding != new_encoding {
+                this.encoding = new_encoding;
+            }
+            if this.radix != new_radix || this.group_size != new_group_size || this.is_big_endian != new_endian {
+                this.radix = new_radix;
+                this.group_size = new_group_size;
+                this.is_big_endian = new_endian;
+                this.hex_content_width = 0.0;
+                this.cursor_reveal_pending = true;
+            }
+            if this.last_bytes_per_row != Some(new_bytes_per_row) {
+                this.last_bytes_per_row = Some(new_bytes_per_row);
+                this.cached_comment_content_width.set(None);
+                this.hex_content_width = 0.0;
+                this.cursor_reveal_pending = true;
+            }
+            if cursor_changed {
+                this.ensure_cursor_visible(cx);
+            }
+            this.clamp_scroll_offsets(cx);
+            cx.notify();
+        });
 
         let _insert_mode_subscription = cx.observe_global::<InsertModeState>(|this, cx| {
             this.pause_cursor_blink(cx);
@@ -407,6 +417,7 @@ impl HexView {
             last_bytes_per_row: None,
             last_max_bytes_per_row: None,
             last_bookmark_version,
+            last_layout_version,
             last_structure_generation,
             cached_desc_palette,
             row_cache,
@@ -503,14 +514,12 @@ impl HexView {
     }
 
     fn auto_fit_scan_range(&self, cx: &App) -> Range<usize> {
-        let (visible_start, visible_end) = self.viewport_byte_range(cx);
-        let total_size = self.editor.read(cx).total_size();
+        let (visible_start, visible_end, total_size, _) = self.viewport_byte_range_with_doc_state(self.editor.read(cx));
         bounded_auto_fit_range(total_size, visible_start, visible_end)
     }
 
     fn visible_auto_fit_scan_range(&self, cx: &App) -> Range<usize> {
-        let (visible_start, visible_end) = self.viewport_byte_range(cx);
-        let total_size = self.editor.read(cx).total_size();
+        let (visible_start, visible_end, total_size, _) = self.viewport_byte_range_with_doc_state(self.editor.read(cx));
         let start = visible_start.min(total_size);
         let end = visible_end.clamp(start, total_size);
         start..end
@@ -689,24 +698,64 @@ impl HexView {
         max_width
     }
 
-    pub fn max_comment_scroll(&self, cx: &App) -> f32 {
-        if let Some(max_content_w) = self.cached_comment_content_width.get() {
-            let max_w = (max_content_w + 32.0).max(self.comment_col_width);
-            return (max_w - self.comment_col_width).max(0.0);
-        }
+    #[inline]
+    fn comment_scroll_for_width(&self, max_content_w: f32) -> f32 {
+        let max_w = (max_content_w + 32.0).max(self.comment_col_width);
+        (max_w - self.comment_col_width).max(0.0)
+    }
 
-        if self.editor.read(cx).bookmarks().items().is_empty() {
-            self.cached_comment_content_width.set(Some(0.0));
+    fn store_comment_content_width(&self, editor: &Editor, scan_range: &Range<usize>, total_size: usize, layout_version: usize, width: f32) {
+        self.cached_comment_content_width.set(Some(CachedCommentContentWidth {
+            width,
+            scan_start: scan_range.start,
+            scan_end: scan_range.end,
+            total_size,
+            bookmark_version: editor.bookmarks().version(),
+            layout_version,
+            bytes_per_row: editor.bytes_per_row(),
+            top_row: self.scroll.scroll_offset,
+            visible_rows: self.viewport_visible_rows(),
+        }));
+    }
+
+    pub fn max_comment_scroll(&self, cx: &App) -> f32 {
+        let editor = self.editor.read(cx);
+        if editor.bookmarks().items().is_empty() {
+            self.cached_comment_content_width.set(None);
             return 0.0;
         }
 
-        let scan_range = self.auto_fit_scan_range(cx);
-        let editor = self.editor.read(cx);
+        let bookmark_version = editor.bookmarks().version();
+        let bytes_per_row = editor.bytes_per_row();
+        let top_row = self.scroll.scroll_offset;
+        let visible_rows = self.viewport_visible_rows();
+
+        if let Some(cached) = self.cached_comment_content_width.get()
+            && cached.matches_row_state(bookmark_version, bytes_per_row, top_row, visible_rows)
+        {
+            return self.comment_scroll_for_width(cached.width);
+        }
+
+        let (visible_start, visible_end, total_size, layout_version) = self.viewport_byte_range_with_doc_state(editor);
+        let clamped_start = visible_start.min(total_size);
+        let clamped_end = visible_end.clamp(clamped_start, total_size);
+
+        if let Some(cached) = self.cached_comment_content_width.get()
+            && cached.covers_viewport(clamped_start, clamped_end, total_size, bookmark_version, layout_version, bytes_per_row)
+        {
+            self.cached_comment_content_width.set(Some(CachedCommentContentWidth {
+                top_row,
+                visible_rows,
+                ..cached
+            }));
+            return self.comment_scroll_for_width(cached.width);
+        }
+
+        let scan_range = bounded_auto_fit_range(total_size, clamped_start, clamped_end);
         let char_w = f32::from(self.font_size_prop) * 0.61;
         let max_content_w = Self::comment_content_width_in_range(editor, &scan_range, char_w);
-        self.cached_comment_content_width.set(Some(max_content_w));
-        let max_w = (max_content_w + 32.0).max(self.comment_col_width);
-        (max_w - self.comment_col_width).max(0.0)
+        self.store_comment_content_width(editor, &scan_range, total_size, layout_version, max_content_w);
+        self.comment_scroll_for_width(max_content_w)
     }
 
     fn default_ascii_col_width(max_bytes_per_row: usize) -> f32 {
@@ -891,11 +940,12 @@ impl HexView {
                 }
             }
             ResizingColumn::Comment => {
-                let scan_range = self.auto_fit_scan_range(cx);
                 let editor = self.editor.read(cx);
+                let (visible_start, visible_end, total_size, layout_version) = self.viewport_byte_range_with_doc_state(editor);
+                let scan_range = bounded_auto_fit_range(total_size, visible_start, visible_end);
                 let char_w = f32::from(self.font_size_prop) * 0.61;
                 let max_content_w = Self::comment_content_width_in_range(editor, &scan_range, char_w);
-                self.cached_comment_content_width.set(Some(max_content_w));
+                self.store_comment_content_width(editor, &scan_range, total_size, layout_version, max_content_w);
                 self.comment_col_width = if max_content_w > 0.0 {
                     (max_content_w + 24.0).max(COMMENT_WIDTH)
                 } else {
@@ -951,7 +1001,6 @@ impl HexView {
             let max_top_row = total_rows.saturating_sub(visible_rows.max(1));
 
             if let Some(new_offset) = self.scroll.handle_wheel_vertical(delta_y, max_top_row) {
-                self.cached_comment_content_width.set(None);
                 cx.notify();
                 cx.emit(HexViewEvent::Scrolled(new_offset));
             }
@@ -999,7 +1048,6 @@ impl HexView {
             let max_top_row = total_rows.saturating_sub(visible_rows.max(1));
 
             if let Some(new_offset) = self.scroll.handle_wheel_vertical(delta_y, max_top_row) {
-                self.cached_comment_content_width.set(None);
                 cx.notify();
                 cx.emit(HexViewEvent::Scrolled(new_offset));
             }
@@ -1193,22 +1241,43 @@ impl HexView {
         self.scroll.scroll_offset
     }
 
-    pub fn viewport_byte_range(&self, cx: &App) -> (usize, usize) {
-        let editor = self.editor.read(cx);
-        let line_starts = editor.line_starts();
-        let current_top = self.scroll.scroll_offset;
-        let start_byte = line_starts.get(current_top).unwrap_or(0);
-        let visible_rows = if let Some(bounds) = self.list_bounds.get() {
+    #[inline]
+    fn viewport_visible_rows(&self) -> usize {
+        if let Some(bounds) = self.list_bounds.get() {
             (f32::from(bounds.size.height) / ROW_HEIGHT).ceil() as usize
         } else {
             30
-        };
+        }
+    }
+
+    #[inline]
+    fn byte_range_for_rows(line_starts: &crate::core::layout::LineMap, total_size: usize, current_top: usize, visible_rows: usize) -> (usize, usize) {
+        let start_byte = line_starts.get(current_top).unwrap_or(total_size);
         let end_row = (current_top + visible_rows + 2).min(line_starts.len());
         let end_byte = if end_row < line_starts.len() {
-            line_starts.get(end_row).unwrap_or_else(|| editor.total_size())
+            line_starts.get(end_row).unwrap_or(total_size)
         } else {
-            editor.total_size()
+            total_size
         };
+        (start_byte, end_byte)
+    }
+
+    fn viewport_byte_range_with_doc_state(&self, editor: &Editor) -> (usize, usize, usize, usize) {
+        let doc = editor.document.read().expect("document read lock");
+        let total_size = doc.buffer.len();
+        let layout_version = doc.layout_version();
+        let line_starts = editor.layout.line_starts(
+            &doc,
+            editor.structure.show_inline_structure_view,
+            editor.structure.is_parsing(),
+            &editor.structure.collapsed_struct_ids,
+        );
+        let (start_byte, end_byte) = Self::byte_range_for_rows(&line_starts, total_size, self.scroll.scroll_offset, self.viewport_visible_rows());
+        (start_byte, end_byte, total_size, layout_version)
+    }
+
+    pub fn viewport_byte_range(&self, cx: &App) -> (usize, usize) {
+        let (start_byte, end_byte, _, _) = self.viewport_byte_range_with_doc_state(self.editor.read(cx));
         (start_byte, end_byte)
     }
 
@@ -1242,7 +1311,6 @@ impl HexView {
         let visible_rows = (list_h / ROW_HEIGHT).floor() as usize;
 
         if self.scroll.scroll_to_row(row, total_rows, visible_rows) {
-            self.cached_comment_content_width.set(None);
             cx.notify();
             cx.emit(HexViewEvent::Scrolled(self.scroll.scroll_offset));
         }
