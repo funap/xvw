@@ -549,7 +549,7 @@ pub struct RowPaintParams<'a> {
     pub hex_cell_width: Pixels,
     pub desc_col_width: f32,
     pub comment_col_width: f32,
-    pub font_family: SharedString,
+    pub font: &'a Font,
     pub font_size: Pixels,
     pub desc_palette: DescriptionPalette,
     pub active_leaf_field: Option<&'a IndexedField>,
@@ -990,7 +990,7 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
     let chunk = params.doc.buffer.get_range(offset, chunk_len);
     let total_size = params.doc.buffer.len();
     let is_struct_mode = params.parse_result.is_some();
-    let font = font(params.font_family.clone());
+    let font = params.font;
 
     let physical_address = params.doc.offset_to_address(offset);
     let is_structure_header_row = is_struct_mode && chunk_len == 0;
@@ -1374,7 +1374,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let bg_color_theme = params.theme_colors.bg_color_theme;
 
     let line_height = px(ROW_HEIGHT);
-    let font = font(params.font_family.clone());
+    let font = params.font;
     let insert_cursor_active = params.insert_mode && params.is_focused && window.is_window_active();
     let insert_selection_active = params.min_sel <= params.max_sel;
 
@@ -1459,7 +1459,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 label_color: text_tint,
             },
             params.bounds,
-            &font,
+            font,
             params.font_size,
             params.row_cache,
             window,
@@ -1505,7 +1505,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 label_color: accent_fg_color,
             },
             params.bounds,
-            &font,
+            font,
             params.font_size,
             params.row_cache,
             window,
@@ -1549,7 +1549,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             physical_address,
             addr_color,
             params.hex_case,
-            &font,
+            font,
             params.font_size,
             line_height,
             addr_pos,
@@ -2311,7 +2311,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
             let mut total_content_width = 4.0;
             for item in params.bookmark_comments {
-                let text_w = comment_shapes.ensure_shaped_width(item.clean_text, muted_color, &font, params.font_size, window);
+                let text_w = comment_shapes.ensure_shaped_width(item.clean_text, muted_color, font, params.font_size, window);
                 total_content_width += dot_size + dot_margin_right + text_w + item_spacing;
             }
             let comment_text_width = total_content_width;

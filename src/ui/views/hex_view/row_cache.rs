@@ -546,6 +546,8 @@ pub struct EffectiveHighlightsCache {
     highlights_version: u64,
     items: Vec<(Range<usize>, Hsla)>,
     block_max_end: Vec<usize>,
+    viewport_scratch: Vec<(Range<usize>, Hsla)>,
+    sweep_active_scratch: Vec<(Range<usize>, Hsla)>,
 }
 
 impl EffectiveHighlightsCache {
@@ -568,27 +570,43 @@ impl EffectiveHighlightsCache {
         }
     }
 
-    pub fn collect_viewport(&self, vp_start: usize, vp_end: usize, out: &mut Vec<(Range<usize>, Hsla)>) {
+    fn collect_viewport_into(items: &[(Range<usize>, Hsla)], block_max_end: &[usize], vp_start: usize, vp_end: usize, out: &mut Vec<(Range<usize>, Hsla)>) {
         out.clear();
-        if self.items.is_empty() || vp_end <= vp_start {
+        if items.is_empty() || vp_end <= vp_start {
             return;
         }
-        let end_idx = self.items.partition_point(|(r, _)| r.start < vp_end);
+        let end_idx = items.partition_point(|(r, _)| r.start < vp_end);
         if end_idx == 0 {
             return;
         }
         let block_count = end_idx.div_ceil(Self::BLOCK_SIZE);
-        for (block_idx, &block_max) in self.block_max_end[..block_count].iter().enumerate() {
+        for (block_idx, &block_max) in block_max_end[..block_count].iter().enumerate() {
             if block_max <= vp_start {
                 continue;
             }
             let start = block_idx * Self::BLOCK_SIZE;
             let end = (start + Self::BLOCK_SIZE).min(end_idx);
-            for (range, color) in &self.items[start..end] {
+            for (range, color) in &items[start..end] {
                 if range.end > vp_start {
                     out.push((range.clone(), *color));
                 }
             }
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn collect_viewport(&self, vp_start: usize, vp_end: usize, out: &mut Vec<(Range<usize>, Hsla)>) {
+        Self::collect_viewport_into(&self.items, &self.block_max_end, vp_start, vp_end, out);
+    }
+
+    /// Reuses internal viewport and sweep scratch buffers to produce a zero-allocation `HighlightSweep`.
+    pub fn viewport_sweep(&mut self, vp_start: usize, vp_end: usize) -> HighlightSweep<'_> {
+        Self::collect_viewport_into(&self.items, &self.block_max_end, vp_start, vp_end, &mut self.viewport_scratch);
+        self.sweep_active_scratch.clear();
+        HighlightSweep {
+            viewport: &self.viewport_scratch,
+            cursor: 0,
+            active: &mut self.sweep_active_scratch,
         }
     }
 }
@@ -597,16 +615,14 @@ impl EffectiveHighlightsCache {
 pub struct HighlightSweep<'a> {
     viewport: &'a [(Range<usize>, Hsla)],
     cursor: usize,
-    active: Vec<(Range<usize>, Hsla)>,
+    active: &'a mut Vec<(Range<usize>, Hsla)>,
 }
 
 impl<'a> HighlightSweep<'a> {
-    pub fn new(viewport: &'a [(Range<usize>, Hsla)]) -> Self {
-        Self {
-            viewport,
-            cursor: 0,
-            active: Vec::new(),
-        }
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn new(viewport: &'a [(Range<usize>, Hsla)], active: &'a mut Vec<(Range<usize>, Hsla)>) -> Self {
+        active.clear();
+        Self { viewport, cursor: 0, active }
     }
 
     #[inline]
@@ -621,7 +637,7 @@ impl<'a> HighlightSweep<'a> {
             }
             self.cursor += 1;
         }
-        &self.active
+        self.active
     }
 }
 
@@ -695,11 +711,23 @@ mod tests {
 
         // Sweep across monotonic rows including zero-byte structure header rows [4000, 4000) and trailing EOF [4064, 4064)
         let rows = [(3_968, 3_984), (3_984, 4_000), (4_000, 4_000), (4_000, 4_016), (4_016, 4_032), (4_064, 4_064)];
-        let mut sweep = HighlightSweep::new(&viewport);
+        let mut sweep_scratch = Vec::new();
+        let mut sweep = HighlightSweep::new(&viewport, &mut sweep_scratch);
         for &(offset, next_offset) in &rows {
             let active = sweep.advance_to(offset, next_offset);
             let expected_row: Vec<_> = cache.items.iter().filter(|(r, _)| r.start < next_offset && r.end > offset).cloned().collect();
             assert_eq!(active, expected_row.as_slice(), "mismatch on row {offset}..{next_offset}");
+        }
+
+        // Verify reusable `viewport_sweep` matches the explicit collect/sweep path
+        let expected_per_row: Vec<Vec<_>> = rows
+            .iter()
+            .map(|&(offset, next_offset)| cache.items.iter().filter(|(r, _)| r.start < next_offset && r.end > offset).cloned().collect())
+            .collect();
+        let mut pooled_sweep = cache.viewport_sweep(vp_start, vp_end);
+        for (&(offset, next_offset), expected_row) in rows.iter().zip(&expected_per_row) {
+            let active = pooled_sweep.advance_to(offset, next_offset);
+            assert_eq!(active, expected_row.as_slice(), "pooled sweep mismatch on row {offset}..{next_offset}");
         }
 
         // Calling again with same versions must preserve cached items without rebuilding

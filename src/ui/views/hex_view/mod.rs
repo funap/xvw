@@ -208,6 +208,7 @@ pub struct HexView {
     last_layout_version: usize,
     last_structure_generation: usize,
     cached_desc_palette: CachedDescPalette,
+    cached_active_leaf_field: std::rc::Rc<std::cell::RefCell<CachedActiveLeafField>>,
     row_cache: std::rc::Rc<std::cell::RefCell<RowRenderCache>>,
     cursor_reveal_pending: bool,
     pub category_palette: Option<ByteCategoryPalette>,
@@ -238,6 +239,7 @@ impl HexView {
             )
         };
         let cached_desc_palette = std::rc::Rc::new(std::cell::Cell::new(None));
+        let cached_active_leaf_field = std::rc::Rc::new(std::cell::RefCell::new(CachedActiveLeafField::default()));
         let row_cache = std::rc::Rc::new(std::cell::RefCell::new(RowRenderCache::default()));
         let effective_highlights_cache = std::rc::Rc::new(std::cell::RefCell::new(EffectiveHighlightsCache::default()));
         let font_size_prop = px(14.0);
@@ -420,6 +422,7 @@ impl HexView {
             last_layout_version,
             last_structure_generation,
             cached_desc_palette,
+            cached_active_leaf_field,
             row_cache,
             cursor_reveal_pending: true,
             category_palette: None,
@@ -3895,6 +3898,7 @@ impl Render for HexView {
                 let scrollbar_view = view.clone();
                 let custom_category_palette = self.category_palette;
                 let cached_desc_palette = self.cached_desc_palette.clone();
+                let cached_active_leaf_field = self.cached_active_leaf_field.clone();
                 let row_cache = self.row_cache.clone();
 
                 canvas(
@@ -3983,14 +3987,9 @@ impl Render for HexView {
                         } else {
                             total_size
                         };
-                        let viewport_highlights = {
-                            let mut hl_cache = effective_highlights_cache.borrow_mut();
-                            hl_cache.ensure_updated(bookmark_version, &bookmark_items, highlights_version, &highlights);
-                            let mut vp = Vec::new();
-                            hl_cache.collect_viewport(vp_start, vp_end, &mut vp);
-                            vp
-                        };
-                        let mut hl_sweep = HighlightSweep::new(&viewport_highlights);
+                        let mut hl_cache = effective_highlights_cache.borrow_mut();
+                        hl_cache.ensure_updated(bookmark_version, &bookmark_items, highlights_version, &highlights);
+                        let mut hl_sweep = hl_cache.viewport_sweep(vp_start, vp_end);
                         let category_palette = custom_category_palette.unwrap_or_else(|| {
                             let colors = *cx.global::<ByteCategoryColors>();
                             ByteCategoryPalette::from_colors(colors, cx.theme())
@@ -4013,7 +4012,8 @@ impl Render for HexView {
                             }
                         };
                         let active_cursor_offset = if insert_mode { insert_cursor_offset } else { cursor_offset };
-                        let active_leaf_field = parse_result.as_deref().and_then(|pr| pr.query_deepest_leaf_at(active_cursor_offset));
+                        let mut active_leaf_cache = cached_active_leaf_field.borrow_mut();
+                        let active_leaf_field = active_leaf_cache.resolve(parse_result.as_ref(), active_cursor_offset);
                         let ascii_cursor_char_range = if active_column == EditColumn::Ascii && !insert_mode {
                             Some(encoding.char_range_at(doc.buffer.data(), cursor_offset))
                         } else {
@@ -4027,6 +4027,7 @@ impl Render for HexView {
 
                         let theme = cx.theme();
                         let theme_colors = RowThemeColors::from_theme(theme, is_focused);
+                        let row_font = font(font_family.clone());
                         let collapsed_ptr = Arc::as_ptr(&collapsed_structs) as usize;
                         let parse_result_ptr = parse_result.as_ref().map(|p| Arc::as_ptr(p) as usize).unwrap_or(0);
                         let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
@@ -4106,10 +4107,10 @@ impl Render for HexView {
                                     hex_cell_width,
                                     desc_col_width,
                                     comment_col_width,
-                                    font_family: font_family.clone(),
+                                    font: &row_font,
                                     font_size,
                                     desc_palette,
-                                    active_leaf_field: active_leaf_field.as_deref(),
+                                    active_leaf_field,
                                     theme_colors: &theme_colors,
                                     row_cache: &mut cache_borrow,
                                 },

@@ -3,8 +3,8 @@ use super::layout::{
 };
 use super::paint::{highlight_color_for_range, is_cursor_row};
 use super::types::{
-    AUTO_FIT_SCAN_BYTES, AsciiChar, CachedCommentContentWidth, HexGroupInfo, HexViewLayout, HexViewLayoutState, HorizontalScrollTarget, LayoutInput,
-    ScrollColumn,
+    AUTO_FIT_SCAN_BYTES, AsciiChar, CachedActiveLeafField, CachedCommentContentWidth, HexGroupInfo, HexViewLayout, HexViewLayoutState, HorizontalScrollTarget,
+    LayoutInput, ScrollColumn,
 };
 use super::{
     HexView, ascii_byte_index_from_world_x, bounded_auto_fit_range, build_hex_text_source, can_chain_to_outer, hex_grid_width, hex_grid_x,
@@ -1317,4 +1317,53 @@ fn test_byte_range_for_rows_clamps_virtual_eof_row() {
     assert_eq!(HexView::byte_range_for_rows(&line_starts, 64, 1, 2), (16, 64));
     // Virtual EOF row at index == line_starts.len() stays clamped at total_size instead of wrapping to 0.
     assert_eq!(HexView::byte_range_for_rows(&line_starts, 64, 4, 2), (64, 64));
+}
+
+#[test]
+fn test_cached_active_leaf_field_hits_and_invalidates() {
+    let field_a = ParsedField {
+        id: "magic".into(),
+        field_type: "u4".into(),
+        offset: 0,
+        size: 4,
+        value: FieldValue::U32(1),
+        color: crate::core::color::RgbaColor::default(),
+        description: None,
+        children: vec![],
+        enum_label: None,
+        is_instance: false,
+    };
+    let field_b = ParsedField {
+        id: "flags".into(),
+        field_type: "u4".into(),
+        offset: 4,
+        size: 4,
+        value: FieldValue::U32(2),
+        color: crate::core::color::RgbaColor::default(),
+        description: None,
+        children: vec![],
+        enum_label: None,
+        is_instance: false,
+    };
+
+    let pr1 = Arc::new(ParseResult::new("s1".into(), vec![field_a.clone(), field_b], 8, vec![]));
+    let mut cache = CachedActiveLeafField::default();
+
+    let first = cache.resolve(Some(&pr1), 2).expect("leaf at offset 2");
+    assert_eq!(first.id, "magic");
+    let ptr1 = first as *const _;
+
+    // Reusing same ParseResult Arc and cursor offset returns the exact cached entry pointer.
+    let second = cache.resolve(Some(&pr1), 2).expect("cached leaf");
+    assert_eq!(second as *const _, ptr1);
+
+    // Moving cursor resolves the new leaf field cleanly.
+    assert_eq!(cache.resolve(Some(&pr1), 5).map(|f| f.id.as_str()), Some("flags"));
+
+    // Replacing ParseResult Arc invalidates previous entry even at identical cursor offset.
+    let mut field_v2 = field_a;
+    field_v2.id = "header_v2".into();
+    let pr2 = Arc::new(ParseResult::new("s2".into(), vec![field_v2], 4, vec![]));
+    assert_eq!(cache.resolve(Some(&pr2), 2).map(|f| f.id.as_str()), Some("header_v2"));
+    assert!(cache.resolve(None, 2).is_none());
 }

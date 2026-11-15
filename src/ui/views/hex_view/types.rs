@@ -381,3 +381,36 @@ impl CachedCommentContentWidth {
             && visible_end <= self.scan_end
     }
 }
+
+use crate::core::structure::{IndexedField, ParseResult};
+use std::sync::{Arc, Weak};
+
+/// Caches the deepest structure leaf field at `cursor_offset` for the current `ParseResult` snapshot.
+#[derive(Default)]
+pub struct CachedActiveLeafField {
+    parse_result: Option<Weak<ParseResult>>,
+    cursor_offset: usize,
+    field: Option<IndexedField>,
+}
+
+impl CachedActiveLeafField {
+    /// Resolves the deepest leaf field at `cursor_offset`, reusing the previous lookup across non-cursor frames.
+    pub fn resolve(&mut self, parse_result: Option<&Arc<ParseResult>>, cursor_offset: usize) -> Option<&IndexedField> {
+        let Some(pr) = parse_result else {
+            self.parse_result = None;
+            self.field = None;
+            return None;
+        };
+        let same_parse = self
+            .parse_result
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .is_some_and(|cached| Arc::ptr_eq(&cached, pr));
+        if !same_parse || self.cursor_offset != cursor_offset {
+            self.parse_result = Some(Arc::downgrade(pr));
+            self.cursor_offset = cursor_offset;
+            self.field = pr.query_deepest_leaf_at(cursor_offset).map(|f| f.into_owned());
+        }
+        self.field.as_ref()
+    }
+}
