@@ -158,6 +158,16 @@ impl HexCursorBlink {
 
 type CachedDescPalette = std::rc::Rc<std::cell::Cell<Option<(gpui_kit::component::ThemeMode, Hsla, Hsla, DescriptionPalette)>>>;
 
+struct CachedHeaderProbe {
+    max_bytes_per_row: usize,
+    radix: DisplayRadix,
+    group_size: ByteGroupSize,
+    is_big_endian: bool,
+    hex_case: HexCase,
+    source: HexTextSource,
+    col_labels: Vec<SharedString>,
+}
+
 pub struct HexView {
     editor: Entity<Editor>,
     focus_handle: FocusHandle,
@@ -189,6 +199,7 @@ pub struct HexView {
     pub comment_col_width: f32,
     cached_comment_content_width: std::cell::Cell<Option<f32>>,
     cached_desc_content_width: std::cell::Cell<Option<f32>>,
+    cached_header_probe: Option<CachedHeaderProbe>,
     resizing_column: Option<(ResizingColumn, f32, f32)>,
     last_cursor_offset: Option<usize>,
     last_bytes_per_row: Option<usize>,
@@ -390,6 +401,7 @@ impl HexView {
             comment_col_width: COMMENT_WIDTH,
             cached_comment_content_width: std::cell::Cell::new(None),
             cached_desc_content_width: std::cell::Cell::new(None),
+            cached_header_probe: None,
             resizing_column: None,
             last_cursor_offset: None,
             last_bytes_per_row: None,
@@ -684,6 +696,43 @@ impl HexView {
         } else {
             Self::default_ascii_col_width(max_bytes_per_row)
         }
+    }
+
+    fn ensure_header_probe(&mut self, max_bytes_per_row: usize, hex_case: HexCase) {
+        let is_valid = self.cached_header_probe.as_ref().is_some_and(|probe| {
+            probe.max_bytes_per_row == max_bytes_per_row
+                && probe.radix == self.radix
+                && probe.group_size == self.group_size
+                && probe.is_big_endian == self.is_big_endian
+                && probe.hex_case == hex_case
+        });
+        if is_valid {
+            return;
+        }
+
+        const ZERO_BUFFER: [u8; 512] = [0u8; 512];
+        let group_bytes = self.group_size.byte_count();
+        let items_in_row = max_bytes_per_row.div_ceil(group_bytes).max(1);
+        let probe_len = items_in_row * group_bytes;
+        let source = if probe_len <= ZERO_BUFFER.len() {
+            build_hex_text_source(&ZERO_BUFFER[..probe_len], 0, self.radix, self.group_size, self.is_big_endian, hex_case)
+        } else {
+            let probe_bytes = vec![0u8; probe_len];
+            build_hex_text_source(&probe_bytes, 0, self.radix, self.group_size, self.is_big_endian, hex_case)
+        };
+        let col_labels = (0..source.groups.len())
+            .map(|i| SharedString::from(format!("+{}", hex_case.format_offset(i * group_bytes, 1))))
+            .collect();
+
+        self.cached_header_probe = Some(CachedHeaderProbe {
+            max_bytes_per_row,
+            radix: self.radix,
+            group_size: self.group_size,
+            is_big_endian: self.is_big_endian,
+            hex_case,
+            source,
+            col_labels,
+        });
     }
 
     fn current_layout(&self, cx: &App) -> HexViewLayout {
@@ -2684,8 +2733,6 @@ impl Render for HexView {
             .overflow_hidden()
             .key_context(CONTEXT);
 
-        let group_bytes = self.group_size.byte_count();
-        let items_in_row = max_bytes_per_row.div_ceil(group_bytes).max(1);
         let hex_cell_width = if self.hex_cell_width > 0.0 {
             px(self.hex_cell_width)
         } else {
@@ -2693,16 +2740,10 @@ impl Render for HexView {
             self.hex_cell_width = f32::from(measured);
             measured
         };
-        const ZERO_BUFFER: [u8; 512] = [0u8; 512];
-        let probe_len = items_in_row * group_bytes;
         let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
-        let probe_source = if probe_len <= ZERO_BUFFER.len() {
-            build_hex_text_source(&ZERO_BUFFER[..probe_len], 0, self.radix, self.group_size, self.is_big_endian, hex_case)
-        } else {
-            let probe_bytes = vec![0u8; probe_len];
-            build_hex_text_source(&probe_bytes, 0, self.radix, self.group_size, self.is_big_endian, hex_case)
-        };
-        let total_data_width = f32::from(hex_grid_width(probe_source.text.len(), hex_cell_width));
+        self.ensure_header_probe(max_bytes_per_row, hex_case);
+        let probe_text_len = self.cached_header_probe.as_ref().expect("header probe cached").source.text.len();
+        let total_data_width = f32::from(hex_grid_width(probe_text_len, hex_cell_width));
         self.hex_content_width = total_data_width;
         if bytes_per_row_changed || self.hex_col_width <= 0.0 {
             self.hex_col_width = total_data_width;
@@ -2796,11 +2837,11 @@ impl Render for HexView {
                 let line_starts = editor.line_starts();
                 cursor_in_row_offset(reveal_cursor_offset, total_size, &line_starts)
             };
-            let total_groups = probe_source.groups.len();
-            let mut hex_cols = Vec::with_capacity(items_in_row);
-            for (i, group) in probe_source.groups.iter().enumerate() {
-                let byte_offset = i * group_bytes;
-                let label = SharedString::from(format!("+{}", hex_case.format_offset(byte_offset, 1)));
+            let probe = self.cached_header_probe.as_ref().expect("header probe cached");
+            let total_groups = probe.source.groups.len();
+            let mut hex_cols = Vec::with_capacity(probe.col_labels.len());
+            for (i, group) in probe.source.groups.iter().enumerate() {
+                let label = probe.col_labels[i].clone();
                 let group_start = f32::from(hex_grid_x(group.text_start, hex_cell_width));
                 let group_end = f32::from(hex_grid_x(group.text_end, hex_cell_width));
                 let is_cursor_col = is_cursor_header_column(cursor_in_row, i, *group, total_groups);
@@ -3620,8 +3661,11 @@ impl Render for HexView {
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                let layout = this.current_layout(cx);
-                this.sync_outer_scroll_from_handle(layout, cx);
+                let handle_offset = (-f32::from(this.scroll.outer_scroll_handle.offset().x)).max(0.0);
+                if (handle_offset - this.scroll.outer_scroll_x).abs() > 0.01 {
+                    let layout = this.current_layout(cx);
+                    this.sync_outer_scroll_from_handle(layout, cx);
+                }
 
                 if let Some(list_b) = this.list_bounds.get() {
                     let pos = event.position;
