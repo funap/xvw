@@ -180,8 +180,14 @@ impl BookmarkStore {
         folds
     }
 
+    /// Returns true if any bookmark folding mode is active (hidden bookmarks or hidden unbookmarked gaps).
+    #[inline]
+    pub fn has_folded_regions(&self) -> bool {
+        self.hide_unbookmarked || !self.hidden_colors.is_empty() || !self.hidden_ids.is_empty()
+    }
+
     pub fn fold_bookmark_summary_at(&self, offset: usize, total_size: usize) -> Option<FoldedBookmarkSummary> {
-        if !self.hide_unbookmarked && self.hidden_colors.is_empty() && self.hidden_ids.is_empty() {
+        if !self.has_folded_regions() {
             return None;
         }
         let folded = self.computed_folded_regions(total_size);

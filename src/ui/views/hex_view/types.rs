@@ -414,3 +414,11 @@ impl CachedActiveLeafField {
         self.field.as_ref()
     }
 }
+
+/// Reusable per-row scratch buffers shared across rows within a paint frame.
+#[derive(Default)]
+pub struct PaintRowScratch {
+    pub group_visuals: Vec<(Option<Hsla>, bool, bool)>,
+    pub group_text_colors: Vec<Hsla>,
+    pub ascii_cell_colors: Vec<Hsla>,
+}

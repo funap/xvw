@@ -553,8 +553,11 @@ pub struct RowPaintParams<'a> {
     pub font_size: Pixels,
     pub desc_palette: DescriptionPalette,
     pub active_leaf_field: Option<&'a IndexedField>,
+    pub has_folded_bookmarks: bool,
+    pub has_address_gaps: bool,
     pub theme_colors: &'a RowThemeColors,
     pub row_cache: &'a mut RowRenderCache,
+    pub scratch: &'a mut PaintRowScratch,
 }
 
 /// Sanitizes a string to guarantee single-line presentation without newlines or carriage returns.
@@ -1381,10 +1384,14 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let active_leaf_field = params.active_leaf_field;
 
     // Check for Folded Bookmark or Unbookmarked Region Row
-    let fold_summary = params
-        .doc
-        .fold_bookmark_summary_at(offset)
-        .map(|s| (s.end_offset, Some(s.color), s.comment, s.is_unbookmarked));
+    let fold_summary = if params.has_folded_bookmarks {
+        params
+            .doc
+            .fold_bookmark_summary_at(offset)
+            .map(|s| (s.end_offset, Some(s.color), s.comment, s.is_unbookmarked))
+    } else {
+        None
+    };
 
     if let Some((fold_end, color, comment, is_unbookmarked)) = fold_summary {
         let (offset_w, gap) = if is_struct_mode {
@@ -1469,7 +1476,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     }
 
     // Check for Address Gap Separator Row
-    let gap_info = if chunk_len == 0 {
+    let gap_info = if params.has_address_gaps && chunk_len == 0 {
         params.doc.address_map.gap_before_offset(offset)
     } else {
         None
@@ -1753,8 +1760,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
     let pending_byte_char_start = pending_edit_colors.map(|(p, _, _)| p);
 
-    let mut group_visuals: Vec<(Option<Hsla>, bool, bool)> = Vec::with_capacity(hex_source_ref.groups.len());
-    let mut group_text_colors: Vec<Hsla> = Vec::with_capacity(hex_source_ref.groups.len());
+    params.scratch.group_visuals.clear();
+    params.scratch.group_text_colors.clear();
 
     for group in &hex_source_ref.groups {
         let item_start_offset = offset + group.chunk_start;
@@ -1786,9 +1793,12 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             |fg, bg| contrast_cache.get_or_compute(fg, bg, |f, b| ensure_contrast(f, b, 4.5)),
         );
 
-        group_visuals.push((current_hl_color, is_selected, is_cursor));
-        group_text_colors.push(text_color);
+        params.scratch.group_visuals.push((current_hl_color, is_selected, is_cursor));
+        params.scratch.group_text_colors.push(text_color);
     }
+
+    let group_visuals = params.scratch.group_visuals.as_slice();
+    let group_text_colors = params.scratch.group_text_colors.as_slice();
 
     let text_origin_x = hex_start_x - px(params.hex_scroll_x);
     let total_data_width = f32::from(hex_grid_width(hex_source_ref.text.len(), params.hex_cell_width));
@@ -1958,7 +1968,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             if let Some(hex_glyphs) = hex_glyphs_ref {
                 paint_centered_hex_glyphs(
                     hex_glyphs,
-                    &group_text_colors,
+                    group_text_colors,
                     pending_edit_colors,
                     params.hex_cell_width,
                     point(text_origin_x, params.bounds.top() + px(2.0)),
@@ -2055,11 +2065,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
             window.with_content_mask(Some(ContentMask { bounds: ascii_mask_bounds }), |window| {
                 let group_bytes = params.group_size.byte_count();
                 let has_ascii_glyphs = cached.ascii_glyphs.is_some();
-                let mut ascii_cell_colors: Vec<Hsla> = if has_ascii_glyphs {
-                    Vec::with_capacity(cached.ascii_cells.len())
-                } else {
-                    Vec::new()
-                };
+                let ascii_cell_colors = &mut params.scratch.ascii_cell_colors;
+                ascii_cell_colors.clear();
                 let mut cell_cursor = 0;
                 let cells = &cached.ascii_cells;
                 let (sel_start_j, sel_end_j) = if params.min_sel <= params.max_sel {
@@ -2181,7 +2188,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 if let Some(ref ascii_glyphs) = cached.ascii_glyphs {
                     paint_centered_ascii_glyphs(
                         ascii_glyphs,
-                        &ascii_cell_colors,
+                        ascii_cell_colors,
                         point(ascii_content_start_x, params.bounds.top() + px(2.0)),
                         line_height,
                         window,

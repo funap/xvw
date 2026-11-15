@@ -210,6 +210,7 @@ pub struct HexView {
     cached_desc_palette: CachedDescPalette,
     cached_active_leaf_field: std::rc::Rc<std::cell::RefCell<CachedActiveLeafField>>,
     row_cache: std::rc::Rc<std::cell::RefCell<RowRenderCache>>,
+    paint_row_scratch: std::rc::Rc<std::cell::RefCell<PaintRowScratch>>,
     cursor_reveal_pending: bool,
     pub category_palette: Option<ByteCategoryPalette>,
     _editor_subscription: Subscription,
@@ -241,6 +242,7 @@ impl HexView {
         let cached_desc_palette = std::rc::Rc::new(std::cell::Cell::new(None));
         let cached_active_leaf_field = std::rc::Rc::new(std::cell::RefCell::new(CachedActiveLeafField::default()));
         let row_cache = std::rc::Rc::new(std::cell::RefCell::new(RowRenderCache::default()));
+        let paint_row_scratch = std::rc::Rc::new(std::cell::RefCell::new(PaintRowScratch::default()));
         let effective_highlights_cache = std::rc::Rc::new(std::cell::RefCell::new(EffectiveHighlightsCache::default()));
         let font_size_prop = px(14.0);
         let hex_col_width = 0.0;
@@ -424,6 +426,7 @@ impl HexView {
             cached_desc_palette,
             cached_active_leaf_field,
             row_cache,
+            paint_row_scratch,
             cursor_reveal_pending: true,
             category_palette: None,
             _editor_subscription,
@@ -3900,6 +3903,7 @@ impl Render for HexView {
                 let cached_desc_palette = self.cached_desc_palette.clone();
                 let cached_active_leaf_field = self.cached_active_leaf_field.clone();
                 let row_cache = self.row_cache.clone();
+                let paint_row_scratch = self.paint_row_scratch.clone();
 
                 canvas(
                     move |bounds, _window, cx| {
@@ -3981,6 +3985,8 @@ impl Render for HexView {
                         let top_row = scroll_offset.min(total_rows.saturating_sub(1));
                         let end_row = (top_row + visible_rows).min(total_rows);
                         let total_size = doc.buffer.len();
+                        let has_folded_bookmarks = doc.has_folded_regions();
+                        let has_address_gaps = doc.address_map.has_gaps();
                         let vp_start = line_starts.get(top_row).unwrap_or(total_size);
                         let vp_end = if end_row < line_starts.len() {
                             line_starts.get(end_row).unwrap_or(total_size)
@@ -4032,6 +4038,7 @@ impl Render for HexView {
                         let parse_result_ptr = parse_result.as_ref().map(|p| Arc::as_ptr(p) as usize).unwrap_or(0);
                         let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
                         let mut cache_borrow = row_cache.borrow_mut();
+                        let mut scratch_borrow = paint_row_scratch.borrow_mut();
                         cache_borrow.validate(
                             doc.history.state_id(),
                             doc.layout_version(),
@@ -4111,8 +4118,11 @@ impl Render for HexView {
                                     font_size,
                                     desc_palette,
                                     active_leaf_field,
+                                    has_folded_bookmarks,
+                                    has_address_gaps,
                                     theme_colors: &theme_colors,
                                     row_cache: &mut cache_borrow,
+                                    scratch: &mut scratch_borrow,
                                 },
                                 window,
                                 cx,
