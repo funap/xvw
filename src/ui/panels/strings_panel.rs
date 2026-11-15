@@ -14,6 +14,7 @@ use gpui_kit::component::{ActiveTheme as _, Disableable, Sizable, Size, WindowEx
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 actions!(strings_panel, [FocusTable, ClearResults, ConfirmSelect, DismissTable]);
 
@@ -49,7 +50,7 @@ struct ScanSignature {
 }
 
 struct CachedStringsState {
-    results: Vec<StringMatch>,
+    results: Arc<[StringMatch]>,
     is_truncated: bool,
     selected_index: Option<usize>,
     has_scanned: bool,
@@ -63,9 +64,46 @@ pub enum StringsPanelEvent {
     FocusEditor,
 }
 
+#[inline]
+fn contains_ignore_case(haystack: &str, lowercase_needle: &str) -> bool {
+    if lowercase_needle.is_empty() {
+        return true;
+    }
+    if haystack.is_ascii() && lowercase_needle.is_ascii() {
+        let h = haystack.as_bytes();
+        let n = lowercase_needle.as_bytes();
+        return h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n));
+    }
+    haystack.to_lowercase().contains(lowercase_needle)
+}
+
+fn sort_string_indices(results: &[StringMatch], indices: &mut [usize], sort_column: Option<(usize, ColumnSort)>) {
+    let Some((col_ix, sort)) = sort_column else {
+        indices.sort_unstable();
+        return;
+    };
+    if sort == ColumnSort::Default {
+        indices.sort_unstable();
+        return;
+    }
+
+    indices.sort_by(|left, right| {
+        let left_match = &results[*left];
+        let right_match = &results[*right];
+        let ordering = match col_ix {
+            0 => left_match.offset.cmp(&right_match.offset),
+            1 => left_match.byte_len.cmp(&right_match.byte_len),
+            2 => left_match.text.cmp(&right_match.text),
+            _ => std::cmp::Ordering::Equal,
+        };
+        let ordering = if sort == ColumnSort::Descending { ordering.reverse() } else { ordering };
+        ordering.then_with(|| left.cmp(right))
+    });
+}
+
 pub struct StringsTableDelegate {
     panel: WeakEntity<StringsPanel>,
-    results: Vec<StringMatch>,
+    results: Arc<[StringMatch]>,
     visible_indices: Vec<usize>,
     sort_column: Option<(usize, ColumnSort)>,
     editor: Option<Entity<Editor>>,
@@ -75,27 +113,7 @@ pub struct StringsTableDelegate {
 
 impl StringsTableDelegate {
     fn sort_indices(&mut self) {
-        let Some((col_ix, sort)) = self.sort_column else {
-            self.visible_indices.sort();
-            return;
-        };
-        if sort == ColumnSort::Default {
-            self.visible_indices.sort();
-            return;
-        }
-
-        self.visible_indices.sort_by(|left, right| {
-            let left_match = &self.results[*left];
-            let right_match = &self.results[*right];
-            let ordering = match col_ix {
-                0 => left_match.offset.cmp(&right_match.offset),
-                1 => left_match.byte_len.cmp(&right_match.byte_len),
-                2 => left_match.text.cmp(&right_match.text),
-                _ => std::cmp::Ordering::Equal,
-            };
-            let ordering = if sort == ColumnSort::Descending { ordering.reverse() } else { ordering };
-            ordering.then_with(|| left.cmp(right))
-        });
+        sort_string_indices(&self.results, &mut self.visible_indices, self.sort_column);
     }
 }
 
@@ -238,7 +256,7 @@ pub struct StringsPanel {
     pub min_length_input: Entity<InputState>,
     pub filter_input: Entity<InputState>,
     pub is_scanning: bool,
-    pub results: Vec<StringMatch>,
+    pub results: Arc<[StringMatch]>,
     pub is_truncated: bool,
     pub selected_index: Option<usize>,
     pub has_scanned: bool,
@@ -262,7 +280,7 @@ impl StringsPanel {
         let view = cx.entity().downgrade();
         let delegate = StringsTableDelegate {
             panel: view,
-            results: Vec::new(),
+            results: Arc::default(),
             visible_indices: Vec::new(),
             sort_column: None,
             editor: None,
@@ -279,17 +297,15 @@ impl StringsPanel {
 
         let table_subscription = cx.subscribe_in(&table_state, window, |this, _, event: &TableEvent, window, cx| match event {
             TableEvent::SelectRow(row_ix) => {
-                let visible_indices = this.sorted_indices(cx);
-                if let Some(&index) = visible_indices.get(*row_ix)
+                if let Some(index) = this.resolve_visible_row_index(*row_ix, cx)
                     && this.selected_index != Some(index)
                 {
-                    this.select_item(index, cx);
+                    this.select_item_at_row(index, Some(*row_ix), cx);
                 }
             }
             TableEvent::DoubleClickedRow(row_ix) => {
-                let visible_indices = this.sorted_indices(cx);
-                if let Some(&index) = visible_indices.get(*row_ix) {
-                    this.select_item(index, cx);
+                if let Some(index) = this.resolve_visible_row_index(*row_ix, cx) {
+                    this.select_item_at_row(index, Some(*row_ix), cx);
                     cx.emit(StringsPanelEvent::FocusEditor);
                     window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
                 }
@@ -326,7 +342,7 @@ impl StringsPanel {
             min_length_input,
             filter_input,
             is_scanning: false,
-            results: Vec::new(),
+            results: Arc::default(),
             is_truncated: false,
             selected_index: None,
             has_scanned: false,
@@ -421,20 +437,19 @@ impl StringsPanel {
     fn scan_if_content_changed(&mut self, cx: &mut Context<Self>) {
         let signature = self.current_signature(cx);
         if signature == self.scan_signature {
-            cx.notify();
-        } else {
-            self.invalidate_scan();
-            self.scan_signature = signature;
-            self.sync_selection_to_filter(cx);
-            cx.notify();
+            return;
         }
+        self.invalidate_scan();
+        self.scan_signature = signature;
+        self.sync_selection_to_filter(cx);
+        cx.notify();
     }
 
     fn invalidate_scan(&mut self) {
         self.scan_generation = self.scan_generation.wrapping_add(1);
         self.scan_task = None;
         self.is_scanning = false;
-        self.results.clear();
+        self.results = Arc::default();
         self.is_truncated = false;
         self.selected_index = None;
         self.has_scanned = false;
@@ -482,7 +497,7 @@ impl StringsPanel {
                     this.scan_task = None;
                     this.is_scanning = false;
                     this.is_truncated = is_truncated;
-                    this.results = results;
+                    this.results = Arc::from(results);
                     this.has_scanned = true;
                     this.sync_selection_to_filter(cx);
                     cx.notify();
@@ -511,34 +526,21 @@ impl StringsPanel {
         self.results
             .iter()
             .enumerate()
-            .filter(|(_, item)| item.text.to_lowercase().contains(&filter))
+            .filter(|(_, item)| contains_ignore_case(&item.text, &filter))
             .map(|(index, _)| index)
             .collect()
     }
 
     fn sorted_indices(&self, cx: &App) -> Vec<usize> {
         let mut indices = self.filtered_indices(cx);
-
-        let Some((col_ix, sort)) = self.sort_column else {
-            return indices;
-        };
-        if sort == ColumnSort::Default {
-            return indices;
+        if self.sort_column.is_some_and(|(_, sort)| sort != ColumnSort::Default) {
+            sort_string_indices(&self.results, &mut indices, self.sort_column);
         }
-
-        indices.sort_by(|left, right| {
-            let left_match = &self.results[*left];
-            let right_match = &self.results[*right];
-            let ordering = match col_ix {
-                0 => left_match.offset.cmp(&right_match.offset),
-                1 => left_match.byte_len.cmp(&right_match.byte_len),
-                2 => left_match.text.cmp(&right_match.text),
-                _ => std::cmp::Ordering::Equal,
-            };
-            let ordering = if sort == ColumnSort::Descending { ordering.reverse() } else { ordering };
-            ordering.then_with(|| left.cmp(right))
-        });
         indices
+    }
+
+    fn resolve_visible_row_index(&self, row_ix: usize, cx: &App) -> Option<usize> {
+        self.table_state.read(cx).delegate().visible_indices.get(row_ix).copied()
     }
 
     fn result_summary(&self) -> String {
@@ -561,7 +563,7 @@ impl StringsPanel {
         }
 
         let row_ix = self.selected_index.and_then(|idx| visible_indices.iter().position(|&i| i == idx));
-        let results = self.results.clone();
+        let results = Arc::clone(&self.results);
         let editor = self.editor.clone();
         let sort_column = self.sort_column;
         let selected_index = self.selected_index;
@@ -582,8 +584,9 @@ impl StringsPanel {
         });
     }
 
-    pub fn select_item(&mut self, index: usize, cx: &mut Context<Self>) {
+    fn select_item_at_row(&mut self, index: usize, known_row_ix: Option<usize>, cx: &mut Context<Self>) {
         if let Some(item) = self.results.get(index) {
+            let selection_changed = self.selected_index != Some(index);
             self.selected_index = Some(index);
             let offset = item.offset;
             let len = item.byte_len;
@@ -591,8 +594,12 @@ impl StringsPanel {
             let table_state = self.table_state.clone();
             cx.defer(move |cx| {
                 table_state.update(cx, |table, cx| {
-                    table.delegate_mut().selected_index = Some(index);
-                    let row_ix = table.delegate().visible_indices.iter().position(|&i| i == index);
+                    if table.delegate().selected_index != Some(index) {
+                        table.delegate_mut().selected_index = Some(index);
+                    }
+                    let row_ix = known_row_ix
+                        .filter(|&row| table.delegate().visible_indices.get(row) == Some(&index))
+                        .or_else(|| table.delegate().visible_indices.iter().position(|&i| i == index));
                     if let Some(row_ix) = row_ix
                         && table.selected_row() != Some(row_ix)
                     {
@@ -603,17 +610,25 @@ impl StringsPanel {
 
             if let Some(ed) = &self.editor {
                 ed.update(cx, |editor, cx| {
+                    let prev_cursor = editor.cursor.offset;
+                    let prev_selection = editor.selection_range();
                     if len > 0 {
                         editor.set_selection_range(offset..offset.saturating_add(len));
                     } else {
                         editor.set_cursor_offset(offset);
                     }
-                    cx.notify();
+                    if editor.cursor.offset != prev_cursor || editor.selection_range() != prev_selection {
+                        cx.notify();
+                    }
                 });
             }
             cx.emit(StringsPanelEvent::NavigateTo { offset, len });
+            if selection_changed {
+                cx.notify();
+            }
+        } else {
+            cx.notify();
         }
-        cx.notify();
     }
 
     fn copy_address(&mut self, action: &CopyAddress, window: &mut Window, cx: &mut Context<Self>) {
@@ -627,8 +642,7 @@ impl StringsPanel {
     }
 
     fn focus_table(&mut self, _: &FocusTable, window: &mut Window, cx: &mut Context<Self>) {
-        let visible_indices = self.sorted_indices(cx);
-        if !visible_indices.is_empty() {
+        if !self.table_state.read(cx).delegate().visible_indices.is_empty() {
             let focus_handle = self.table_state.read(cx).focus_handle(cx);
             focus_handle.focus(window, cx);
             cx.notify();
@@ -636,11 +650,15 @@ impl StringsPanel {
     }
 
     fn confirm_select(&mut self, _: &ConfirmSelect, window: &mut Window, cx: &mut Context<Self>) {
-        let visible_indices = self.sorted_indices(cx);
-        if let Some(index) = self.selected_index.filter(|index| visible_indices.contains(index)) {
-            self.select_item(index, cx);
-        } else if let Some(&index) = visible_indices.first() {
-            self.select_item(index, cx);
+        let target = {
+            let table = self.table_state.read(cx);
+            let visible_indices = &table.delegate().visible_indices;
+            self.selected_index
+                .and_then(|index| visible_indices.iter().position(|&i| i == index).map(|row| (index, row)))
+                .or_else(|| visible_indices.first().copied().map(|index| (index, 0)))
+        };
+        if let Some((index, row_ix)) = target {
+            self.select_item_at_row(index, Some(row_ix), cx);
         }
         cx.emit(StringsPanelEvent::FocusEditor);
         window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
@@ -992,5 +1010,50 @@ mod tests {
         let pred_desc = gpui_kit::KeyBindingContextPredicate::parse("StringsPanel > DataTable").unwrap();
         assert!(pred_desc.eval(&contexts));
         assert_eq!(pred_desc.depth_of(&contexts), Some(2));
+    }
+
+    #[test]
+    fn test_contains_ignore_case_ascii_and_unicode() {
+        use super::contains_ignore_case;
+        assert!(contains_ignore_case("HelloWorld", ""));
+        assert!(contains_ignore_case("HelloWorld", "world"));
+        assert!(!contains_ignore_case("Hi", "hello"));
+        assert!(contains_ignore_case("Café_MENU", "café"));
+        assert!(contains_ignore_case("日本語Test", "test"));
+    }
+
+    #[test]
+    fn test_sort_string_indices_all_columns() {
+        use super::{ColumnSort, StringMatch, sort_string_indices};
+        let results = vec![
+            StringMatch {
+                offset: 0x30,
+                byte_len: 3,
+                text: "bbb".into(),
+            },
+            StringMatch {
+                offset: 0x10,
+                byte_len: 10,
+                text: "ccc".into(),
+            },
+            StringMatch {
+                offset: 0x20,
+                byte_len: 5,
+                text: "aaa".into(),
+            },
+        ];
+
+        let mut indices = vec![0, 1, 2];
+        sort_string_indices(&results, &mut indices, Some((0, ColumnSort::Ascending)));
+        assert_eq!(indices, vec![1, 2, 0]);
+
+        sort_string_indices(&results, &mut indices, Some((1, ColumnSort::Descending)));
+        assert_eq!(indices, vec![1, 2, 0]);
+
+        sort_string_indices(&results, &mut indices, Some((2, ColumnSort::Ascending)));
+        assert_eq!(indices, vec![2, 0, 1]);
+
+        sort_string_indices(&results, &mut indices, Some((2, ColumnSort::Default)));
+        assert_eq!(indices, vec![0, 1, 2]);
     }
 }
