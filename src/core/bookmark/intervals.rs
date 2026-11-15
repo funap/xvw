@@ -72,6 +72,7 @@ impl BookmarkStore {
         self.bump_version();
     }
 
+    #[cfg(test)]
     pub fn custom_bookmarks_for_rendering(&self) -> Vec<(Range<usize>, RgbaColor)> {
         self.items.iter().map(|h| (h.range(), h.rgba_color())).collect()
     }

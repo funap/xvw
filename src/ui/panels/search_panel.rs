@@ -420,7 +420,7 @@ impl SearchPanel {
                     if let Some(ed) = &this.editor {
                         let generation = ed.read(cx).search_state.generation;
                         ed.update(cx, |editor, cx| {
-                            editor.search_state_mut().set_results(offsets, generation, true);
+                            editor.search_state_mut().set_results(offsets, generation, !is_truncated);
                             cx.notify();
                         });
                     }

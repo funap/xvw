@@ -498,7 +498,9 @@ impl RowRenderCache {
     }
 }
 
-/// Merges sorted bookmark highlights and search highlights by start offset, matching `BookmarkItem` precedence on exact ties.
+/// Merges sorted bookmark highlights and overlay highlights (search/diff) by range.
+/// On identical ranges, bookmarks are emitted before overlays so `<=` tie-breaking in
+/// `highlight_color_for_range` lets search/diff overlays stay visible on top of bookmarks.
 fn merge_sorted_highlights(bookmark_items: &[BookmarkItem], highlights: &[(Range<usize>, Hsla)], out: &mut Vec<(Range<usize>, Hsla)>) {
     if highlights.is_empty() {
         out.reserve(bookmark_items.len());
@@ -519,10 +521,6 @@ fn merge_sorted_highlights(bookmark_items: &[BookmarkItem], highlights: &[(Range
             b_iter.next();
         } else if hr.start < br.start {
             out.push((hr.clone(), *hc));
-            h_iter.next();
-        } else if br == *hr {
-            out.push((br, b.rgba_color().into()));
-            b_iter.next();
             h_iter.next();
         } else if br.end <= hr.end {
             out.push((br, b.rgba_color().into()));
@@ -708,6 +706,13 @@ mod tests {
         let ptr_before = cache.items.as_ptr();
         cache.ensure_updated(1, &[], 1, &[]);
         assert_eq!(cache.items.as_ptr(), ptr_before);
+
+        // Exact-range overlay highlights stay ordered after equal bookmark items so search highlights win ties.
+        let tied_bookmark = BookmarkItem::new(16, 4, BookmarkColor::Blue, "");
+        let tied_search_color = hsla(0.5, 0.8, 0.5, 1.0);
+        let mut tied_cache = EffectiveHighlightsCache::default();
+        tied_cache.ensure_updated(2, std::slice::from_ref(&tied_bookmark), 2, &[(16..20, tied_search_color)]);
+        assert_eq!(tied_cache.items, vec![(16..20, tied_bookmark.rgba_color().into()), (16..20, tied_search_color)]);
     }
 
     #[test]

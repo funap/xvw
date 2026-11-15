@@ -57,7 +57,6 @@ pub fn init(cx: &mut App) {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct HighlightSyncState {
-    bookmark_version: u64,
     cursor_offset: Option<usize>,
     search_generation: usize,
     search_current_result: Option<usize>,
@@ -70,7 +69,6 @@ struct HighlightSyncState {
 impl HighlightSyncState {
     fn from_snapshot(ed: &Editor, has_search: bool, scroll_top_row: Option<usize>) -> Self {
         Self {
-            bookmark_version: ed.bookmarks().version(),
             cursor_offset: Some(ed.cursor.offset),
             search_generation: ed.search_state.generation,
             search_current_result: ed.search_state.current_result(),
@@ -86,10 +84,9 @@ impl HighlightSyncState {
             || self.search_current_result != last.search_current_result
             || self.search_results_len != last.search_results_len;
         let find_changed = self.find_generation != last.find_generation;
-        let bookmark_changed = self.bookmark_version != last.bookmark_version;
         let cursor_changed_with_search = self.has_search && self.cursor_offset != last.cursor_offset;
         let search_visibility_changed = self.has_search != last.has_search;
-        bookmark_changed || cursor_changed_with_search || search_changed || find_changed || search_visibility_changed
+        cursor_changed_with_search || search_changed || find_changed || search_visibility_changed
     }
 
     fn needs_scroll_refresh(self, last: Self) -> bool {
@@ -486,17 +483,15 @@ impl EditorView {
     fn update_highlights(&mut self, cx: &mut Context<Self>) {
         let scroll_top_row = Some(self.hex_view.read(cx).current_scroll_top_row());
         let editor = self.editor.read(cx);
-        self.last_highlight_sync = self.capture_highlight_sync_state(editor, scroll_top_row, cx);
-        let mut highlights = Vec::new();
+        let sync_state = self.capture_highlight_sync_state(editor, scroll_top_row, cx);
+        self.last_highlight_sync = sync_state;
 
-        // 1. Add user custom bookmarks from editor
-        highlights.extend(
-            editor
-                .bookmarks()
-                .custom_bookmarks_for_rendering()
-                .into_iter()
-                .map(|(range, color)| (range, color.into())),
-        );
+        if !sync_state.has_search {
+            self.hex_view.update(cx, |view, cx| {
+                view.set_highlights(Vec::new(), cx);
+            });
+            return;
+        }
 
         let (start, end) = self.hex_view.read(cx).viewport_byte_range(cx);
         let theme = cx.theme();
@@ -505,7 +500,7 @@ impl EditorView {
             let data = doc.buffer.data();
             let segments = doc.address_map.segment_ranges();
 
-            // 2. Scan SearchPanel highlights (if search_state has a query)
+            // 1. Scan SearchPanel highlights (if search_state has a query)
             let search_hl = if !editor.search_state.query.is_empty() {
                 let pattern = match editor.search_state.mode {
                     SearchMode::Text => crate::core::search::parse_text_pattern(&editor.search_state.query, editor.options.encoding),
@@ -593,8 +588,8 @@ impl EditorView {
             (Vec::new(), Vec::new())
         };
 
-        // 4. Merge highlights: Find Widget highlights take precedence over SearchPanel highlights where they overlap
-        highlights.extend(compose_search_highlights(search_highlights, find_highlights));
+        // Merge highlights: Find Widget highlights take precedence over SearchPanel highlights where they overlap
+        let highlights = compose_search_highlights(search_highlights, find_highlights);
 
         self.hex_view.update(cx, |view, cx| {
             view.set_highlights(highlights, cx);
@@ -1227,6 +1222,12 @@ impl crate::ui::pane::WorkspaceTab for Entity<EditorView> {
 /// Composes search panel highlights and find widget highlights, giving precedence
 /// to find widget highlights where they overlap.
 pub fn compose_search_highlights(search_panel_highlights: Vec<(Range<usize>, Hsla)>, find_highlights: Vec<(Range<usize>, Hsla)>) -> Vec<(Range<usize>, Hsla)> {
+    if find_highlights.is_empty() {
+        return search_panel_highlights;
+    }
+    if search_panel_highlights.is_empty() {
+        return find_highlights;
+    }
     let find_mask: Vec<Range<usize>> = find_highlights.iter().map(|(r, _)| r.clone()).collect();
     let effective_search_highlights = subtract_ranges(search_panel_highlights, &find_mask);
     let mut combined = effective_search_highlights;
@@ -1404,7 +1405,6 @@ mod tests {
     #[test]
     fn test_highlight_sync_state_skips_redundant_scroll_after_editor_refresh() {
         let last = super::HighlightSyncState {
-            bookmark_version: 2,
             cursor_offset: Some(0x2000),
             search_generation: 5,
             search_current_result: Some(0x2000),

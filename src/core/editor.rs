@@ -68,10 +68,6 @@ impl<'a> BookmarkSessionRef<'a> {
         self.guard.metadata.bookmarks.by_id_cloned(id)
     }
 
-    pub fn custom_bookmarks_for_rendering(&self) -> Vec<(Range<usize>, RgbaColor)> {
-        self.guard.metadata.bookmarks.custom_bookmarks_for_rendering()
-    }
-
     pub fn to_yaml(&self) -> anyhow::Result<String> {
         self.guard.metadata.bookmarks.to_yaml(Some(self.guard.path()))
     }
