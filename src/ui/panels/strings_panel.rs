@@ -1,3 +1,4 @@
+use crate::core::address_map::AddressMap;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::format::HexCase;
@@ -49,8 +50,72 @@ struct ScanSignature {
     byte_len: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StringCellMeta {
+    size_label: SharedString,
+    preview: SharedString,
+    preview_char_count: usize,
+}
+
+fn build_string_cell_meta(results: &[StringMatch]) -> Arc<[StringCellMeta]> {
+    results
+        .iter()
+        .map(|item| {
+            let preview_cow = preview_text(&item.text);
+            let preview_char_count = preview_cow.chars().count();
+            let preview = match preview_cow {
+                std::borrow::Cow::Borrowed(_) => SharedString::from(item.text.clone()),
+                std::borrow::Cow::Owned(s) => SharedString::from(s),
+            };
+            StringCellMeta {
+                size_label: SharedString::from(item.byte_len.to_string()),
+                preview,
+                preview_char_count,
+            }
+        })
+        .collect::<Vec<_>>()
+        .into()
+}
+
+struct AddressLabelCache {
+    results_id: u64,
+    editor_id: Option<EntityId>,
+    hex_case: HexCase,
+    address_map: AddressMap,
+    labels: Vec<Option<SharedString>>,
+}
+
+impl AddressLabelCache {
+    fn new(results_id: u64, editor_id: Option<EntityId>, hex_case: HexCase, address_map: AddressMap, len: usize) -> Self {
+        Self {
+            results_id,
+            editor_id,
+            hex_case,
+            address_map,
+            labels: vec![None; len],
+        }
+    }
+
+    fn matches(&self, results_id: u64, editor_id: Option<EntityId>, hex_case: HexCase, len: usize) -> bool {
+        self.results_id == results_id && self.editor_id == editor_id && self.hex_case == hex_case && self.labels.len() == len
+    }
+
+    fn get_or_format(&mut self, index: usize, offset: usize) -> SharedString {
+        if let Some(Some(cached)) = self.labels.get(index) {
+            return cached.clone();
+        }
+        let formatted: SharedString = self.hex_case.format_prefixed_pad(self.address_map.offset_to_address(offset), 8).into();
+        if let Some(slot) = self.labels.get_mut(index) {
+            *slot = Some(formatted.clone());
+        }
+        formatted
+    }
+}
+
 struct CachedStringsState {
+    results_id: u64,
     results: Arc<[StringMatch]>,
+    cell_meta: Arc<[StringCellMeta]>,
     is_truncated: bool,
     selected_index: Option<usize>,
     has_scanned: bool,
@@ -103,10 +168,13 @@ fn sort_string_indices(results: &[StringMatch], indices: &mut [usize], sort_colu
 
 pub struct StringsTableDelegate {
     panel: WeakEntity<StringsPanel>,
+    results_id: u64,
     results: Arc<[StringMatch]>,
+    cell_meta: Arc<[StringCellMeta]>,
     visible_indices: Vec<usize>,
     sort_column: Option<(usize, ColumnSort)>,
     editor: Option<Entity<Editor>>,
+    address_cache: Option<AddressLabelCache>,
     selected_index: Option<usize>,
     focus_handle: FocusHandle,
 }
@@ -116,11 +184,28 @@ impl StringsTableDelegate {
         sort_string_indices(&self.results, &mut self.visible_indices, self.sort_column);
     }
 
-    fn display_address(&self, offset: usize, cx: &App) -> usize {
-        self.editor
+    fn ensure_address_cache(&mut self, hex_case: HexCase, cx: &App) -> &mut AddressLabelCache {
+        let editor_id = self.editor.as_ref().map(Entity::entity_id);
+        let len = self.results.len();
+        let needs_rebuild = !self
+            .address_cache
             .as_ref()
-            .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.offset_to_address(offset)))
-            .unwrap_or_else(|| crate::core::address_map::AddressMap::default().offset_to_address(offset))
+            .is_some_and(|cache| cache.matches(self.results_id, editor_id, hex_case, len));
+        if needs_rebuild {
+            let address_map = self
+                .editor
+                .as_ref()
+                .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
+                .unwrap_or_default();
+            self.address_cache = Some(AddressLabelCache::new(self.results_id, editor_id, hex_case, address_map, len));
+        }
+        self.address_cache.as_mut().expect("address cache initialized")
+    }
+
+    fn cached_address_label(&mut self, index: usize, hex_case: HexCase, cx: &App) -> Option<SharedString> {
+        let offset = self.results.get(index)?.offset;
+        let cache = self.ensure_address_cache(hex_case, cx);
+        Some(cache.get_or_format(index, offset))
     }
 }
 
@@ -166,31 +251,29 @@ impl TableDelegate for StringsTableDelegate {
         let max_len = match col_ix {
             0 => {
                 let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
-                let default_map = crate::core::address_map::AddressMap::default();
-                let doc = self.editor.as_ref().and_then(|ed| ed.read(cx).document.read().ok());
-                let address_map = doc.as_ref().map_or(&default_map, |d| &d.address_map);
-                self.visible_indices
-                    .iter()
-                    .take(128)
-                    .filter_map(|&index| self.results.get(index))
-                    .map(|item| hex_case.format_prefixed_pad(address_map.offset_to_address(item.offset), 8).chars().count())
-                    .max()
-                    .unwrap_or(0)
+                let mut max_chars = 0usize;
+                for row_pos in 0..self.visible_indices.len().min(128) {
+                    let index = self.visible_indices[row_pos];
+                    if let Some(label) = self.cached_address_label(index, hex_case, cx) {
+                        max_chars = max_chars.max(label.chars().count());
+                    }
+                }
+                max_chars
             }
             1 => self
                 .visible_indices
                 .iter()
                 .take(128)
-                .filter_map(|&index| self.results.get(index))
-                .map(|item| if item.byte_len == 0 { 1 } else { item.byte_len.ilog10() as usize + 1 })
+                .filter_map(|&index| self.cell_meta.get(index))
+                .map(|meta| meta.size_label.len())
                 .max()
                 .unwrap_or(0),
             2 => self
                 .visible_indices
                 .iter()
                 .take(128)
-                .filter_map(|&index| self.results.get(index))
-                .map(|item| preview_text(&item.text).chars().count())
+                .filter_map(|&index| self.cell_meta.get(index))
+                .map(|meta| meta.preview_char_count)
                 .max()
                 .unwrap_or(0),
             _ => 0,
@@ -203,12 +286,15 @@ impl TableDelegate for StringsTableDelegate {
         let Some(&index) = self.visible_indices.get(row_ix) else {
             return menu;
         };
-        let Some(item) = self.results.get(index) else {
-            return menu;
+        let text_value = match self.results.get(index) {
+            Some(item) => item.text.clone(),
+            None => return menu,
         };
         let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
-        let offset_value = hex_case.format_prefixed_pad(self.display_address(item.offset, cx), 8);
-        let text_value = item.text.clone();
+        let offset_value = self
+            .cached_address_label(index, hex_case, cx)
+            .map(|label| label.to_string())
+            .unwrap_or_default();
 
         menu.action_context(self.focus_handle.clone())
             .menu_with_icon("Copy Address", IconName::Hash, Box::new(CopyAddress { value: offset_value }))
@@ -222,22 +308,35 @@ impl TableDelegate for StringsTableDelegate {
         let Some(&index) = self.visible_indices.get(row_ix) else {
             return div().into_any_element();
         };
-        let Some(item) = self.results.get(index) else {
+        if index >= self.results.len() {
             return div().into_any_element();
-        };
+        }
 
         let theme = cx.theme();
         let font_family = cx.global::<Appearance>().font_family.clone();
         let is_selected = self.selected_index == Some(index);
         let colors = strings_row_colors(is_selected, false, theme);
 
-        let (color, text) = match col_ix {
+        let (color, text): (Hsla, SharedString) = match col_ix {
             0 => {
                 let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
-                (colors.address_color, hex_case.format_prefixed_pad(self.display_address(item.offset, cx), 8))
+                let Some(addr) = self.cached_address_label(index, hex_case, cx) else {
+                    return div().into_any_element();
+                };
+                (colors.address_color, addr)
             }
-            1 => (colors.size_color, item.byte_len.to_string()),
-            2 => (colors.value_color, preview_text(&item.text).into_owned()),
+            1 => {
+                let Some(meta) = self.cell_meta.get(index) else {
+                    return div().into_any_element();
+                };
+                (colors.size_color, meta.size_label.clone())
+            }
+            2 => {
+                let Some(meta) = self.cell_meta.get(index) else {
+                    return div().into_any_element();
+                };
+                (colors.value_color, meta.preview.clone())
+            }
             _ => return div().into_any_element(),
         };
 
@@ -253,6 +352,9 @@ pub struct StringsPanel {
     pub filter_input: Entity<InputState>,
     pub is_scanning: bool,
     pub results: Arc<[StringMatch]>,
+    cell_meta: Arc<[StringCellMeta]>,
+    results_id: u64,
+    next_results_id: u64,
     pub is_truncated: bool,
     pub selected_index: Option<usize>,
     pub has_scanned: bool,
@@ -276,10 +378,13 @@ impl StringsPanel {
         let view = cx.entity().downgrade();
         let delegate = StringsTableDelegate {
             panel: view,
+            results_id: 0,
             results: Arc::default(),
+            cell_meta: Arc::default(),
             visible_indices: Vec::new(),
             sort_column: None,
             editor: None,
+            address_cache: None,
             selected_index: None,
             focus_handle: focus_handle.clone(),
         };
@@ -296,12 +401,12 @@ impl StringsPanel {
                 if let Some(index) = this.resolve_visible_row_index(*row_ix, cx)
                     && this.selected_index != Some(index)
                 {
-                    this.select_item_at_row(index, Some(*row_ix), cx);
+                    this.select_item_at_row(index, Some(*row_ix), true, cx);
                 }
             }
             TableEvent::DoubleClickedRow(row_ix) => {
                 if let Some(index) = this.resolve_visible_row_index(*row_ix, cx) {
-                    this.select_item_at_row(index, Some(*row_ix), cx);
+                    this.select_item_at_row(index, Some(*row_ix), false, cx);
                     cx.emit(StringsPanelEvent::FocusEditor);
                     window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
                 }
@@ -339,6 +444,9 @@ impl StringsPanel {
             filter_input,
             is_scanning: false,
             results: Arc::default(),
+            cell_meta: Arc::default(),
+            results_id: 0,
+            next_results_id: 1,
             is_truncated: false,
             selected_index: None,
             has_scanned: false,
@@ -384,6 +492,12 @@ impl StringsPanel {
         cx.notify();
     }
 
+    fn alloc_results_id(&mut self) -> u64 {
+        let id = self.next_results_id;
+        self.next_results_id = self.next_results_id.wrapping_add(1).max(1);
+        id
+    }
+
     fn cache_current_state(&mut self) {
         let Some(editor) = &self.editor else {
             return;
@@ -392,7 +506,9 @@ impl StringsPanel {
         self.cached_states.insert(
             editor.entity_id(),
             CachedStringsState {
+                results_id: self.results_id,
                 results: std::mem::take(&mut self.results),
+                cell_meta: std::mem::take(&mut self.cell_meta),
                 is_truncated: self.is_truncated,
                 selected_index: self.selected_index,
                 has_scanned: self.has_scanned,
@@ -412,7 +528,9 @@ impl StringsPanel {
             return;
         }
 
+        self.results_id = cached.results_id;
         self.results = cached.results;
+        self.cell_meta = cached.cell_meta;
         self.is_truncated = cached.is_truncated;
         self.selected_index = cached.selected_index;
         self.has_scanned = cached.has_scanned;
@@ -445,7 +563,9 @@ impl StringsPanel {
         self.scan_generation = self.scan_generation.wrapping_add(1);
         self.scan_task = None;
         self.is_scanning = false;
+        self.results_id = self.alloc_results_id();
         self.results = Arc::default();
+        self.cell_meta = Arc::default();
         self.is_truncated = false;
         self.selected_index = None;
         self.has_scanned = false;
@@ -479,9 +599,13 @@ impl StringsPanel {
 
         self.is_scanning = true;
         let task = cx.spawn(async move |this, cx| {
-            let (results, is_truncated) = cx
+            let (results, cell_meta, is_truncated) = cx
                 .background_executor()
-                .spawn(async move { find_strings_segmented_limited(buffer_data.data(), &segment_ranges, encoding, min_length, MAX_STRING_RESULTS) })
+                .spawn(async move {
+                    let (results, is_truncated) = find_strings_segmented_limited(buffer_data.data(), &segment_ranges, encoding, min_length, MAX_STRING_RESULTS);
+                    let cell_meta = build_string_cell_meta(&results);
+                    (Arc::from(results), cell_meta, is_truncated)
+                })
                 .await;
 
             if let Some(this) = this.upgrade() {
@@ -493,7 +617,9 @@ impl StringsPanel {
                     this.scan_task = None;
                     this.is_scanning = false;
                     this.is_truncated = is_truncated;
-                    this.results = Arc::from(results);
+                    this.results_id = this.alloc_results_id();
+                    this.results = results;
+                    this.cell_meta = cell_meta;
                     this.has_scanned = true;
                     this.sync_selection_to_filter(cx);
                     cx.notify();
@@ -559,14 +685,22 @@ impl StringsPanel {
         }
 
         let row_ix = self.selected_index.and_then(|idx| visible_indices.iter().position(|&i| i == idx));
+        let results_id = self.results_id;
         let results = Arc::clone(&self.results);
+        let cell_meta = Arc::clone(&self.cell_meta);
         let editor = self.editor.clone();
         let sort_column = self.sort_column;
         let selected_index = self.selected_index;
 
         self.table_state.update(cx, |table, cx| {
             let delegate = table.delegate_mut();
+            let editor_changed = delegate.editor.as_ref().map(Entity::entity_id) != editor.as_ref().map(Entity::entity_id);
+            if delegate.results_id != results_id || editor_changed {
+                delegate.address_cache = None;
+            }
+            delegate.results_id = results_id;
             delegate.results = results;
+            delegate.cell_meta = cell_meta;
             delegate.visible_indices = visible_indices;
             delegate.sort_column = sort_column;
             delegate.editor = editor;
@@ -580,28 +714,28 @@ impl StringsPanel {
         });
     }
 
-    fn select_item_at_row(&mut self, index: usize, known_row_ix: Option<usize>, cx: &mut Context<Self>) {
+    fn select_item_at_row(&mut self, index: usize, known_row_ix: Option<usize>, from_table_selection: bool, cx: &mut Context<Self>) {
         if let Some(item) = self.results.get(index) {
             let selection_changed = self.selected_index != Some(index);
             self.selected_index = Some(index);
             let offset = item.offset;
             let len = item.byte_len;
 
-            let table_state = self.table_state.clone();
-            cx.defer(move |cx| {
-                table_state.update(cx, |table, cx| {
-                    if table.delegate().selected_index != Some(index) {
-                        table.delegate_mut().selected_index = Some(index);
-                    }
+            self.table_state.update(cx, |table, cx| {
+                let delegate = table.delegate_mut();
+                if delegate.selected_index != Some(index) {
+                    delegate.selected_index = Some(index);
+                }
+                if !from_table_selection {
                     let row_ix = known_row_ix
-                        .filter(|&row| table.delegate().visible_indices.get(row) == Some(&index))
-                        .or_else(|| table.delegate().visible_indices.iter().position(|&i| i == index));
+                        .filter(|&row| delegate.visible_indices.get(row) == Some(&index))
+                        .or_else(|| delegate.visible_indices.iter().position(|&i| i == index));
                     if let Some(row_ix) = row_ix
                         && table.selected_row() != Some(row_ix)
                     {
                         table.set_selected_row(row_ix, cx);
                     }
-                });
+                }
             });
 
             if let Some(ed) = &self.editor {
@@ -619,10 +753,10 @@ impl StringsPanel {
                 });
             }
             cx.emit(StringsPanelEvent::NavigateTo { offset, len });
-            if selection_changed {
+            if selection_changed && !from_table_selection {
                 cx.notify();
             }
-        } else {
+        } else if !from_table_selection {
             cx.notify();
         }
     }
@@ -654,7 +788,7 @@ impl StringsPanel {
                 .or_else(|| visible_indices.first().copied().map(|index| (index, 0)))
         };
         if let Some((index, row_ix)) = target {
-            self.select_item_at_row(index, Some(row_ix), cx);
+            self.select_item_at_row(index, Some(row_ix), false, cx);
         }
         cx.emit(StringsPanelEvent::FocusEditor);
         window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
@@ -1067,5 +1201,56 @@ mod tests {
 
         sort_string_indices(&results, &mut indices, Some((2, ColumnSort::Default)));
         assert_eq!(indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_build_string_cell_meta_precomputes_size_and_truncated_preview() {
+        use super::{StringMatch, build_string_cell_meta};
+
+        let results = [
+            StringMatch {
+                offset: 0x10,
+                byte_len: 5,
+                text: "hello".into(),
+            },
+            StringMatch {
+                offset: 0x20,
+                byte_len: 300,
+                text: "あ".repeat(260),
+            },
+        ];
+
+        let meta = build_string_cell_meta(&results);
+        assert_eq!(meta.len(), 2);
+        assert_eq!(meta[0].size_label.as_ref(), "5");
+        assert_eq!(meta[0].preview.as_ref(), "hello");
+        assert_eq!(meta[0].preview_char_count, 5);
+
+        assert_eq!(meta[1].size_label.as_ref(), "300");
+        assert_eq!(meta[1].preview_char_count, 257);
+        assert!(meta[1].preview.ends_with('…'));
+    }
+
+    #[test]
+    fn test_address_label_cache_caches_hits_and_invalidates_on_case_or_results_change() {
+        use super::{AddressLabelCache, AddressMap, HexCase};
+        use crate::core::address_map::MemorySegment;
+
+        let map = AddressMap::from_segments(vec![MemorySegment {
+            buffer_offset: 0,
+            address: 0x0800_0000,
+            length: 64,
+        }]);
+        let mut cache = AddressLabelCache::new(1, None, HexCase::Lower, map, 2);
+        assert!(cache.matches(1, None, HexCase::Lower, 2));
+        assert!(!cache.matches(1, None, HexCase::Upper, 2));
+        assert!(!cache.matches(2, None, HexCase::Lower, 2));
+        assert!(!cache.matches(1, None, HexCase::Lower, 3));
+
+        let label = cache.get_or_format(1, 0x1A);
+        assert_eq!(label.as_ref(), "0x0800001a");
+        assert!(cache.labels[0].is_none());
+        assert_eq!(cache.labels[1].as_ref().map(|s| s.as_ref()), Some("0x0800001a"));
+        assert_eq!(cache.get_or_format(1, 0x1A).as_ref(), "0x0800001a");
     }
 }
