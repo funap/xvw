@@ -65,6 +65,7 @@ const HEX_CURSOR_PAUSE_DELAY: Duration = Duration::from_millis(300);
 struct HexCursorBlink {
     visible: bool,
     paused: bool,
+    active: bool,
     epoch: usize,
     _task: Task<()>,
 }
@@ -74,28 +75,45 @@ impl HexCursorBlink {
         Self {
             visible: false,
             paused: false,
+            active: false,
             epoch: 0,
             _task: Task::ready(()),
         }
     }
 
     fn start(&mut self, cx: &mut Context<Self>) {
-        self.blink(self.epoch, cx);
+        if self.active && !self.paused {
+            return;
+        }
+        self.active = true;
+        self.paused = false;
+        self.visible = false;
+        let epoch = self.next_epoch();
+        self.blink(epoch, cx);
     }
 
     fn stop(&mut self, cx: &mut Context<Self>) {
-        self.epoch = 0;
+        if !self.active && !self.paused {
+            return;
+        }
+        self.active = false;
+        self.paused = false;
+        self.visible = false;
+        self.next_epoch();
+        self._task = Task::ready(());
         cx.notify();
     }
 
     fn next_epoch(&mut self) -> usize {
-        self.epoch += 1;
+        self.epoch = self.epoch.wrapping_add(1);
         self.epoch
     }
 
     fn blink(&mut self, epoch: usize, cx: &mut Context<Self>) {
-        if self.paused || epoch != self.epoch {
-            self.visible = true;
+        if !self.active || self.paused || epoch != self.epoch {
+            if self.paused {
+                self.visible = true;
+            }
             return;
         }
 
@@ -116,6 +134,7 @@ impl HexCursorBlink {
     }
 
     fn pause(&mut self, cx: &mut Context<Self>) {
+        self.active = true;
         self.paused = true;
         self.visible = true;
         cx.notify();
@@ -125,8 +144,10 @@ impl HexCursorBlink {
             tokio::time::sleep(HEX_CURSOR_PAUSE_DELAY).await;
             if let Some(this) = this.upgrade() {
                 this.update(cx, |this, cx| {
-                    this.paused = false;
-                    this.blink(epoch, cx);
+                    if this.active && epoch == this.epoch {
+                        this.paused = false;
+                        this.blink(epoch, cx);
+                    }
                 });
             }
         });
@@ -206,18 +227,30 @@ impl HexView {
         let hex_col_width = 0.0;
         let focus_handle = cx.focus_handle();
         let cursor_blink = cx.new(|_| HexCursorBlink::new());
-        let _cursor_blink_subscription = cx.observe(&cursor_blink, |_, _, cx| cx.notify());
-        let _window_activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
-            if window.is_window_active() && this.focus_handle.is_focused(window) {
-                this.cursor_blink.update(cx, |cursor, cx| {
-                    cursor.start(cx);
-                });
+        let _cursor_blink_subscription = cx.observe(&cursor_blink, |_, _, cx| {
+            if InsertModeState::is_enabled(cx) {
+                cx.notify();
             }
+        });
+        let _window_activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
+            let should_blink = window.is_window_active() && this.focus_handle.is_focused(window) && InsertModeState::is_enabled(cx);
+            this.cursor_blink.update(cx, |cursor, cx| {
+                if should_blink {
+                    cursor.start(cx);
+                } else {
+                    cursor.stop(cx);
+                }
+            });
         });
 
         cx.on_focus_in(&focus_handle, window, |this, _, cx| {
+            let insert_mode = InsertModeState::is_enabled(cx);
             this.cursor_blink.update(cx, |cursor, cx| {
-                cursor.start(cx);
+                if insert_mode {
+                    cursor.start(cx);
+                } else {
+                    cursor.stop(cx);
+                }
             });
             cx.notify();
         })
@@ -276,9 +309,7 @@ impl HexView {
                 let cursor_changed = this.last_cursor_offset != Some(cursor_offset);
                 if cursor_changed {
                     this.cursor_reveal_pending = true;
-                    this.cursor_blink.update(cx, |cursor, cx| {
-                        cursor.pause(cx);
-                    });
+                    this.pause_cursor_blink(cx);
                 }
 
                 if this.encoding != new_encoding {
@@ -1232,8 +1263,13 @@ impl HexView {
     }
 
     fn pause_cursor_blink(&mut self, cx: &mut Context<Self>) {
+        let insert_mode = InsertModeState::is_enabled(cx);
         self.cursor_blink.update(cx, |cursor, cx| {
-            cursor.pause(cx);
+            if insert_mode {
+                cursor.pause(cx);
+            } else {
+                cursor.stop(cx);
+            }
         });
     }
 
