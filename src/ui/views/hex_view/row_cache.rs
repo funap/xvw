@@ -2,7 +2,6 @@ use crate::core::bookmark::BookmarkItem;
 use crate::core::editor::{Editor, LineMap};
 use crate::core::encoding::Encoding;
 use crate::core::radix::{ByteGroupSize, DisplayRadix, HexCase};
-use crate::core::structure::IndexedField;
 use crate::ui::color::BookmarkColorExt;
 use crate::ui::views::hex_view::types::HexTextSource;
 use gpui_kit::*;
@@ -29,10 +28,8 @@ pub struct CachedRowDesc {
     pub text_offset_px: f32,
     pub desc_text_width: f32,
     pub shaped_base_desc: Option<ShapedLine>,
-    pub leaf_field_ranges: Vec<(usize, usize)>,
-    pub container_structs: Vec<IndexedField>,
-    pub continuation_leaf: Option<IndexedField>,
-    pub leaf_fields: Vec<IndexedField>,
+    /// `(offset, size, start_x_px, width_px)` of each rendered leaf field in `shaped_base_desc`.
+    pub leaf_field_spans: Vec<(usize, usize, f32, f32)>,
 }
 
 /// Cached structure indexing flags for one row.

@@ -784,6 +784,37 @@ pub fn build_leaf_field_runs(field: &IndexedField, font: Font, palette: &Descrip
     (text, runs)
 }
 
+fn span_x_from_glyph_positions(glyphs: impl IntoIterator<Item = (usize, f32)>, line_width: f32, byte_start: usize, byte_end: usize) -> (f32, f32) {
+    if byte_start >= byte_end {
+        return (0.0, 0.0);
+    }
+    let mut span_start: Option<f32> = None;
+    let mut span_end: Option<f32> = None;
+    for (index, x) in glyphs {
+        if span_start.is_none() {
+            if index >= byte_start && index < byte_end {
+                span_start = Some(x);
+            }
+        } else if index >= byte_end {
+            span_end = Some(x);
+            break;
+        }
+    }
+    let Some(start_x) = span_start else {
+        return (0.0, 0.0);
+    };
+    let end_x = span_end.unwrap_or(line_width);
+    (start_x, (end_x - start_x).max(0.0))
+}
+
+fn shaped_byte_span_x(shaped: &ShapedLine, byte_start: usize, byte_end: usize) -> (f32, f32) {
+    let glyphs = shaped
+        .runs
+        .iter()
+        .flat_map(|run| run.glyphs.iter().map(|glyph| (glyph.index, f32::from(glyph.position.x))));
+    span_x_from_glyph_positions(glyphs, f32::from(shaped.width), byte_start, byte_end)
+}
+
 /// Builds continuation runs for fields spanning across multiple 16-byte rows.
 pub fn build_continuation_field_runs(
     field_id: &str,
@@ -985,76 +1016,64 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
 
     // Description column
     let desc = if let Some(parse_res) = params.parse_result {
-        let has_header_at_offset = raw_containers.iter().any(|header| {
-            header.offset == offset
-                && header.size > 0
-                && !header.is_instance
-                && !params.collapsed_structs.contains(&header.collapse_key)
-                && !params.collapsed_structs.contains(&header.id)
-        });
-        let has_header_before =
-            !is_structure_header_row && params.row_idx > 0 && params.line_starts.get(params.row_idx - 1) == Some(offset) && has_header_at_offset;
-        let mut container_structs: Vec<IndexedField> = if has_header_before {
-            raw_containers
-                .iter()
-                .filter(|container| params.collapsed_structs.contains(&container.collapse_key) || params.collapsed_structs.contains(&container.id))
-                .cloned()
-                .collect()
-        } else {
-            raw_containers.into_owned()
-        };
-
-        if is_collapsed_struct_row {
-            container_structs.retain(|container| {
-                !container.is_instance
-                    && container.offset == offset
-                    && (params.collapsed_structs.contains(&container.collapse_key) || params.collapsed_structs.contains(&container.id))
-            });
-        }
-
-        if is_structure_header_row {
-            container_structs.retain(|container| !container.is_instance && container.size > 0);
-        }
-
-        if is_structure_header_row && container_structs.len() > 1 {
-            let mut same_offset_rows = 0;
-            let mut previous_row = params.row_idx;
-            while previous_row > 0 && params.line_starts.get(previous_row - 1) == Some(offset) {
-                same_offset_rows += 1;
-                previous_row -= 1;
+        let container_struct: Option<&IndexedField> = if is_structure_header_row || is_collapsed_struct_row {
+            let matches_container = |c: &&IndexedField| {
+                if c.is_instance {
+                    return false;
+                }
+                if is_collapsed_struct_row
+                    && !(c.offset == offset && (params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id)))
+                {
+                    return false;
+                }
+                if is_structure_header_row && c.size == 0 {
+                    return false;
+                }
+                true
+            };
+            if is_structure_header_row {
+                let mut matching = raw_containers.iter().filter(matches_container);
+                let first = matching.next();
+                if let Some(second) = matching.next() {
+                    let mut same_offset_rows = 0;
+                    let mut previous_row = params.row_idx;
+                    while previous_row > 0 && params.line_starts.get(previous_row - 1) == Some(offset) {
+                        same_offset_rows += 1;
+                        previous_row -= 1;
+                    }
+                    match same_offset_rows {
+                        0 => first,
+                        1 => Some(second),
+                        n => matching.nth(n - 2).or(first),
+                    }
+                } else {
+                    first
+                }
+            } else {
+                raw_containers.iter().find(matches_container)
             }
-            if let Some(container) = container_structs.get(same_offset_rows).cloned() {
-                container_structs = vec![container];
-            }
-        }
-
-        if !is_structure_header_row && !is_collapsed_struct_row {
-            container_structs.clear();
-        }
-
-        let leaf_fields: Vec<IndexedField> = row_leaves.into_owned();
-
-        let is_collapsed = is_collapsed_struct_row
-            || container_structs
-                .first()
-                .map(|c| params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id))
-                .unwrap_or(false);
-
-        let continuation_leaf = if !is_structure_header_row && !is_collapsed_struct_row && container_structs.is_empty() && leaf_fields.is_empty() {
-            first_leaf.as_deref().cloned()
         } else {
             None
         };
 
-        let active_range_count = if continuation_leaf.is_none() && container_structs.is_empty() && leaf_fields.is_empty() && !parse_res.is_live() {
+        let is_collapsed = is_collapsed_struct_row
+            || container_struct.is_some_and(|c| params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id));
+
+        let continuation_leaf = if !is_structure_header_row && !is_collapsed_struct_row && container_struct.is_none() && row_leaves.is_empty() {
+            first_leaf.as_deref()
+        } else {
+            None
+        };
+
+        let active_range_count = if continuation_leaf.is_none() && container_struct.is_none() && row_leaves.is_empty() && !parse_res.is_live() {
             parse_res.count_active_struct_ranges(offset, query_len)
         } else {
             0
         };
 
-        let indent_level = calculate_description_indent_level(continuation_leaf.as_ref(), container_structs.first(), leaf_fields.first(), active_range_count);
+        let indent_level = calculate_description_indent_level(continuation_leaf, container_struct, row_leaves.first(), active_range_count);
         let indent_px = indent_level as f32 * 14.0;
-        let has_chevron = !container_structs.is_empty();
+        let has_chevron = container_struct.is_some();
         let chevron_icon_path = if has_chevron {
             if is_collapsed {
                 Some(IconName::ChevronRight.path())
@@ -1068,19 +1087,21 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
 
         let mut desc_runs = Vec::new();
         let mut desc_full_text = String::new();
-        if let Some(container) = container_structs.first() {
+        let mut leaf_byte_ranges: Vec<(usize, usize, usize, usize)> = Vec::new();
+        if let Some(container) = container_struct {
             let (hdr_text, hdr_runs) = build_structure_header_runs(container, is_collapsed, font.clone(), &params.desc_palette);
             desc_full_text.push_str(&hdr_text);
             desc_runs.extend(hdr_runs);
         }
-        if let Some(ref leaf) = continuation_leaf {
+        if let Some(leaf) = continuation_leaf {
             let rel_offset = offset.saturating_sub(leaf.offset);
             let (c_text, c_runs) = build_continuation_field_runs(&leaf.id, rel_offset, font.clone(), &params.desc_palette, params.hex_case);
             desc_full_text.push_str(&c_text);
             desc_runs.extend(c_runs);
         } else if !is_collapsed {
-            let include_doc = leaf_fields.len() == 1 && container_structs.is_empty();
-            for f in leaf_fields.iter() {
+            let include_doc = row_leaves.len() == 1 && container_struct.is_none();
+            leaf_byte_ranges.reserve(row_leaves.len());
+            for f in row_leaves.iter() {
                 if !desc_full_text.is_empty() {
                     desc_full_text.push_str("  ");
                     desc_runs.push(TextRun {
@@ -1092,8 +1113,11 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
                         strikethrough: None,
                     });
                 }
+                let byte_start = desc_full_text.len();
                 let (leaf_text, leaf_runs) = build_leaf_field_runs(f, font.clone(), &params.desc_palette, include_doc, false);
                 desc_full_text.push_str(&leaf_text);
+                let byte_end = desc_full_text.len();
+                leaf_byte_ranges.push((f.offset, f.size, byte_start, byte_end));
                 desc_runs.extend(leaf_runs);
             }
         }
@@ -1115,7 +1139,13 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
             let expr_shared = SharedString::from(desc_full_text);
             let shaped_base_desc = window.text_system().shape_line(expr_shared, params.font_size, &desc_runs, None);
             let desc_text_width = f32::from(shaped_base_desc.width) + text_offset_px + 8.0;
-            let leaf_field_ranges = leaf_fields.iter().map(|f| (f.offset, f.size)).collect();
+            let leaf_field_spans = leaf_byte_ranges
+                .into_iter()
+                .map(|(f_offset, f_size, byte_start, byte_end)| {
+                    let (start_x, width_px) = shaped_byte_span_x(&shaped_base_desc, byte_start, byte_end);
+                    (f_offset, f_size, start_x, width_px)
+                })
+                .collect();
 
             Some(CachedRowDesc {
                 indent_level,
@@ -1124,10 +1154,7 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
                 text_offset_px,
                 desc_text_width,
                 shaped_base_desc: Some(shaped_base_desc),
-                leaf_field_ranges,
-                container_structs,
-                continuation_leaf,
-                leaf_fields,
+                leaf_field_spans,
             })
         } else {
             None
@@ -2132,7 +2159,6 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
     // 4. Description Column (when structure definition is present)
     if let Some(ref desc) = cached.desc {
-        let is_active_field = active_leaf_field.is_some_and(|af| desc.leaf_field_ranges.iter().any(|&(o, s)| o == af.offset && s == af.size));
         let desc_mask_bounds = Bounds::new(point(desc_start_x, params.bounds.top()), size(px(params.desc_col_width), px(ROW_HEIGHT)));
         window.with_content_mask(
             Some(ContentMask {
@@ -2162,59 +2188,17 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     }
 
                     let text_pos = point(desc_start_x - px(params.desc_scroll_x) + px(desc.text_offset_px), params.bounds.top() + px(2.0));
-                    if is_active_field {
-                        let mut active_runs = Vec::new();
-                        let mut active_full_text = String::new();
-                        if let Some(container) = desc.container_structs.first() {
-                            let is_collapsed = desc.chevron_icon_path.as_ref() == Some(&IconName::ChevronRight.path());
-                            let (hdr_text, hdr_runs) = build_structure_header_runs(container, is_collapsed, font.clone(), &desc_palette);
-                            active_full_text.push_str(&hdr_text);
-                            active_runs.extend(hdr_runs);
-                        }
-                        if let Some(ref leaf) = desc.continuation_leaf {
-                            let rel_offset = offset.saturating_sub(leaf.offset);
-                            let (c_text, c_runs) = build_continuation_field_runs(&leaf.id, rel_offset, font.clone(), &desc_palette, params.hex_case);
-                            active_full_text.push_str(&c_text);
-                            active_runs.extend(c_runs);
-                        } else {
-                            let include_doc = desc.leaf_fields.len() == 1 && desc.container_structs.is_empty();
-                            for f in desc.leaf_fields.iter() {
-                                if !active_full_text.is_empty() {
-                                    active_full_text.push_str("  ");
-                                    active_runs.push(TextRun {
-                                        len: 2,
-                                        font: font.clone(),
-                                        color: desc_palette.punctuation,
-                                        background_color: None,
-                                        underline: None,
-                                        strikethrough: None,
-                                    });
-                                }
-                                let is_this_active = active_leaf_field.is_some_and(|af| af.offset == f.offset && af.size == f.size);
-                                let (leaf_text, leaf_runs) = build_leaf_field_runs(f, font.clone(), &desc_palette, include_doc, is_this_active);
-                                active_full_text.push_str(&leaf_text);
-                                active_runs.extend(leaf_runs);
+                    if let Some(af) = active_leaf_field {
+                        for &(f_offset, f_size, span_start_x, span_width_px) in &desc.leaf_field_spans {
+                            if f_offset == af.offset && f_size == af.size && span_width_px > 0.0 {
+                                window.paint_quad(fill(
+                                    Bounds::new(point(text_pos.x + px(span_start_x), text_pos.y), size(px(span_width_px), line_height)),
+                                    desc_palette.active_bg,
+                                ));
                             }
                         }
-
-                        if !active_full_text.is_empty() {
-                            if active_full_text.contains('\n') || active_full_text.contains('\r') {
-                                let mut sanitized = String::with_capacity(active_full_text.len());
-                                for ch in active_full_text.chars() {
-                                    if ch == '\n' || ch == '\r' {
-                                        sanitized.push(' ');
-                                    } else {
-                                        sanitized.push(ch);
-                                    }
-                                }
-                                active_full_text = sanitized;
-                            }
-                            let shaped = window
-                                .text_system()
-                                .shape_line(SharedString::from(active_full_text), params.font_size, &active_runs, None);
-                            let _ = shaped.paint(text_pos, line_height, TextAlign::Left, None, window, cx);
-                        }
-                    } else if let Some(ref shaped) = desc.shaped_base_desc {
+                    }
+                    if let Some(ref shaped) = desc.shaped_base_desc {
                         let _ = shaped.paint(text_pos, line_height, TextAlign::Left, None, window, cx);
                     }
 
@@ -2808,5 +2792,18 @@ mod tests {
         // 4. Continuation row for payload body: continuation_leaf.depth = 2
         let cont_indent = calculate_description_indent_level(Some(&leaf_body), None, None, 3);
         assert_eq!(cont_indent, 2, "continuation body must preserve indent level 2");
+    }
+
+    #[test]
+    fn test_span_x_from_glyph_positions() {
+        use super::span_x_from_glyph_positions;
+
+        // Two leaf fields separated by `"  "` (indices 10..12) on a 160px line.
+        let glyphs = [(0, 0.0), (5, 35.0), (10, 70.0), (11, 77.0), (12, 84.0), (18, 126.0)];
+
+        assert_eq!(span_x_from_glyph_positions(glyphs, 160.0, 0, 10), (0.0, 70.0));
+        assert_eq!(span_x_from_glyph_positions(glyphs, 160.0, 12, 24), (84.0, 76.0));
+        assert_eq!(span_x_from_glyph_positions(glyphs, 160.0, 10, 10), (0.0, 0.0));
+        assert_eq!(span_x_from_glyph_positions(glyphs, 160.0, 30, 40), (0.0, 0.0));
     }
 }
