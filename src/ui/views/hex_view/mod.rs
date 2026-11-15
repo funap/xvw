@@ -3846,6 +3846,11 @@ impl Render for HexView {
                         };
                         let active_cursor_offset = if insert_mode { insert_cursor_offset } else { cursor_offset };
                         let active_leaf_field = parse_result.as_deref().and_then(|pr| pr.query_deepest_leaf_at(active_cursor_offset));
+                        let ascii_cursor_char_range = if active_column == EditColumn::Ascii && !insert_mode {
+                            Some(encoding.char_range_at(doc.buffer.data(), cursor_offset))
+                        } else {
+                            None
+                        };
 
                         // Pre-filter comment bookmarks that intersect the visible viewport
                         let visible_comment_bookmarks: Vec<BookmarkItem> = bookmark_items
@@ -3920,6 +3925,7 @@ impl Render for HexView {
                                     is_focused,
                                     insert_mode,
                                     active_column,
+                                    ascii_cursor_char_range: ascii_cursor_char_range.clone(),
                                     cursor_visible,
                                     pending_hex_digit,
                                     outer_scroll_x,

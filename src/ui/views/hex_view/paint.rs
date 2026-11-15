@@ -398,6 +398,7 @@ pub struct RowPaintParams<'a> {
     pub is_focused: bool,
     pub insert_mode: bool,
     pub active_column: EditColumn,
+    pub ascii_cursor_char_range: Option<Range<usize>>,
     pub cursor_visible: bool,
     pub pending_hex_digit: Option<(usize, u8)>,
     pub outer_scroll_x: f32,
@@ -1974,9 +1975,17 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 let ascii_mask_bounds = Bounds::new(point(ascii_start_x, params.bounds.top()), size(px(ascii_width), px(ROW_HEIGHT)));
                 window.with_content_mask(Some(ContentMask { bounds: ascii_mask_bounds }), |window| {
                     let group_bytes = params.group_size.byte_count();
+                    let has_shaped_ascii = cached.shaped_ascii.is_some();
+                    let mut ascii_entries: Vec<AsciiCellEntry> = if has_shaped_ascii {
+                        Vec::with_capacity(cached.ascii_cells.len())
+                    } else {
+                        Vec::new()
+                    };
+                    let mut cell_cursor = 0;
+                    let cells = &cached.ascii_cells;
 
-                    // 1. Background Quads Pass for ASCII Cells
-                    for (j, _) in chunk.iter().enumerate() {
+                    // 1. Background Quads Pass & Glyph Entry Collection for ASCII Cells
+                    for j in 0..chunk.len() {
                         let byte_pos = offset + j;
                         let in_selected_group = if params.min_sel <= params.max_sel {
                             let group_start = (byte_pos / group_bytes) * group_bytes;
@@ -2024,12 +2033,35 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         if in_selected_group && selection_bg.a > 0.0 {
                             window.paint_quad(fill(ascii_item_bounds, selection_bg));
                         }
+
+                        if has_shaped_ascii {
+                            while cells.get(cell_cursor).is_some_and(|c| c.cell_idx < j) {
+                                cell_cursor += 1;
+                            }
+                            if let Some(cell) = cells.get(cell_cursor).filter(|c| c.cell_idx == j) {
+                                let text_color = ascii_item_text_color(
+                                    in_selected_group,
+                                    current_hl_color,
+                                    cell.byte,
+                                    cell.is_printable,
+                                    &params.category_palette,
+                                    fg_color,
+                                    muted_color,
+                                );
+                                ascii_entries.push(AsciiCellEntry {
+                                    cell_idx: cell.cell_idx,
+                                    text_byte_start: cell.text_byte_start,
+                                    text_byte_end: cell.text_byte_end,
+                                    color: text_color,
+                                });
+                                cell_cursor += 1;
+                            }
+                        }
                     }
 
                     // 2. Cursor Border Pass for ASCII Column / Groups
-                    if params.active_column == EditColumn::Ascii {
-                        let char_range = params.encoding.char_range_at(params.doc.buffer.data(), params.cursor_offset);
-                        if char_range.start < next_offset && char_range.end > offset && !params.insert_mode {
+                    if params.active_column == EditColumn::Ascii && !params.insert_mode {
+                        if let Some(char_range) = params.ascii_cursor_char_range.as_ref().filter(|cr| cr.start < next_offset && cr.end > offset) {
                             let cell_start = char_range.start.saturating_sub(offset);
                             let cell_end = (char_range.end.saturating_sub(offset)).min(chunk.len());
                             if cell_end > cell_start {
@@ -2039,13 +2071,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                                 let ascii_char_bounds = Bounds::new(point(char_start_x, params.bounds.top() + px(1.0)), size(char_width, px(ROW_HEIGHT - 2.0)));
                                 paint_cursor_border(window, ascii_char_bounds, cursor_border_color);
                             }
-                        } else if is_eof_on_this_row && !params.insert_mode {
+                        } else if is_eof_on_this_row {
                             let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
                             let ascii_x = ascii_content_start_x + px(chunk_len as f32 * ASCII_CELL_WIDTH);
                             let ascii_box_bounds = Bounds::new(point(ascii_x, params.bounds.top() + px(1.0)), size(px(ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)));
                             paint_cursor_border(window, ascii_box_bounds, cursor_border_color);
                         }
-                    } else {
+                    } else if params.active_column != EditColumn::Ascii {
                         for group in hex_source_ref.groups.iter() {
                             let item_start_offset = offset + group.chunk_start;
                             let item_end_offset = offset + group.chunk_end;
@@ -2069,35 +2101,6 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     }
 
                     // Paint each glyph centered in its fixed byte cell using cached shaped line
-                    let mut ascii_entries: Vec<AsciiCellEntry> = Vec::with_capacity(cached.ascii_cells.len());
-                    for cell in &cached.ascii_cells {
-                        let byte_pos = offset + cell.cell_idx;
-                        let current_hl_color = highlight_color_for_range(byte_pos, byte_pos.saturating_add(1), active_row_highlights);
-                        let in_selected_group = if params.min_sel <= params.max_sel {
-                            let group_start = (byte_pos / group_bytes) * group_bytes;
-                            let group_end = group_start + group_bytes;
-                            group_start <= params.max_sel && group_end > params.min_sel
-                        } else {
-                            false
-                        };
-                        let text_color = ascii_item_text_color(
-                            in_selected_group,
-                            current_hl_color,
-                            cell.byte,
-                            cell.is_printable,
-                            &params.category_palette,
-                            fg_color,
-                            muted_color,
-                        );
-
-                        ascii_entries.push(AsciiCellEntry {
-                            cell_idx: cell.cell_idx,
-                            text_byte_start: cell.text_byte_start,
-                            text_byte_end: cell.text_byte_end,
-                            color: text_color,
-                        });
-                    }
-
                     if let Some(ref shaped) = cached.shaped_ascii {
                         paint_centered_ascii_glyphs(
                             shaped,
