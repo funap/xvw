@@ -3,6 +3,7 @@ use crate::core::radix::{ByteGroupSize, DisplayRadix, HexCase};
 use crate::core::structure::IndexedField;
 use crate::ui::views::hex_view::types::HexTextSource;
 use gpui_kit::*;
+use std::cell::Cell;
 use std::collections::HashMap;
 
 /// Cached ASCII cell layout data for one character slot in a row.
@@ -94,6 +95,11 @@ impl HighlightContrastCache {
     }
 }
 
+struct CachedRowEntry {
+    row: CachedRow,
+    last_used: Cell<u64>,
+}
+
 /// Frame-to-frame row render cache for HexView to minimize text shaping and layout allocations.
 #[derive(Default)]
 pub struct RowRenderCache {
@@ -111,11 +117,35 @@ pub struct RowRenderCache {
     encoding: Encoding,
     theme_bg: Hsla,
     theme_fg: Hsla,
-    rows: HashMap<usize, CachedRow>,
+    rows: HashMap<usize, CachedRowEntry>,
+    access_tick: Cell<u64>,
     contrast_cache: HighlightContrastCache,
 }
 
 impl RowRenderCache {
+    const MAX_CACHED_ROWS: usize = 512;
+    const EVICT_TO_ROWS: usize = 384;
+
+    #[inline]
+    fn next_tick(&self) -> u64 {
+        let next = self.access_tick.get().wrapping_add(1);
+        self.access_tick.set(next);
+        next
+    }
+
+    fn evict_stale_rows(&mut self) {
+        if self.rows.len() < Self::MAX_CACHED_ROWS {
+            return;
+        }
+        let evict_count = self.rows.len().saturating_sub(Self::EVICT_TO_ROWS);
+        if evict_count == 0 {
+            return;
+        }
+        let mut ticks: Vec<u64> = self.rows.values().map(|entry| entry.last_used.get()).collect();
+        let (_, nth, _) = ticks.select_nth_unstable(evict_count - 1);
+        let cutoff = *nth;
+        self.rows.retain(|_, entry| entry.last_used.get() > cutoff);
+    }
     /// Validates the cache against current document, structure, font, and theme properties.
     /// Clears cached rows if any configuration has changed.
     #[allow(clippy::too_many_arguments)]
@@ -171,21 +201,34 @@ impl RowRenderCache {
 
     #[inline]
     pub fn get(&self, row_idx: usize) -> Option<&CachedRow> {
-        self.rows.get(&row_idx)
+        let entry = self.rows.get(&row_idx)?;
+        entry.last_used.set(self.next_tick());
+        Some(&entry.row)
     }
 
     #[inline]
     pub fn row_and_contrast_mut(&mut self, row_idx: usize) -> Option<(&CachedRow, &mut HighlightContrastCache)> {
+        let tick = self.next_tick();
         let contrast_cache = &mut self.contrast_cache;
-        self.rows.get(&row_idx).map(|row| (row, contrast_cache))
+        self.rows.get(&row_idx).map(|entry| {
+            entry.last_used.set(tick);
+            (&entry.row, contrast_cache)
+        })
     }
 
     #[inline]
     pub fn insert(&mut self, row_idx: usize, row: CachedRow) {
-        if self.rows.len() > 512 {
-            self.rows.clear();
+        if !self.rows.contains_key(&row_idx) {
+            self.evict_stale_rows();
         }
-        self.rows.insert(row_idx, row);
+        let tick = self.next_tick();
+        self.rows.insert(
+            row_idx,
+            CachedRowEntry {
+                row,
+                last_used: Cell::new(tick),
+            },
+        );
     }
 
     #[allow(dead_code)]
@@ -197,8 +240,46 @@ impl RowRenderCache {
 
 #[cfg(test)]
 mod tests {
-    use super::HighlightContrastCache;
-    use gpui_kit::hsla;
+    use super::{CachedRow, HighlightContrastCache, RowRenderCache};
+    use crate::ui::views::hex_view::types::HexTextSource;
+    use gpui_kit::{SharedString, hsla};
+
+    fn sample_cached_row(addr: usize) -> CachedRow {
+        CachedRow {
+            physical_address: addr,
+            shaped_addr: None,
+            hex_source: HexTextSource {
+                text: SharedString::default(),
+                groups: Vec::new(),
+            },
+            shaped_hex: None,
+            ascii_cells: Vec::new(),
+            shaped_ascii: None,
+            structure_fields: None,
+            desc: None,
+        }
+    }
+
+    #[test]
+    fn row_render_cache_evicts_oldest_entries_preserving_hot_rows() {
+        let mut cache = RowRenderCache::default();
+        for idx in 0..RowRenderCache::MAX_CACHED_ROWS {
+            cache.insert(idx, sample_cached_row(idx * 16));
+        }
+        assert_eq!(cache.rows.len(), RowRenderCache::MAX_CACHED_ROWS);
+
+        // Mark row 0 as recently accessed right before adding new rows.
+        assert_eq!(cache.get(0).map(|r| r.physical_address), Some(0));
+
+        for idx in RowRenderCache::MAX_CACHED_ROWS..560 {
+            cache.insert(idx, sample_cached_row(idx * 16));
+        }
+
+        assert!(cache.rows.len() < RowRenderCache::MAX_CACHED_ROWS);
+        assert!(cache.get(0).is_some(), "recently accessed row should survive eviction");
+        assert!(cache.get(559).is_some(), "newly inserted row should remain cached");
+        assert!(cache.get(1).is_none(), "oldest cold row should be evicted");
+    }
 
     #[test]
     fn highlight_contrast_cache_hits_and_bounds_capacity() {
