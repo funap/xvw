@@ -352,16 +352,22 @@ pub fn format_offset_08(offset: usize, hex_case: HexCase) -> SharedString {
     }
 }
 
-/// Returns whether the row at `row_idx` (with byte range `[offset, next_offset)`) contains the active cursor position.
-pub fn is_cursor_row(active_cursor_offset: usize, row_idx: usize, offset: usize, next_offset: usize, line_starts: &LineMap, total_size: usize) -> bool {
-    let is_eof = active_cursor_offset == total_size;
+#[inline]
+fn is_eof_on_row(active_cursor_offset: usize, row_idx: usize, line_starts: &LineMap, total_size: usize) -> bool {
+    if active_cursor_offset != total_size {
+        return false;
+    }
     let last_line_idx = line_starts.len().saturating_sub(1);
     let last_line_start = line_starts.get(last_line_idx).unwrap_or(0);
     let bytes_per_row = line_starts.max_bytes_per_row();
     let is_eof_on_new_line = total_size > last_line_start && (total_size - last_line_start) >= bytes_per_row;
-    let is_eof_on_this_row = is_eof && ((is_eof_on_new_line && row_idx == line_starts.len()) || (!is_eof_on_new_line && row_idx == last_line_idx));
+    (is_eof_on_new_line && row_idx == line_starts.len()) || (!is_eof_on_new_line && row_idx == last_line_idx)
+}
 
-    (active_cursor_offset >= offset && active_cursor_offset < next_offset) || is_eof_on_this_row
+/// Returns whether the row at `row_idx` (with byte range `[offset, next_offset)`) contains the active cursor position.
+#[cfg(test)]
+pub fn is_cursor_row(active_cursor_offset: usize, row_idx: usize, offset: usize, next_offset: usize, line_starts: &LineMap, total_size: usize) -> bool {
+    (active_cursor_offset >= offset && active_cursor_offset < next_offset) || is_eof_on_row(active_cursor_offset, row_idx, line_starts, total_size)
 }
 
 pub struct RowPaintParams<'a> {
@@ -1180,14 +1186,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     } else {
         params.cursor_offset
     };
-    let is_cursor_row = is_cursor_row(active_cursor_offset, params.row_idx, offset, next_offset, params.line_starts, total_size);
-    let is_eof = active_cursor_offset == total_size;
-    let last_line_idx = params.line_starts.len().saturating_sub(1);
-    let last_line_start = params.line_starts.get(last_line_idx).unwrap_or(0);
-    let bytes_per_row = params.line_starts.max_bytes_per_row();
-    let is_eof_on_new_line = total_size > last_line_start && (total_size - last_line_start) >= bytes_per_row;
-    let is_eof_on_this_row =
-        is_eof && ((is_eof_on_new_line && params.row_idx == params.line_starts.len()) || (!is_eof_on_new_line && params.row_idx == last_line_idx));
+    let is_eof_on_this_row = is_eof_on_row(active_cursor_offset, params.row_idx, params.line_starts, total_size);
+    let is_cursor_row = (active_cursor_offset >= offset && active_cursor_offset < next_offset) || is_eof_on_this_row;
 
     let is_struct_mode = params.parse_result.is_some();
 
@@ -1641,11 +1641,10 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
     let pending_byte_char_start = pending_edit_colors.map(|(p, _, _)| p);
 
-    let mut hex_runs: Vec<TextRun> = Vec::with_capacity(hex_source_ref.groups.len() * 2);
     let mut group_visuals: Vec<(Option<Hsla>, bool, bool)> = Vec::with_capacity(hex_source_ref.groups.len());
     let mut group_text_colors: Vec<Hsla> = Vec::with_capacity(hex_source_ref.groups.len());
 
-    for (group_idx, group) in hex_source_ref.groups.iter().enumerate() {
+    for group in &hex_source_ref.groups {
         let item_start_offset = offset + group.chunk_start;
         let item_end_offset = offset + group.chunk_end;
         let item_slice = if group.chunk_end <= chunk.len() && group.chunk_start <= group.chunk_end {
@@ -1676,25 +1675,6 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
         group_visuals.push((current_hl_color, is_selected, is_cursor));
         group_text_colors.push(text_color);
-
-        if group_idx > 0 {
-            hex_runs.push(TextRun {
-                len: 1,
-                font: font.clone(),
-                color: hsla(0.0, 0.0, 0.0, 0.0),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            });
-        }
-        hex_runs.push(TextRun {
-            len: group.text_end - group.text_start,
-            font: font.clone(),
-            color: text_color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        });
     }
 
     let text_origin_x = hex_start_x - px(params.hex_scroll_x);
