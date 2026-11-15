@@ -24,7 +24,8 @@ pub use layout::{
     hex_grid_width, hex_grid_x, hex_group_x, is_cursor_header_column, make_hex_view_layout, measure_hex_cell_width, weighted_text_width,
 };
 pub use paint::{
-    CHEVRON_ICON_GAP, CHEVRON_ICON_SIZE, DescriptionPalette, RowPaintParams, calculate_description_indent_level, paint_hex_row, paint_scrollbar, row_byte_range,
+    CHEVRON_ICON_GAP, CHEVRON_ICON_SIZE, DescriptionPalette, RowPaintParams, calculate_description_indent_level, flush_column_fade_runs, paint_hex_row,
+    paint_scrollbar, row_byte_range,
 };
 pub use types::*;
 
@@ -4039,6 +4040,7 @@ impl Render for HexView {
                         let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
                         let mut cache_borrow = row_cache.borrow_mut();
                         let mut scratch_borrow = paint_row_scratch.borrow_mut();
+                        scratch_borrow.fade_runs.clear();
                         cache_borrow.validate(
                             doc.history.state_id(),
                             doc.layout_version(),
@@ -4128,6 +4130,8 @@ impl Render for HexView {
                                 cx,
                             );
                         }
+
+                        flush_column_fade_runs(&scratch_borrow.fade_runs, theme_colors.bg_color_theme, window);
 
                         let theme = cx.theme();
                         paint_scrollbar(bounds, top_row, total_rows, is_dragging_scrollbar, scrollbar_hovered, theme, window);

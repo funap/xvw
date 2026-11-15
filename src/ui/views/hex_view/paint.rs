@@ -39,12 +39,50 @@ fn clip_column_mask(scrollable: Bounds<Pixels>, col: Bounds<Pixels>) -> Bounds<P
 }
 
 #[allow(clippy::too_many_arguments)]
-fn paint_horizontal_fade(window: &mut Window, start_x: Pixels, top_y: Pixels, steps: usize, step_dx: f32, strip_w: f32, bg: Hsla, left_edge: bool) {
+fn paint_horizontal_fade(
+    window: &mut Window,
+    start_x: Pixels,
+    top_y: Pixels,
+    height: Pixels,
+    steps: usize,
+    step_dx: f32,
+    strip_w: f32,
+    bg: Hsla,
+    left_edge: bool,
+) {
     let denom = if left_edge { steps as f32 } else { (steps + 1) as f32 };
     for step in 0..steps {
         let x = start_x + px(step as f32 * step_dx);
         let alpha = if left_edge { 1.0 - (step as f32 / denom) } else { (step + 1) as f32 / denom };
-        window.paint_quad(fill(Bounds::new(point(x, top_y), size(px(strip_w), px(ROW_HEIGHT))), bg.opacity(alpha * 0.95)));
+        window.paint_quad(fill(Bounds::new(point(x, top_y), size(px(strip_w), height)), bg.opacity(alpha * 0.95)));
+    }
+}
+
+/// Paints all coalesced column edge fade gradients accumulated across rows in the current frame.
+pub fn flush_column_fade_runs(fade_runs: &ColumnFadeRuns, bg_color_theme: Hsla, window: &mut Window) {
+    for edge in FadeEdgeKind::ALL {
+        let runs = fade_runs.runs_for(edge);
+        if runs.is_empty() {
+            continue;
+        }
+        let (steps, step_dx, strip_w, left_edge) = edge.gradient_spec();
+        for run in runs {
+            let height = px(run.bottom_y - run.top_y);
+            let mask_bounds = Bounds::new(point(px(run.mask_left), px(run.top_y)), size(px(run.mask_width), height));
+            window.with_content_mask(Some(ContentMask { bounds: mask_bounds }), |window| {
+                paint_horizontal_fade(
+                    window,
+                    px(run.fade_start_x),
+                    px(run.top_y),
+                    height,
+                    steps,
+                    step_dx,
+                    strip_w,
+                    bg_color_theme,
+                    left_edge,
+                );
+            });
+        }
     }
 }
 
@@ -1374,7 +1412,6 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let accent_fg_color = params.theme_colors.accent_fg_color;
     let border_color = params.theme_colors.border_color;
     let border_line_color = params.theme_colors.border_line_color;
-    let bg_color_theme = params.theme_colors.bg_color_theme;
 
     let line_height = px(ROW_HEIGHT);
     let font = params.font;
@@ -1803,6 +1840,9 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let text_origin_x = hex_start_x - px(params.hex_scroll_x);
     let total_data_width = f32::from(hex_grid_width(hex_source_ref.text.len(), params.hex_cell_width));
 
+    let row_top_y = f32::from(params.bounds.top());
+    let row_bottom_y = f32::from(params.bounds.bottom());
+
     // 2. Background Quads Pass for Data Items (with clipped single content mask)
     let hex_mask_bounds = clip_column_mask(
         scrollable_mask_bounds,
@@ -2041,17 +2081,25 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     }
                 }
             }
-
-            // Left-edge subtle gradient fade when hex_scroll_x > 1.0
-            if params.hex_scroll_x > 1.0 {
-                paint_horizontal_fade(window, hex_start_x, params.bounds.top(), 5, 3.2, 3.4, bg_color_theme, true);
-            }
-
-            // Right-edge subtle gradient fade when row data overflows hex_col_width
-            if params.hex_scroll_x + params.hex_col_width < total_data_width - 1.0 {
-                paint_horizontal_fade(window, hex_end_x - px(22.0), params.bounds.top(), 6, 3.6, 3.8, bg_color_theme, false);
-            }
         });
+
+        // Coalesce left/right gradient fades across contiguous rows
+        if params.hex_scroll_x > 1.0 {
+            params
+                .scratch
+                .fade_runs
+                .push(FadeEdgeKind::HexLeft, params.row_idx, hex_start_x, hex_mask_bounds, row_top_y, row_bottom_y);
+        }
+        if params.hex_scroll_x + params.hex_col_width < total_data_width - 1.0 {
+            params.scratch.fade_runs.push(
+                FadeEdgeKind::HexRight,
+                params.row_idx,
+                hex_end_x - px(22.0),
+                hex_mask_bounds,
+                row_top_y,
+                row_bottom_y,
+            );
+        }
     }
 
     // 3. ASCII Column (when ASCII view is enabled and row has bytes)
@@ -2223,25 +2271,29 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         }
                     }
                 }
-
-                // Edge fades when the ASCII row is horizontally scrolled or clipped.
-                if params.ascii_scroll_x > 1.0 {
-                    paint_horizontal_fade(window, ascii_start_x, params.bounds.top(), 5, 3.2, 3.4, bg_color_theme, true);
-                }
-
-                if params.ascii_scroll_x + ascii_width < chunk.len() as f32 * ASCII_CELL_WIDTH - 1.0 {
-                    paint_horizontal_fade(
-                        window,
-                        ascii_start_x + px(ascii_width - 22.0),
-                        params.bounds.top(),
-                        6,
-                        3.6,
-                        3.8,
-                        bg_color_theme,
-                        false,
-                    );
-                }
             });
+
+            // Edge fades when the ASCII row is horizontally scrolled or clipped.
+            if params.ascii_scroll_x > 1.0 {
+                params.scratch.fade_runs.push(
+                    FadeEdgeKind::AsciiLeft,
+                    params.row_idx,
+                    ascii_start_x,
+                    ascii_mask_bounds,
+                    row_top_y,
+                    row_bottom_y,
+                );
+            }
+            if params.ascii_scroll_x + ascii_width < chunk.len() as f32 * ASCII_CELL_WIDTH - 1.0 {
+                params.scratch.fade_runs.push(
+                    FadeEdgeKind::AsciiRight,
+                    params.row_idx,
+                    ascii_start_x + px(ascii_width - 22.0),
+                    ascii_mask_bounds,
+                    row_top_y,
+                    row_bottom_y,
+                );
+            }
         }
     }
 
@@ -2288,17 +2340,24 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 if let Some(ref shaped) = desc.shaped_base_desc {
                     let _ = shaped.paint(text_pos, line_height, TextAlign::Left, None, window, cx);
                 }
-
-                // Left fade
-                if params.desc_scroll_x > 1.0 {
-                    paint_horizontal_fade(window, desc_start_x, params.bounds.top(), 5, 3.2, 3.4, bg_color_theme, true);
-                }
-
-                // Right fade
-                if params.desc_scroll_x + params.desc_col_width < desc.desc_text_width - 1.0 {
-                    paint_horizontal_fade(window, desc_end_x - px(20.0), params.bounds.top(), 5, 4.0, 4.2, bg_color_theme, false);
-                }
             });
+
+            if params.desc_scroll_x > 1.0 {
+                params
+                    .scratch
+                    .fade_runs
+                    .push(FadeEdgeKind::DescLeft, params.row_idx, desc_start_x, desc_mask_bounds, row_top_y, row_bottom_y);
+            }
+            if params.desc_scroll_x + params.desc_col_width < desc.desc_text_width - 1.0 {
+                params.scratch.fade_runs.push(
+                    FadeEdgeKind::DescRight,
+                    params.row_idx,
+                    desc_end_x - px(20.0),
+                    desc_mask_bounds,
+                    row_top_y,
+                    row_bottom_y,
+                );
+            }
         }
     }
 
@@ -2346,17 +2405,28 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
                     cur_x = text_x + px(text_w + item_spacing);
                 }
-
-                // Left fade
-                if params.comment_scroll_x > 1.0 {
-                    paint_horizontal_fade(window, comment_start_x, params.bounds.top(), 5, 3.2, 3.4, bg_color_theme, true);
-                }
-
-                // Right fade
-                if params.comment_scroll_x + params.comment_col_width < comment_text_width - 1.0 {
-                    paint_horizontal_fade(window, comment_end_x - px(20.0), params.bounds.top(), 5, 4.0, 4.2, bg_color_theme, false);
-                }
             });
+
+            if params.comment_scroll_x > 1.0 {
+                params.scratch.fade_runs.push(
+                    FadeEdgeKind::CommentLeft,
+                    params.row_idx,
+                    comment_start_x,
+                    comment_mask_bounds,
+                    row_top_y,
+                    row_bottom_y,
+                );
+            }
+            if params.comment_scroll_x + params.comment_col_width < comment_text_width - 1.0 {
+                params.scratch.fade_runs.push(
+                    FadeEdgeKind::CommentRight,
+                    params.row_idx,
+                    comment_end_x - px(20.0),
+                    comment_mask_bounds,
+                    row_top_y,
+                    row_bottom_y,
+                );
+            }
         }
     }
 }
@@ -2881,5 +2951,54 @@ mod tests {
         assert_eq!(clipped.origin.x, px(100.0));
         assert_eq!(clipped.size.width, px(70.0));
         assert_eq!(clip_column_mask(scroll_bounds, offscreen_col).size.width, px(0.0));
+    }
+
+    #[test]
+    fn test_column_fade_runs_coalesce_split_and_skip_empty() {
+        use super::{ColumnFadeRuns, FadeEdgeKind, VerticalFadeRun};
+        use gpui_kit::{Bounds, point, px, size};
+
+        let mut runs = ColumnFadeRuns::default();
+        let mask = Bounds::new(point(px(100.0), px(0.0)), size(px(200.0), px(22.0)));
+        let empty_mask = Bounds::new(point(px(100.0), px(0.0)), size(px(0.0), px(22.0)));
+
+        // Zero-height and zero-width spans are ignored.
+        runs.push(FadeEdgeKind::HexLeft, 0, px(100.0), mask, 40.0, 40.0);
+        runs.push(FadeEdgeKind::HexLeft, 1, px(100.0), empty_mask, 40.0, 62.0);
+        assert!(runs.runs_for(FadeEdgeKind::HexLeft).is_empty());
+
+        // Contiguous rows coalesce.
+        runs.push(FadeEdgeKind::HexLeft, 10, px(100.0), mask, 100.0, 122.0);
+        runs.push(FadeEdgeKind::HexLeft, 11, px(100.0), mask, 122.0, 144.0);
+        runs.push(FadeEdgeKind::HexLeft, 12, px(100.0), mask, 144.0, 166.0);
+
+        // A missing/banner row at row 13 splits the run.
+        runs.push(FadeEdgeKind::HexLeft, 14, px(100.0), mask, 188.0, 210.0);
+        runs.push(FadeEdgeKind::HexLeft, 15, px(100.0), mask, 210.0, 232.0);
+
+        assert_eq!(
+            runs.runs_for(FadeEdgeKind::HexLeft),
+            &[
+                VerticalFadeRun {
+                    fade_start_x: 100.0,
+                    mask_left: 100.0,
+                    mask_width: 200.0,
+                    top_y: 100.0,
+                    bottom_y: 166.0,
+                    last_row_idx: 12,
+                },
+                VerticalFadeRun {
+                    fade_start_x: 100.0,
+                    mask_left: 100.0,
+                    mask_width: 200.0,
+                    top_y: 188.0,
+                    bottom_y: 232.0,
+                    last_row_idx: 15,
+                },
+            ]
+        );
+
+        runs.clear();
+        assert!(runs.runs_for(FadeEdgeKind::HexLeft).is_empty());
     }
 }

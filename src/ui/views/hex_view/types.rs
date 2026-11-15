@@ -415,10 +415,117 @@ impl CachedActiveLeafField {
     }
 }
 
+/// Identifies which horizontally-scrollable column edge a coalesced fade gradient belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum FadeEdgeKind {
+    HexLeft = 0,
+    HexRight = 1,
+    AsciiLeft = 2,
+    AsciiRight = 3,
+    DescLeft = 4,
+    DescRight = 5,
+    CommentLeft = 6,
+    CommentRight = 7,
+}
+
+impl FadeEdgeKind {
+    pub const COUNT: usize = 8;
+    pub const ALL: [Self; Self::COUNT] = [
+        Self::HexLeft,
+        Self::HexRight,
+        Self::AsciiLeft,
+        Self::AsciiRight,
+        Self::DescLeft,
+        Self::DescRight,
+        Self::CommentLeft,
+        Self::CommentRight,
+    ];
+
+    /// Gradient strip parameters `(steps, step_dx, strip_w, left_edge)` matching column styling.
+    #[inline]
+    pub const fn gradient_spec(self) -> (usize, f32, f32, bool) {
+        match self {
+            Self::HexLeft | Self::AsciiLeft | Self::DescLeft | Self::CommentLeft => (5, 3.2, 3.4, true),
+            Self::HexRight | Self::AsciiRight => (6, 3.6, 3.8, false),
+            Self::DescRight | Self::CommentRight => (5, 4.0, 4.2, false),
+        }
+    }
+}
+
+/// Contiguous vertical span of rows that share an edge fade strip and horizontal clip mask.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VerticalFadeRun {
+    pub fade_start_x: f32,
+    pub mask_left: f32,
+    pub mask_width: f32,
+    pub top_y: f32,
+    pub bottom_y: f32,
+    pub last_row_idx: usize,
+}
+
+/// Coalesces per-row horizontal column edge fades into vertical runs across contiguous rows.
+#[derive(Default)]
+pub struct ColumnFadeRuns {
+    runs: [Vec<VerticalFadeRun>; FadeEdgeKind::COUNT],
+}
+
+impl ColumnFadeRuns {
+    /// Clears accumulated fade runs while preserving allocated vector capacity across frames.
+    #[inline]
+    pub fn clear(&mut self) {
+        for slot in &mut self.runs {
+            slot.clear();
+        }
+    }
+
+    /// Records a horizontal fade strip on `row_idx` (`top_y..bottom_y`), merging into the
+    /// previous run when row index, vertical bounds, fade origin, and horizontal mask match.
+    #[inline]
+    pub fn push(&mut self, edge: FadeEdgeKind, row_idx: usize, fade_start_x: Pixels, mask_bounds: Bounds<Pixels>, top_y: f32, bottom_y: f32) {
+        if bottom_y <= top_y {
+            return;
+        }
+        let fade_x = f32::from(fade_start_x);
+        let mask_left = f32::from(mask_bounds.origin.x);
+        let mask_width = f32::from(mask_bounds.size.width);
+        if mask_width <= 0.0 {
+            return;
+        }
+        let list = &mut self.runs[edge as usize];
+        if let Some(last) = list.last_mut()
+            && last.last_row_idx.checked_add(1) == Some(row_idx)
+            && (last.bottom_y - top_y).abs() < 0.01
+            && (last.fade_start_x - fade_x).abs() < 0.01
+            && (last.mask_left - mask_left).abs() < 0.01
+            && (last.mask_width - mask_width).abs() < 0.01
+        {
+            last.bottom_y = bottom_y;
+            last.last_row_idx = row_idx;
+            return;
+        }
+        list.push(VerticalFadeRun {
+            fade_start_x: fade_x,
+            mask_left,
+            mask_width,
+            top_y,
+            bottom_y,
+            last_row_idx: row_idx,
+        });
+    }
+
+    /// Returns the coalesced vertical runs for `edge`.
+    #[inline]
+    pub fn runs_for(&self, edge: FadeEdgeKind) -> &[VerticalFadeRun] {
+        &self.runs[edge as usize]
+    }
+}
+
 /// Reusable per-row scratch buffers shared across rows within a paint frame.
 #[derive(Default)]
 pub struct PaintRowScratch {
     pub group_visuals: Vec<(Option<Hsla>, bool, bool)>,
     pub group_text_colors: Vec<Hsla>,
     pub ascii_cell_colors: Vec<Hsla>,
+    pub fade_runs: ColumnFadeRuns,
 }
