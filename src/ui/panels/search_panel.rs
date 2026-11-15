@@ -298,8 +298,9 @@ impl SearchPanel {
 
         if let Some(ed) = &editor {
             self._editor_subscription = Some(cx.observe(ed, |this, ed, cx| {
-                this.sync_selected_index_from_editor(&ed, cx);
-                cx.notify();
+                if this.sync_selected_index_from_editor(&ed, cx) {
+                    cx.notify();
+                }
             }));
         }
         cx.notify();
@@ -514,57 +515,62 @@ impl SearchPanel {
         window.push_notification(Notification::info("Copied text value"), cx);
     }
 
-    fn sync_selected_index_from_editor(&mut self, editor: &Entity<Editor>, cx: &mut Context<Self>) {
+    fn sync_selected_index_from_editor(&mut self, editor: &Entity<Editor>, cx: &mut Context<Self>) -> bool {
         if self.results.is_empty() {
-            return;
+            return false;
         }
         let editor_ref = editor.read(cx);
-        let match_len = self.match_len.max(1);
+        let found_index = find_matching_result_index(
+            &self.results,
+            self.match_len,
+            editor_ref.selection_range().map(|range| range.start),
+            editor_ref.cursor.offset,
+        );
 
-        let target_offsets = if let Some(range) = editor_ref.selection_range() {
-            vec![range.start, editor_ref.cursor.offset]
-        } else {
-            vec![editor_ref.cursor.offset]
-        };
+        if self.selected_index == found_index {
+            return false;
+        }
 
-        let mut found_index = None;
-        for offset in target_offsets {
-            let res = match self.results.binary_search_by_key(&offset, |item| item.offset) {
-                Ok(exact) => Some(exact),
-                Err(insert_idx) => {
-                    if insert_idx > 0 {
-                        let prev_idx = insert_idx - 1;
-                        let item_offset = self.results[prev_idx].offset;
-                        if offset < item_offset.saturating_add(match_len) {
-                            Some(prev_idx)
-                        } else {
-                            None
-                        }
+        self.selected_index = found_index;
+        self.table_state.update(cx, |table, cx| {
+            table.delegate_mut().selected_index = found_index;
+            if let Some(idx) = found_index {
+                if table.selected_row() != Some(idx) {
+                    table.set_selected_row(idx, cx);
+                }
+            } else {
+                table.clear_selection(cx);
+            }
+        });
+        true
+    }
+}
+
+fn find_matching_result_index(results: &[SearchResultItem], match_len: usize, selection_start: Option<usize>, cursor_offset: usize) -> Option<usize> {
+    if results.is_empty() {
+        return None;
+    }
+    let effective_len = match_len.max(1);
+    let lookup = |offset: usize| -> Option<usize> {
+        match results.binary_search_by_key(&offset, |item| item.offset) {
+            Ok(exact) => Some(exact),
+            Err(insert_idx) => {
+                if insert_idx > 0 {
+                    let prev_idx = insert_idx - 1;
+                    let item_offset = results[prev_idx].offset;
+                    if offset < item_offset.saturating_add(effective_len) {
+                        Some(prev_idx)
                     } else {
                         None
                     }
+                } else {
+                    None
                 }
-            };
-            if res.is_some() {
-                found_index = res;
-                break;
             }
         }
+    };
 
-        if self.selected_index != found_index {
-            self.selected_index = found_index;
-            self.table_state.update(cx, |table, cx| {
-                table.delegate_mut().selected_index = found_index;
-                if let Some(idx) = found_index {
-                    if table.selected_row() != Some(idx) {
-                        table.set_selected_row(idx, cx);
-                    }
-                } else {
-                    table.clear_selection(cx);
-                }
-            });
-        }
-    }
+    selection_start.and_then(lookup).or_else(|| lookup(cursor_offset))
 }
 
 fn format_row_previews(buffer_data: Option<&[u8]>, offset: usize, match_len: usize, encoding: Encoding) -> (String, String) {
@@ -830,5 +836,23 @@ mod tests {
 
         let table_only = gpui_kit::KeyBindingContextPredicate::parse("DataTable").unwrap();
         assert_eq!(table_only.depth_of(&contexts), Some(2));
+    }
+
+    #[test]
+    fn test_find_matching_result_index_without_allocation() {
+        use super::{SearchResultItem, find_matching_result_index};
+
+        let results = [
+            SearchResultItem { offset: 0x10 },
+            SearchResultItem { offset: 0x40 },
+            SearchResultItem { offset: 0x80 },
+        ];
+
+        assert_eq!(find_matching_result_index(&[], 4, None, 0x10), None);
+        assert_eq!(find_matching_result_index(&results, 4, None, 0x10), Some(0));
+        assert_eq!(find_matching_result_index(&results, 4, None, 0x13), Some(0));
+        assert_eq!(find_matching_result_index(&results, 4, None, 0x14), None);
+        assert_eq!(find_matching_result_index(&results, 4, Some(0x41), 0x80), Some(1));
+        assert_eq!(find_matching_result_index(&results, 4, Some(0x20), 0x82), Some(2));
     }
 }
