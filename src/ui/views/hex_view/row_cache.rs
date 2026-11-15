@@ -13,10 +13,49 @@ use std::ops::Range;
 #[derive(Clone, Copy, Debug)]
 pub struct CachedAsciiCell {
     pub cell_idx: usize,
-    pub text_byte_start: usize,
-    pub text_byte_end: usize,
     pub byte: u8,
     pub is_printable: bool,
+}
+
+/// Precomputed glyph placement data for centered Hex cells.
+#[derive(Clone, Copy, Debug)]
+pub struct CachedHexGlyph {
+    pub font_id: gpui::FontId,
+    pub glyph_id: gpui::GlyphId,
+    pub text_index: usize,
+    pub group_idx: usize,
+    pub x_offset: Pixels,
+    pub glyph_width: f32,
+    pub is_emoji: bool,
+}
+
+/// Precomputed glyph list and metrics for one Hex row.
+#[derive(Clone, Debug)]
+pub struct CachedHexGlyphs {
+    pub cell_width: Pixels,
+    pub font_size: Pixels,
+    pub ascent: Pixels,
+    pub descent: Pixels,
+    pub glyphs: Vec<CachedHexGlyph>,
+}
+
+/// Precomputed glyph placement data for centered ASCII cells.
+#[derive(Clone, Copy, Debug)]
+pub struct CachedAsciiGlyph {
+    pub font_id: gpui::FontId,
+    pub glyph_id: gpui::GlyphId,
+    pub x_offset: Pixels,
+    pub cell_index: usize,
+    pub is_emoji: bool,
+}
+
+/// Precomputed glyph list and metrics for one ASCII row.
+#[derive(Clone, Debug)]
+pub struct CachedAsciiGlyphs {
+    pub font_size: Pixels,
+    pub ascent: Pixels,
+    pub descent: Pixels,
+    pub glyphs: Vec<CachedAsciiGlyph>,
 }
 
 /// Cached description column layout and shaped text for one row.
@@ -45,9 +84,9 @@ pub struct CachedRow {
     pub physical_address: usize,
     pub shaped_addr: Option<ShapedLine>,
     pub hex_source: HexTextSource,
-    pub shaped_hex: Option<ShapedLine>,
+    pub hex_glyphs: Option<CachedHexGlyphs>,
     pub ascii_cells: Vec<CachedAsciiCell>,
-    pub shaped_ascii: Option<ShapedLine>,
+    pub ascii_glyphs: Option<CachedAsciiGlyphs>,
     pub structure_fields: Option<CachedRowStructureFields>,
     pub desc: Option<CachedRowDesc>,
 }
@@ -608,9 +647,9 @@ mod tests {
                 text: SharedString::default(),
                 groups: Vec::new(),
             },
-            shaped_hex: None,
+            hex_glyphs: None,
             ascii_cells: Vec::new(),
-            shaped_ascii: None,
+            ascii_glyphs: None,
             structure_fields: None,
             desc: None,
         }

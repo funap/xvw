@@ -286,70 +286,53 @@ pub fn ascii_item_text_color(
     })
 }
 
-/// Paint every glyph centered in its fixed Hex cell while reusing the line
-/// shaped for the row. This keeps shaping batched and avoids a per-row glyph
-/// position allocation.
-#[allow(clippy::too_many_arguments)]
-pub fn paint_centered_hex_glyphs(
-    shaped: &ShapedLine,
-    groups: &[HexGroupInfo],
-    group_colors: &[Hsla],
-    pending_edit_colors: Option<(usize, Hsla, Hsla)>,
-    cell_width: Pixels,
-    origin: Point<Pixels>,
-    line_height: Pixels,
-    window: &mut Window,
-) {
+/// Precomputes centered per-cell Hex glyph coordinates from a batched shaped line.
+pub fn build_cached_hex_glyphs(shaped: &ShapedLine, groups: &[HexGroupInfo], cell_width: Pixels) -> CachedHexGlyphs {
     let natural_width = shaped.width;
     let cell_width_f = f32::from(cell_width);
+    let mut glyphs_out = Vec::with_capacity(shaped.text.len());
+    let mut group_idx = 0;
+    let mut glyphs = shaped
+        .runs
+        .iter()
+        .flat_map(|run| run.glyphs.iter().map(move |glyph| (run.font_id, glyph)))
+        .peekable();
 
-    let text_width = hex_grid_width(shaped.text.len(), cell_width);
-    let line_bounds = Bounds::new(origin, size(text_width, line_height));
-    window.paint_layer(line_bounds, |window| {
-        let baseline_offset = point(px(0.0), (line_height - shaped.ascent - shaped.descent) / 2.0 + shaped.ascent);
-        let mut group_idx = 0;
-        let mut glyphs = shaped
-            .runs
-            .iter()
-            .flat_map(|run| run.glyphs.iter().map(move |glyph| (run.font_id, glyph)))
-            .peekable();
+    while let Some((font_id, glyph)) = glyphs.next() {
+        let natural_end = glyphs.peek().map(|(_, next)| next.position.x).unwrap_or(natural_width);
+        let glyph_width = f32::from(natural_end - glyph.position.x).max(0.0);
 
-        while let Some((font_id, glyph)) = glyphs.next() {
-            let natural_end = glyphs.peek().map(|(_, next)| next.position.x).unwrap_or(natural_width);
-            let glyph_width = f32::from(natural_end - glyph.position.x).max(0.0);
-            let centered_offset = centered_glyph_offset(cell_width_f, glyph_width);
-            let glyph_origin = point(origin.x + hex_grid_x(glyph.index, cell_width) + px(centered_offset), origin.y) + baseline_offset;
-
-            while group_idx < groups.len() && glyph.index >= groups[group_idx].text_end {
-                group_idx += 1;
-            }
-            if group_idx < groups.len() && groups[group_idx].text_start <= glyph.index && glyph.index < groups[group_idx].text_end {
-                let mut color = group_colors.get(group_idx).copied();
-                if let Some((p_char, typed_color, placeholder_color)) = pending_edit_colors {
-                    if glyph.index == p_char {
-                        color = Some(typed_color);
-                    } else if glyph.index == p_char + 1 {
-                        color = Some(placeholder_color);
-                    }
-                }
-                if let Some(color) = color {
-                    if glyph.is_emoji {
-                        let _ = window.paint_emoji(glyph_origin, font_id, glyph.id, shaped.font_size);
-                    } else {
-                        let _ = window.paint_glyph(glyph_origin, font_id, glyph.id, shaped.font_size, color);
-                    }
-                }
-            }
+        while group_idx < groups.len() && glyph.index >= groups[group_idx].text_end {
+            group_idx += 1;
         }
-    });
+        if group_idx < groups.len() && groups[group_idx].text_start <= glyph.index && glyph.index < groups[group_idx].text_end {
+            let centered_offset = centered_glyph_offset(cell_width_f, glyph_width);
+            let x_offset = hex_grid_x(glyph.index, cell_width) + px(centered_offset);
+            glyphs_out.push(CachedHexGlyph {
+                font_id,
+                glyph_id: glyph.id,
+                text_index: glyph.index,
+                group_idx,
+                x_offset,
+                glyph_width,
+                is_emoji: glyph.is_emoji,
+            });
+        }
+    }
+
+    CachedHexGlyphs {
+        cell_width,
+        font_size: shaped.font_size,
+        ascent: shaped.ascent,
+        descent: shaped.descent,
+        glyphs: glyphs_out,
+    }
 }
 
-/// Paint every glyph centered in its fixed ASCII cell while reusing the line
-/// shaped for the row. This keeps shaping batched and avoids per-character
-/// string allocations and shaping passes.
-pub fn paint_centered_ascii_glyphs(shaped: &ShapedLine, entries: &[AsciiCellEntry], origin: Point<Pixels>, line_height: Pixels, window: &mut Window) {
+/// Precomputes centered per-cell ASCII glyph coordinates from a batched shaped line.
+pub fn build_cached_ascii_glyphs(shaped: &ShapedLine, cells: &[CachedAsciiCell], cell_spans: &[(usize, usize)]) -> CachedAsciiGlyphs {
     let natural_width = shaped.width;
-    let baseline_offset = point(px(0.0), (line_height - shaped.ascent - shaped.descent) / 2.0 + shaped.ascent);
+    let mut glyphs_out = Vec::with_capacity(cells.len());
     let mut entry_idx = 0;
     let mut glyphs = shaped
         .runs
@@ -362,19 +345,84 @@ pub fn paint_centered_ascii_glyphs(shaped: &ShapedLine, entries: &[AsciiCellEntr
         let glyph_width = f32::from(natural_end - glyph.position.x).max(0.0);
         let centered_offset = centered_glyph_offset(ASCII_CELL_WIDTH, glyph_width);
 
-        while entry_idx < entries.len() && glyph.index >= entries[entry_idx].text_byte_end {
+        while entry_idx < cell_spans.len() && glyph.index >= cell_spans[entry_idx].1 {
             entry_idx += 1;
         }
 
-        if entry_idx < entries.len() && entries[entry_idx].text_byte_start <= glyph.index && glyph.index < entries[entry_idx].text_byte_end {
-            let cell_idx = entries[entry_idx].cell_idx;
-            let glyph_origin = point(origin.x + px(cell_idx as f32 * ASCII_CELL_WIDTH + centered_offset), origin.y) + baseline_offset;
-            let color = entries[entry_idx].color;
-            if glyph.is_emoji {
-                let _ = window.paint_emoji(glyph_origin, font_id, glyph.id, shaped.font_size);
-            } else {
-                let _ = window.paint_glyph(glyph_origin, font_id, glyph.id, shaped.font_size, color);
+        if entry_idx < cell_spans.len() && cell_spans[entry_idx].0 <= glyph.index && glyph.index < cell_spans[entry_idx].1 {
+            let cell_idx = cells[entry_idx].cell_idx;
+            glyphs_out.push(CachedAsciiGlyph {
+                font_id,
+                glyph_id: glyph.id,
+                x_offset: px(cell_idx as f32 * ASCII_CELL_WIDTH + centered_offset),
+                cell_index: entry_idx,
+                is_emoji: glyph.is_emoji,
+            });
+        }
+    }
+
+    CachedAsciiGlyphs {
+        font_size: shaped.font_size,
+        ascent: shaped.ascent,
+        descent: shaped.descent,
+        glyphs: glyphs_out,
+    }
+}
+
+/// Paints precomputed centered Hex glyphs without allocating a per-row paint layer or iterator.
+pub fn paint_centered_hex_glyphs(
+    cached: &CachedHexGlyphs,
+    group_colors: &[Hsla],
+    pending_edit_colors: Option<(usize, Hsla, Hsla)>,
+    cell_width: Pixels,
+    origin: Point<Pixels>,
+    line_height: Pixels,
+    window: &mut Window,
+) {
+    let same_cell_width = cached.cell_width == cell_width;
+    let cell_width_f = f32::from(cell_width);
+    let baseline_y = (line_height - cached.ascent - cached.descent) / 2.0 + cached.ascent;
+    let base_y = origin.y + baseline_y;
+
+    for glyph in &cached.glyphs {
+        let mut color = group_colors.get(glyph.group_idx).copied();
+        if let Some((p_char, typed_color, placeholder_color)) = pending_edit_colors {
+            if glyph.text_index == p_char {
+                color = Some(typed_color);
+            } else if glyph.text_index == p_char + 1 {
+                color = Some(placeholder_color);
             }
+        }
+        if let Some(color) = color {
+            let x_offset = if same_cell_width {
+                glyph.x_offset
+            } else {
+                hex_grid_x(glyph.text_index, cell_width) + px(centered_glyph_offset(cell_width_f, glyph.glyph_width))
+            };
+            let glyph_origin = point(origin.x + x_offset, base_y);
+            if glyph.is_emoji {
+                let _ = window.paint_emoji(glyph_origin, glyph.font_id, glyph.glyph_id, cached.font_size);
+            } else {
+                let _ = window.paint_glyph(glyph_origin, glyph.font_id, glyph.glyph_id, cached.font_size, color);
+            }
+        }
+    }
+}
+
+/// Paints precomputed centered ASCII glyphs from cached cell colors.
+pub fn paint_centered_ascii_glyphs(cached: &CachedAsciiGlyphs, cell_colors: &[Hsla], origin: Point<Pixels>, line_height: Pixels, window: &mut Window) {
+    let baseline_y = (line_height - cached.ascent - cached.descent) / 2.0 + cached.ascent;
+    let base_y = origin.y + baseline_y;
+
+    for glyph in &cached.glyphs {
+        let Some(&color) = cell_colors.get(glyph.cell_index) else {
+            continue;
+        };
+        let glyph_origin = point(origin.x + glyph.x_offset, base_y);
+        if glyph.is_emoji {
+            let _ = window.paint_emoji(glyph_origin, glyph.font_id, glyph.glyph_id, cached.font_size);
+        } else {
+            let _ = window.paint_glyph(glyph_origin, glyph.font_id, glyph.glyph_id, cached.font_size, color);
         }
     }
 }
@@ -961,7 +1009,7 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
     // Hex column
     let hex_chunk = if is_structure_header_row || is_collapsed_struct_row { &[] } else { chunk };
     let hex_source = build_hex_text_source(hex_chunk, offset, params.radix, params.group_size, params.is_big_endian, params.hex_case);
-    let shaped_hex = if !hex_source.text.is_empty() {
+    let hex_glyphs = if !hex_source.text.is_empty() {
         let run = TextRun {
             len: hex_source.text.len(),
             font: font.clone(),
@@ -970,27 +1018,28 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
             underline: None,
             strikethrough: None,
         };
-        Some(window.text_system().shape_line(hex_source.text.clone(), params.font_size, &[run], None))
+        let shaped = window.text_system().shape_line(hex_source.text.clone(), params.font_size, &[run], None);
+        Some(build_cached_hex_glyphs(&shaped, &hex_source.groups, params.hex_cell_width))
     } else {
         None
     };
 
     // ASCII column
     let mut ascii_cells = Vec::with_capacity(chunk.len());
-    let shaped_ascii = if params.show_ascii && chunk_len > 0 && !is_collapsed_struct_row {
+    let ascii_glyphs = if params.show_ascii && chunk_len > 0 && !is_collapsed_struct_row {
         let char_map = build_ascii_char_map(params.encoding, params.doc.buffer.data(), offset, chunk.len());
         let mut ascii_text = String::with_capacity(chunk.len());
+        let mut cell_spans = Vec::with_capacity(chunk.len());
         for (j, opt) in char_map.into_iter().enumerate() {
             let item = if let Some(item) = opt { item } else { continue };
             let c = item.character();
             let text_byte_start = ascii_text.len();
             ascii_text.push(c);
             let text_byte_end = ascii_text.len();
+            cell_spans.push((text_byte_start, text_byte_end));
             let byte = chunk.get(j).copied().unwrap_or(0);
             ascii_cells.push(CachedAsciiCell {
                 cell_idx: j,
-                text_byte_start,
-                text_byte_end,
                 byte,
                 is_printable: item.is_printable(),
             });
@@ -1004,7 +1053,8 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
                 underline: None,
                 strikethrough: None,
             };
-            Some(window.text_system().shape_line(SharedString::from(ascii_text), params.font_size, &[run], None))
+            let shaped = window.text_system().shape_line(SharedString::from(ascii_text), params.font_size, &[run], None);
+            Some(build_cached_ascii_glyphs(&shaped, &ascii_cells, &cell_spans))
         } else {
             None
         }
@@ -1165,9 +1215,9 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
         physical_address,
         shaped_addr,
         hex_source,
-        shaped_hex,
+        hex_glyphs,
         ascii_cells,
-        shaped_ascii,
+        ascii_glyphs,
         structure_fields,
         desc,
     }
@@ -1543,7 +1593,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         },
     );
 
-    let (hex_source_ref, shaped_hex_ref, pending_edit_colors) = if let Some((pending_pos, pending_digit)) = params.pending_hex_digit
+    let mut dyn_hex_glyphs: Option<CachedHexGlyphs> = None;
+    let (hex_source_ref, pending_edit_colors) = if let Some((pending_pos, pending_digit)) = params.pending_hex_digit
         && params.active_column == EditColumn::Hex
         && ((pending_pos >= offset && pending_pos < next_offset) || (is_eof_on_this_row && pending_pos == total_size))
     {
@@ -1638,14 +1689,17 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         } else {
             None
         };
+        dyn_hex_glyphs = dyn_shaped
+            .as_ref()
+            .map(|shaped| build_cached_hex_glyphs(shaped, &dyn_source.groups, params.hex_cell_width));
         (
             Cow::Owned(dyn_source),
-            dyn_shaped,
             pending_byte_char_start.map(|char_start| (char_start, caret_color, muted_color)),
         )
     } else {
-        (Cow::Borrowed(&cached.hex_source), cached.shaped_hex.clone(), None)
+        (Cow::Borrowed(&cached.hex_source), None)
     };
+    let hex_glyphs_ref = dyn_hex_glyphs.as_ref().or(cached.hex_glyphs.as_ref());
 
     let pending_byte_char_start = pending_edit_colors.map(|(p, _, _)| p);
 
@@ -1852,10 +1906,9 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 }
 
                 // 3. Text Pass for Data Items
-                if let Some(ref shaped_hex) = shaped_hex_ref {
+                if let Some(hex_glyphs) = hex_glyphs_ref {
                     paint_centered_hex_glyphs(
-                        shaped_hex,
-                        &hex_source_ref.groups,
+                        hex_glyphs,
                         &group_text_colors,
                         pending_edit_colors,
                         params.hex_cell_width,
@@ -1973,8 +2026,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 let ascii_mask_bounds = Bounds::new(point(ascii_start_x, params.bounds.top()), size(px(ascii_width), px(ROW_HEIGHT)));
                 window.with_content_mask(Some(ContentMask { bounds: ascii_mask_bounds }), |window| {
                     let group_bytes = params.group_size.byte_count();
-                    let has_shaped_ascii = cached.shaped_ascii.is_some();
-                    let mut ascii_entries: Vec<AsciiCellEntry> = if has_shaped_ascii {
+                    let has_ascii_glyphs = cached.ascii_glyphs.is_some();
+                    let mut ascii_cell_colors: Vec<Hsla> = if has_ascii_glyphs {
                         Vec::with_capacity(cached.ascii_cells.len())
                     } else {
                         Vec::new()
@@ -1982,7 +2035,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     let mut cell_cursor = 0;
                     let cells = &cached.ascii_cells;
 
-                    // 1. Background Quads Pass & Glyph Entry Collection for ASCII Cells
+                    // 1. Background Quads Pass & Glyph Color Collection for ASCII Cells
                     for j in 0..chunk.len() {
                         let byte_pos = offset + j;
                         let in_selected_group = if params.min_sel <= params.max_sel {
@@ -2023,7 +2076,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             window.paint_quad(fill(ascii_item_bounds, selection_bg));
                         }
 
-                        if has_shaped_ascii {
+                        if has_ascii_glyphs {
                             while cells.get(cell_cursor).is_some_and(|c| c.cell_idx < j) {
                                 cell_cursor += 1;
                             }
@@ -2038,12 +2091,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                                     muted_color,
                                     |fg, bg| contrast_cache.get_or_compute(fg, bg, |f, b| ensure_contrast(f, b, 4.5)),
                                 );
-                                ascii_entries.push(AsciiCellEntry {
-                                    cell_idx: cell.cell_idx,
-                                    text_byte_start: cell.text_byte_start,
-                                    text_byte_end: cell.text_byte_end,
-                                    color: text_color,
-                                });
+                                ascii_cell_colors.push(text_color);
                                 cell_cursor += 1;
                             }
                         }
@@ -2090,11 +2138,11 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         }
                     }
 
-                    // Paint each glyph centered in its fixed byte cell using cached shaped line
-                    if let Some(ref shaped) = cached.shaped_ascii {
+                    // Paint each precomputed glyph centered in its fixed byte cell
+                    if let Some(ref ascii_glyphs) = cached.ascii_glyphs {
                         paint_centered_ascii_glyphs(
-                            shaped,
-                            &ascii_entries,
+                            ascii_glyphs,
+                            &ascii_cell_colors,
                             point(ascii_content_start_x, params.bounds.top() + px(2.0)),
                             line_height,
                             window,

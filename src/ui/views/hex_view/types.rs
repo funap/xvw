@@ -234,14 +234,6 @@ impl AsciiChar {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct AsciiCellEntry {
-    pub cell_idx: usize,
-    pub text_byte_start: usize,
-    pub text_byte_end: usize,
-    pub color: Hsla,
-}
-
-#[derive(Clone, Copy, Debug)]
 pub struct LayoutInput {
     pub bounds_width: f32,
     pub is_struct_mode: bool,
