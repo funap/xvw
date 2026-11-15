@@ -59,6 +59,11 @@ impl<'a> BookmarkSessionRef<'a> {
         self.guard.metadata.bookmarks.snapshot_arc()
     }
 
+    /// Returns the document's bookmarks slice sorted by `(offset, size)`.
+    pub fn items(&self) -> &[BookmarkItem] {
+        self.guard.metadata.bookmarks.items()
+    }
+
     pub fn by_id(&self, id: &str) -> Option<BookmarkItem> {
         self.guard.metadata.bookmarks.by_id_cloned(id)
     }

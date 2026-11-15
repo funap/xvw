@@ -136,33 +136,11 @@ impl BookmarkPanel {
         }
         let ed = editor.read(cx);
         let cursor_offset = ed.cursor.offset;
-        let bookmarks = ed.bookmarks().snapshot_arc();
+        let bookmarks = ed.bookmarks();
 
-        if bookmarks.is_empty() {
-            let changed = self.selected_id.is_some();
-            self.selected_id = None;
-            return changed;
-        }
-
-        if let Some(ref sel_id) = self.selected_id
-            && let Some(item) = bookmarks.iter().find(|h| &h.id == sel_id)
-        {
-            let range = item.offset..item.offset + item.size;
-            if (item.size > 0 && range.contains(&cursor_offset)) || (item.size == 0 && item.offset == cursor_offset) {
-                return false;
-            }
-        }
-
-        let new_id = bookmarks
-            .iter()
-            .find(|h| {
-                let range = h.offset..h.offset + h.size;
-                (h.size > 0 && range.contains(&cursor_offset)) || (h.size == 0 && h.offset == cursor_offset)
-            })
-            .map(|item| item.id.clone());
-
-        if self.selected_id != new_id {
-            self.selected_id = new_id;
+        let new_id = resolve_bookmark_selection_at_cursor(bookmarks.items(), self.selected_id.as_deref(), cursor_offset);
+        if self.selected_id.as_deref() != new_id {
+            self.selected_id = new_id.map(str::to_owned);
             true
         } else {
             false
@@ -1018,6 +996,31 @@ impl BookmarkPanel {
     }
 }
 
+fn bookmark_contains_offset(item: &BookmarkItem, cursor_offset: usize) -> bool {
+    if item.size > 0 {
+        cursor_offset >= item.offset && cursor_offset < item.offset.saturating_add(item.size)
+    } else {
+        item.offset == cursor_offset
+    }
+}
+
+fn resolve_bookmark_selection_at_cursor<'a>(bookmarks: &'a [BookmarkItem], selected_id: Option<&str>, cursor_offset: usize) -> Option<&'a str> {
+    // BookmarkStore keeps `items` sorted by `(offset, size)`, so items past `cursor_offset` cannot match.
+    let mut first_match: Option<&'a str> = None;
+    for item in bookmarks.iter().take_while(|h| h.offset <= cursor_offset) {
+        if !bookmark_contains_offset(item, cursor_offset) {
+            continue;
+        }
+        if selected_id == Some(item.id.as_str()) {
+            return Some(item.id.as_str());
+        }
+        if first_match.is_none() {
+            first_match = Some(item.id.as_str());
+        }
+    }
+    first_match
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1051,5 +1054,34 @@ mod tests {
         let map = AddressMap::default();
         let display = format!("0x{:08X}", map.offset_to_address(42));
         assert_eq!(display, "0x0000002A");
+    }
+
+    #[test]
+    fn test_resolve_bookmark_selection_at_cursor() {
+        use crate::core::bookmark::model::{BookmarkColor, BookmarkItem};
+
+        fn mk(id: &str, offset: usize, size: usize) -> BookmarkItem {
+            let mut item = BookmarkItem::new(offset, size, BookmarkColor::Yellow, id);
+            item.id = id.to_string();
+            item
+        }
+
+        let empty: [BookmarkItem; 0] = [];
+        assert_eq!(super::resolve_bookmark_selection_at_cursor(&empty, Some("a"), 10), None);
+
+        // Sorted by (offset, size) like BookmarkStore.items
+        let items = vec![mk("outer", 10, 30), mk("inner", 20, 5), mk("point", 50, 0), mk("later", 60, 10)];
+
+        assert_eq!(super::resolve_bookmark_selection_at_cursor(&items, None, 5), None);
+        assert_eq!(super::resolve_bookmark_selection_at_cursor(&items, None, 15), Some("outer"));
+        // Preserves currently selected overlapping bookmark when it still contains the cursor
+        assert_eq!(super::resolve_bookmark_selection_at_cursor(&items, Some("inner"), 22), Some("inner"));
+        // Falls back to first enclosing bookmark once cursor leaves the selected inner bookmark
+        assert_eq!(super::resolve_bookmark_selection_at_cursor(&items, Some("inner"), 26), Some("outer"));
+        // Exclusive upper bound
+        assert_eq!(super::resolve_bookmark_selection_at_cursor(&items, None, 40), None);
+        // Zero-size bookmark matches exact offset
+        assert_eq!(super::resolve_bookmark_selection_at_cursor(&items, None, 50), Some("point"));
+        assert_eq!(super::resolve_bookmark_selection_at_cursor(&items, None, 51), None);
     }
 }
