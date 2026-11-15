@@ -30,6 +30,58 @@ pub fn paint_border_box(window: &mut Window, bounds: Bounds<Pixels>, border_widt
 }
 
 #[inline]
+fn clip_column_mask(scrollable: Bounds<Pixels>, col: Bounds<Pixels>) -> Bounds<Pixels> {
+    let left = scrollable.origin.x.max(col.origin.x);
+    let top = scrollable.origin.y.max(col.origin.y);
+    let right = (scrollable.origin.x + scrollable.size.width).min(col.origin.x + col.size.width);
+    let bottom = (scrollable.origin.y + scrollable.size.height).min(col.origin.y + col.size.height);
+    Bounds::new(point(left, top), size((right - left).max(px(0.0)), (bottom - top).max(px(0.0))))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_horizontal_fade(window: &mut Window, start_x: Pixels, top_y: Pixels, steps: usize, step_dx: f32, strip_w: f32, bg: Hsla, left_edge: bool) {
+    let denom = if left_edge { steps as f32 } else { (steps + 1) as f32 };
+    for step in 0..steps {
+        let x = start_x + px(step as f32 * step_dx);
+        let alpha = if left_edge { 1.0 - (step as f32 / denom) } else { (step + 1) as f32 / denom };
+        window.paint_quad(fill(Bounds::new(point(x, top_y), size(px(strip_w), px(ROW_HEIGHT))), bg.opacity(alpha * 0.95)));
+    }
+}
+
+/// Coalesces consecutive adjacent non-transparent color spans into minimal inclusive index runs.
+#[derive(Default)]
+struct ColorRunTracker {
+    active: Option<(usize, usize, Hsla)>,
+}
+
+impl ColorRunTracker {
+    #[inline]
+    fn push(&mut self, idx: usize, opt_color: Option<Hsla>, mut on_run: impl FnMut(usize, usize, Hsla)) {
+        let color = opt_color.filter(|c| c.a > 0.0);
+        match (self.active, color) {
+            (Some((start, _, prev_c)), Some(c)) if prev_c == c => {
+                self.active = Some((start, idx, prev_c));
+            }
+            (Some((start, end, prev_c)), next) => {
+                on_run(start, end, prev_c);
+                self.active = next.map(|c| (idx, idx, c));
+            }
+            (None, Some(c)) => {
+                self.active = Some((idx, idx, c));
+            }
+            (None, None) => {}
+        }
+    }
+
+    #[inline]
+    fn finish(self, mut on_run: impl FnMut(usize, usize, Hsla)) {
+        if let Some((start, end, c)) = self.active {
+            on_run(start, end, c);
+        }
+    }
+}
+
+#[inline]
 pub fn paint_cursor_border(window: &mut Window, bounds: Bounds<Pixels>, color: Hsla) {
     let padding_x = px(CURSOR_PADDING_X);
     let padding_y = px(CURSOR_PADDING_Y);
@@ -1741,143 +1793,141 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let text_origin_x = hex_start_x - px(params.hex_scroll_x);
     let total_data_width = f32::from(hex_grid_width(hex_source_ref.text.len(), params.hex_cell_width));
 
-    // 2. Background Quads Pass for Data Items (with clipping mask)
-    let hex_mask_bounds = Bounds::new(point(hex_start_x, params.bounds.top()), size(px(params.hex_col_width), px(ROW_HEIGHT)));
+    // 2. Background Quads Pass for Data Items (with clipped single content mask)
+    let hex_mask_bounds = clip_column_mask(
+        scrollable_mask_bounds,
+        Bounds::new(point(hex_start_x, params.bounds.top()), size(px(params.hex_col_width), px(ROW_HEIGHT))),
+    );
 
-    window.with_content_mask(
-        Some(ContentMask {
-            bounds: scrollable_mask_bounds,
-        }),
-        |window| {
-            window.with_content_mask(Some(ContentMask { bounds: hex_mask_bounds }), |window| {
-                for (item_idx, group) in hex_source_ref.groups.iter().enumerate() {
+    if hex_mask_bounds.size.width > px(0.0) {
+        window.with_content_mask(Some(ContentMask { bounds: hex_mask_bounds }), |window| {
+            // 2a. Structure field active underline
+            if let Some((ref af_range, field_hsla)) = row_active_underline {
+                for group in &hex_source_ref.groups {
                     let item_start_offset = offset + group.chunk_start;
-                    let (hl_color, is_selected, is_cursor) = group_visuals[item_idx];
-                    let (group_start_x, group_end_x) = hex_group_x(*group, text_origin_x, params.hex_cell_width);
-                    let previous_group_end_x = if item_idx > 0 {
-                        hex_group_x(hex_source_ref.groups[item_idx - 1], text_origin_x, params.hex_cell_width).1
-                    } else {
-                        group_start_x
-                    };
-                    let has_next = item_idx + 1 < hex_source_ref.groups.len();
-                    let next_group_start_x = if has_next {
-                        hex_group_x(hex_source_ref.groups[item_idx + 1], text_origin_x, params.hex_cell_width).0
-                    } else {
-                        group_end_x
-                    };
-
-                    // 0. Structure field active underline
-                    if let Some((ref af_range, field_hsla)) = row_active_underline
-                        && af_range.contains(&item_start_offset)
-                    {
+                    if af_range.contains(&item_start_offset) {
+                        let (group_start_x, group_end_x) = hex_group_x(*group, text_origin_x, params.hex_cell_width);
                         let underline_bounds = Bounds::new(
                             point(group_start_x, params.bounds.top() + px(ROW_HEIGHT - 2.0)),
                             size(group_end_x - group_start_x, px(2.0)),
                         );
                         window.paint_quad(fill(underline_bounds, field_hsla));
                     }
+                }
+            }
 
-                    // 1. Highlight (bookmark) background quad
-                    if let Some(color) = hl_color
-                        && color.a > 0.0
-                    {
-                        let prev_has_hl = item_idx > 0 && group_visuals[item_idx - 1].0.is_some();
-                        let next_has_hl = has_next && group_visuals[item_idx + 1].0.is_some();
-                        let hl_start_x = if prev_has_hl {
-                            pixel_midpoint(previous_group_end_x, group_start_x)
-                        } else {
-                            group_start_x
-                        };
-                        let hl_end_x = if next_has_hl {
-                            pixel_midpoint(group_end_x, next_group_start_x)
-                        } else {
-                            group_end_x
-                        };
-                        let hl_fill_bounds = Bounds::new(
-                            point(hl_start_x, params.bounds.top() + px(1.0)),
-                            size(hl_end_x - hl_start_x, px(ROW_HEIGHT - 2.0)),
-                        );
-                        window.paint_quad(fill(hl_fill_bounds, color));
+            // 2b. Coalesced highlight (bookmark) background quads
+            let mut paint_hl_run = |start: usize, end: usize, color: Hsla| {
+                let start_x = hex_group_x(hex_source_ref.groups[start], text_origin_x, params.hex_cell_width).0;
+                let end_x = hex_group_x(hex_source_ref.groups[end], text_origin_x, params.hex_cell_width).1;
+                let hl_start_x = if start > 0 && group_visuals[start - 1].0.is_some() {
+                    let prev_end_x = hex_group_x(hex_source_ref.groups[start - 1], text_origin_x, params.hex_cell_width).1;
+                    pixel_midpoint(prev_end_x, start_x)
+                } else {
+                    start_x
+                };
+                let hl_end_x = if end + 1 < hex_source_ref.groups.len() && group_visuals[end + 1].0.is_some() {
+                    let next_start_x = hex_group_x(hex_source_ref.groups[end + 1], text_origin_x, params.hex_cell_width).0;
+                    pixel_midpoint(end_x, next_start_x)
+                } else {
+                    end_x
+                };
+                let hl_fill_bounds = Bounds::new(
+                    point(hl_start_x, params.bounds.top() + px(1.0)),
+                    size(hl_end_x - hl_start_x, px(ROW_HEIGHT - 2.0)),
+                );
+                window.paint_quad(fill(hl_fill_bounds, color));
+            };
+            let mut hl_tracker = ColorRunTracker::default();
+            for (item_idx, &(hl_color, _, _)) in group_visuals.iter().enumerate() {
+                hl_tracker.push(item_idx, hl_color, &mut paint_hl_run);
+            }
+            hl_tracker.finish(&mut paint_hl_run);
+
+            // 2c. Coalesced translucent selection quad (overlaid on top of highlight)
+            if selection_bg.a > 0.0 {
+                let mut sel_start: Option<usize> = None;
+                for item_idx in 0..=group_visuals.len() {
+                    let is_selected = group_visuals.get(item_idx).is_some_and(|v| v.1);
+                    match (sel_start, is_selected) {
+                        (None, true) => sel_start = Some(item_idx),
+                        (Some(start), false) => {
+                            let start_x = hex_group_x(hex_source_ref.groups[start], text_origin_x, params.hex_cell_width).0;
+                            let end_x = hex_group_x(hex_source_ref.groups[item_idx - 1], text_origin_x, params.hex_cell_width).1;
+                            let sel_fill_bounds = Bounds::new(point(start_x, params.bounds.top() + px(1.0)), size(end_x - start_x, px(ROW_HEIGHT - 2.0)));
+                            window.paint_quad(fill(sel_fill_bounds, selection_bg));
+                            sel_start = None;
+                        }
+                        _ => {}
                     }
+                }
+            }
 
-                    // 2. Translucent selection quad (overlaid on top of highlight)
-                    if is_selected && selection_bg.a > 0.0 {
-                        let prev_is_sel = item_idx > 0 && group_visuals[item_idx - 1].1;
-                        let next_is_sel = has_next && group_visuals[item_idx + 1].1;
-                        let sel_start_x = if prev_is_sel {
-                            pixel_midpoint(previous_group_end_x, group_start_x)
-                        } else {
-                            group_start_x
-                        };
-                        let sel_end_x = if next_is_sel {
-                            pixel_midpoint(group_end_x, next_group_start_x)
-                        } else {
-                            group_end_x
-                        };
-                        let sel_fill_bounds = Bounds::new(
-                            point(sel_start_x, params.bounds.top() + px(1.0)),
-                            size(sel_end_x - sel_start_x, px(ROW_HEIGHT - 2.0)),
-                        );
-                        window.paint_quad(fill(sel_fill_bounds, selection_bg));
+            // 2d. Cursor Pass (only evaluated on the cursor row)
+            if is_cursor_row && !params.insert_mode && pending_byte_char_start.is_none() {
+                let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
+                for (item_idx, group) in hex_source_ref.groups.iter().enumerate() {
+                    let (hl_color, is_selected, is_cursor) = group_visuals[item_idx];
+                    if !is_cursor {
+                        continue;
                     }
+                    let item_start_offset = offset + group.chunk_start;
+                    let (group_start_x, group_end_x) = hex_group_x(*group, text_origin_x, params.hex_cell_width);
 
-                    // 3. Cursor Pass
-                    if is_cursor && !params.insert_mode && pending_byte_char_start.is_none() {
-                        let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
-
-                        if params.radix == DisplayRadix::Hexadecimal {
-                            let byte_index = params.cursor_offset.saturating_sub(item_start_offset);
-                            let group_len = group.chunk_end.saturating_sub(group.chunk_start);
-                            let visual_byte = if group_len == 0 {
-                                0
-                            } else if !params.is_big_endian && group_len > 1 {
-                                group_len.saturating_sub(byte_index + 1)
-                            } else {
-                                byte_index
-                            };
-                            let byte_char_start = group.text_start + visual_byte * 2;
-                            let byte_start_x = text_origin_x + hex_grid_x(byte_char_start, params.hex_cell_width);
-                            let byte_width = hex_grid_x(2, params.hex_cell_width);
-                            let byte_box_bounds = Bounds::new(point(byte_start_x, params.bounds.top() + px(1.0)), size(byte_width, px(ROW_HEIGHT - 2.0)));
-
-                            if params.active_column == EditColumn::Hex {
-                                paint_cursor_border(window, byte_box_bounds, cursor_border_color);
-                            } else {
-                                paint_underscore_cursor_at(window, byte_box_bounds, byte_start_x, byte_width, cursor_border_color);
-                            }
+                    if params.radix == DisplayRadix::Hexadecimal {
+                        let byte_index = params.cursor_offset.saturating_sub(item_start_offset);
+                        let group_len = group.chunk_end.saturating_sub(group.chunk_start);
+                        let visual_byte = if group_len == 0 {
+                            0
+                        } else if !params.is_big_endian && group_len > 1 {
+                            group_len.saturating_sub(byte_index + 1)
                         } else {
-                            let has_bg = hl_color.is_some() || is_selected;
-                            let prev_has_bg = item_idx > 0 && (group_visuals[item_idx - 1].0.is_some() || group_visuals[item_idx - 1].1);
-                            let next_has_bg = has_next && (group_visuals[item_idx + 1].0.is_some() || group_visuals[item_idx + 1].1);
-                            let (cursor_start_x, cursor_end_x) = if has_bg {
-                                (
-                                    if prev_has_bg {
-                                        pixel_midpoint(previous_group_end_x, group_start_x)
-                                    } else {
-                                        group_start_x
-                                    },
-                                    if next_has_bg {
-                                        pixel_midpoint(group_end_x, next_group_start_x)
-                                    } else {
-                                        group_end_x
-                                    },
-                                )
-                            } else {
-                                (group_start_x, group_end_x)
-                            };
-                            let cursor_width = cursor_end_x - cursor_start_x;
-                            let item_box_bounds = Bounds::new(point(cursor_start_x, params.bounds.top() + px(1.0)), size(cursor_width, px(ROW_HEIGHT - 2.0)));
-                            if params.active_column == EditColumn::Hex {
-                                paint_cursor_border(window, item_box_bounds, cursor_border_color);
-                            } else {
-                                paint_underscore_cursor_at(window, item_box_bounds, cursor_start_x, cursor_width, cursor_border_color);
-                            }
+                            byte_index
+                        };
+                        let byte_char_start = group.text_start + visual_byte * 2;
+                        let byte_start_x = text_origin_x + hex_grid_x(byte_char_start, params.hex_cell_width);
+                        let byte_width = hex_grid_x(2, params.hex_cell_width);
+                        let byte_box_bounds = Bounds::new(point(byte_start_x, params.bounds.top() + px(1.0)), size(byte_width, px(ROW_HEIGHT - 2.0)));
+
+                        if params.active_column == EditColumn::Hex {
+                            paint_cursor_border(window, byte_box_bounds, cursor_border_color);
+                        } else {
+                            paint_underscore_cursor_at(window, byte_box_bounds, byte_start_x, byte_width, cursor_border_color);
+                        }
+                    } else {
+                        let has_bg = hl_color.is_some() || is_selected;
+                        let prev_has_bg = item_idx > 0 && (group_visuals[item_idx - 1].0.is_some() || group_visuals[item_idx - 1].1);
+                        let next_has_bg =
+                            item_idx + 1 < hex_source_ref.groups.len() && (group_visuals[item_idx + 1].0.is_some() || group_visuals[item_idx + 1].1);
+                        let (cursor_start_x, cursor_end_x) = if has_bg {
+                            (
+                                if prev_has_bg {
+                                    let prev_end_x = hex_group_x(hex_source_ref.groups[item_idx - 1], text_origin_x, params.hex_cell_width).1;
+                                    pixel_midpoint(prev_end_x, group_start_x)
+                                } else {
+                                    group_start_x
+                                },
+                                if next_has_bg {
+                                    let next_start_x = hex_group_x(hex_source_ref.groups[item_idx + 1], text_origin_x, params.hex_cell_width).0;
+                                    pixel_midpoint(group_end_x, next_start_x)
+                                } else {
+                                    group_end_x
+                                },
+                            )
+                        } else {
+                            (group_start_x, group_end_x)
+                        };
+                        let cursor_width = cursor_end_x - cursor_start_x;
+                        let item_box_bounds = Bounds::new(point(cursor_start_x, params.bounds.top() + px(1.0)), size(cursor_width, px(ROW_HEIGHT - 2.0)));
+                        if params.active_column == EditColumn::Hex {
+                            paint_cursor_border(window, item_box_bounds, cursor_border_color);
+                        } else {
+                            paint_underscore_cursor_at(window, item_box_bounds, cursor_start_x, cursor_width, cursor_border_color);
                         }
                     }
                 }
 
-                if is_eof_on_this_row && !params.insert_mode && pending_byte_char_start.is_none() {
-                    let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
+                if is_eof_on_this_row {
                     let (eof_start_x, eof_width) = if hex_source_ref.groups.is_empty() {
                         (text_origin_x, hex_grid_x(2, params.hex_cell_width))
                     } else {
@@ -1902,201 +1952,193 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         paint_underscore_cursor_at(window, byte_box_bounds, eof_start_x, eof_width, cursor_border_color);
                     }
                 }
+            }
 
-                // 3. Text Pass for Data Items
-                if let Some(hex_glyphs) = hex_glyphs_ref {
-                    paint_centered_hex_glyphs(
-                        hex_glyphs,
-                        &group_text_colors,
-                        pending_edit_colors,
-                        params.hex_cell_width,
-                        point(text_origin_x, params.bounds.top() + px(2.0)),
-                        line_height,
-                        window,
+            // 3. Text Pass for Data Items
+            if let Some(hex_glyphs) = hex_glyphs_ref {
+                paint_centered_hex_glyphs(
+                    hex_glyphs,
+                    &group_text_colors,
+                    pending_edit_colors,
+                    params.hex_cell_width,
+                    point(text_origin_x, params.bounds.top() + px(2.0)),
+                    line_height,
+                    window,
+                );
+            }
+
+            if insert_cursor_active && is_cursor_row {
+                let has_pending_nibble = params.pending_hex_digit.is_some_and(|(offset, _)| offset == params.insert_cursor_offset);
+                let insert_cursor_params = HexInsertCursorParams {
+                    radix: params.radix,
+                    group_size: params.group_size,
+                    is_big_endian: params.is_big_endian,
+                    selection_active: insert_selection_active,
+                    has_pending_nibble,
+                    origin_x: text_origin_x,
+                    cell_width: params.hex_cell_width,
+                };
+                for (item_idx, group) in hex_source_ref.groups.iter().enumerate() {
+                    let cursor_border_color = caret_color;
+                    let (group_start_x, group_end_x) = hex_group_x(*group, text_origin_x, params.hex_cell_width);
+                    let item_box_bounds = Bounds::new(
+                        point(group_start_x, params.bounds.top() + px(1.0)),
+                        size(group_end_x - group_start_x, px(ROW_HEIGHT - 2.0)),
                     );
-                }
-
-                if insert_cursor_active {
-                    let has_pending_nibble = params.pending_hex_digit.is_some_and(|(offset, _)| offset == params.insert_cursor_offset);
-                    let insert_cursor_params = HexInsertCursorParams {
-                        radix: params.radix,
-                        group_size: params.group_size,
-                        is_big_endian: params.is_big_endian,
-                        selection_active: insert_selection_active,
-                        has_pending_nibble,
-                        origin_x: text_origin_x,
-                        cell_width: params.hex_cell_width,
+                    let item_start_offset = offset + group.chunk_start;
+                    let item_end_offset = offset + group.chunk_end;
+                    let cursor_geometry = if params.insert_cursor_offset >= item_start_offset && params.insert_cursor_offset < item_end_offset {
+                        hex_insert_cursor_geometry(*group, params.insert_cursor_offset.saturating_sub(offset), insert_cursor_params)
+                    } else if params.insert_cursor_offset == params.doc.buffer.len()
+                        && item_idx + 1 == hex_source_ref.groups.len()
+                        && item_end_offset == next_offset
+                        && next_offset == params.doc.buffer.len()
+                    {
+                        Some(hex_insert_cursor_end_geometry(*group, text_origin_x, params.hex_cell_width, params.group_size))
+                    } else {
+                        None
                     };
-                    for (item_idx, group) in hex_source_ref.groups.iter().enumerate() {
-                        let cursor_border_color = caret_color;
-                        let (group_start_x, group_end_x) = hex_group_x(*group, text_origin_x, params.hex_cell_width);
-                        let item_box_bounds = Bounds::new(
-                            point(group_start_x, params.bounds.top() + px(1.0)),
-                            size(group_end_x - group_start_x, px(ROW_HEIGHT - 2.0)),
-                        );
-                        let item_start_offset = offset + group.chunk_start;
-                        let item_end_offset = offset + group.chunk_end;
-                        let cursor_geometry = if params.insert_cursor_offset >= item_start_offset && params.insert_cursor_offset < item_end_offset {
-                            hex_insert_cursor_geometry(*group, params.insert_cursor_offset.saturating_sub(offset), insert_cursor_params)
-                        } else if params.insert_cursor_offset == params.doc.buffer.len()
-                            && item_idx + 1 == hex_source_ref.groups.len()
-                            && item_end_offset == next_offset
-                            && next_offset == params.doc.buffer.len()
-                        {
-                            Some(hex_insert_cursor_end_geometry(*group, text_origin_x, params.hex_cell_width, params.group_size))
-                        } else {
-                            None
-                        };
 
-                        if let Some((cursor_x, cursor_width)) = cursor_geometry {
-                            match params.active_column {
-                                EditColumn::Hex if params.cursor_visible => {
-                                    paint_insert_cursor_at(window, item_box_bounds, cursor_x, cursor_border_color);
-                                }
-                                EditColumn::Ascii => {
-                                    paint_underscore_cursor_at(window, item_box_bounds, cursor_x, cursor_width, cursor_border_color);
-                                }
-                                EditColumn::Hex => {}
-                            }
-                        }
-                    }
-
-                    if hex_source_ref.groups.is_empty() && params.insert_cursor_offset == offset {
-                        let cursor_border_color = caret_color;
-                        let item_box_bounds = Bounds::new(
-                            point(text_origin_x, params.bounds.top() + px(1.0)),
-                            size(params.hex_cell_width, px(ROW_HEIGHT - 2.0)),
-                        );
-                        let empty_slot_width =
-                            px(digit_count(params.radix, params.group_size) as f32 / params.group_size.byte_count() as f32 * f32::from(params.hex_cell_width));
+                    if let Some((cursor_x, cursor_width)) = cursor_geometry {
                         match params.active_column {
                             EditColumn::Hex if params.cursor_visible => {
-                                paint_insert_cursor_at(window, item_box_bounds, text_origin_x, cursor_border_color);
+                                paint_insert_cursor_at(window, item_box_bounds, cursor_x, cursor_border_color);
                             }
                             EditColumn::Ascii => {
-                                paint_underscore_cursor_at(window, item_box_bounds, text_origin_x, empty_slot_width, cursor_border_color);
+                                paint_underscore_cursor_at(window, item_box_bounds, cursor_x, cursor_width, cursor_border_color);
                             }
                             EditColumn::Hex => {}
                         }
                     }
                 }
 
-                // Left-edge subtle gradient fade when hex_scroll_x > 1.0
-                if params.hex_scroll_x > 1.0 {
-                    let bg = bg_color_theme;
-                    for step in 0..5 {
-                        let x = hex_start_x + px(step as f32 * 3.2);
-                        let alpha = 1.0 - (step as f32 / 5.0);
-                        window.paint_quad(fill(
-                            Bounds::new(point(x, params.bounds.top()), size(px(3.4), px(ROW_HEIGHT))),
-                            bg.opacity(alpha * 0.95),
-                        ));
+                if hex_source_ref.groups.is_empty() && params.insert_cursor_offset == offset {
+                    let cursor_border_color = caret_color;
+                    let item_box_bounds = Bounds::new(
+                        point(text_origin_x, params.bounds.top() + px(1.0)),
+                        size(params.hex_cell_width, px(ROW_HEIGHT - 2.0)),
+                    );
+                    let empty_slot_width =
+                        px(digit_count(params.radix, params.group_size) as f32 / params.group_size.byte_count() as f32 * f32::from(params.hex_cell_width));
+                    match params.active_column {
+                        EditColumn::Hex if params.cursor_visible => {
+                            paint_insert_cursor_at(window, item_box_bounds, text_origin_x, cursor_border_color);
+                        }
+                        EditColumn::Ascii => {
+                            paint_underscore_cursor_at(window, item_box_bounds, text_origin_x, empty_slot_width, cursor_border_color);
+                        }
+                        EditColumn::Hex => {}
                     }
                 }
+            }
 
-                // Right-edge subtle gradient fade when row data overflows hex_col_width
-                if params.hex_scroll_x + params.hex_col_width < total_data_width - 1.0 {
-                    let fade_w = 22.0;
-                    let fade_start = hex_end_x - px(fade_w);
-                    let bg = bg_color_theme;
-                    for step in 0..6 {
-                        let x = fade_start + px(step as f32 * 3.6);
-                        let alpha = (step + 1) as f32 / 7.0;
-                        window.paint_quad(fill(
-                            Bounds::new(point(x, params.bounds.top()), size(px(3.8), px(ROW_HEIGHT))),
-                            bg.opacity(alpha * 0.95),
-                        ));
-                    }
-                }
-            });
-        },
-    );
+            // Left-edge subtle gradient fade when hex_scroll_x > 1.0
+            if params.hex_scroll_x > 1.0 {
+                paint_horizontal_fade(window, hex_start_x, params.bounds.top(), 5, 3.2, 3.4, bg_color_theme, true);
+            }
+
+            // Right-edge subtle gradient fade when row data overflows hex_col_width
+            if params.hex_scroll_x + params.hex_col_width < total_data_width - 1.0 {
+                paint_horizontal_fade(window, hex_end_x - px(22.0), params.bounds.top(), 6, 3.6, 3.8, bg_color_theme, false);
+            }
+        });
+    }
 
     // 3. ASCII Column (when ASCII view is enabled and row has bytes)
     if params.show_ascii && chunk_len > 0 && !is_collapsed_struct_row {
-        window.with_content_mask(
-            Some(ContentMask {
-                bounds: scrollable_mask_bounds,
-            }),
-            |window| {
-                let ascii_start_x = hex_end_x + px(gap);
-                let ascii_content_start_x = ascii_start_x - px(params.ascii_scroll_x);
-                let ascii_mask_bounds = Bounds::new(point(ascii_start_x, params.bounds.top()), size(px(ascii_width), px(ROW_HEIGHT)));
-                window.with_content_mask(Some(ContentMask { bounds: ascii_mask_bounds }), |window| {
-                    let group_bytes = params.group_size.byte_count();
-                    let has_ascii_glyphs = cached.ascii_glyphs.is_some();
-                    let mut ascii_cell_colors: Vec<Hsla> = if has_ascii_glyphs {
-                        Vec::with_capacity(cached.ascii_cells.len())
+        let ascii_mask_bounds = clip_column_mask(
+            scrollable_mask_bounds,
+            Bounds::new(point(ascii_start_x, params.bounds.top()), size(px(ascii_width), px(ROW_HEIGHT))),
+        );
+        if ascii_mask_bounds.size.width > px(0.0) {
+            let ascii_content_start_x = ascii_start_x - px(params.ascii_scroll_x);
+            window.with_content_mask(Some(ContentMask { bounds: ascii_mask_bounds }), |window| {
+                let group_bytes = params.group_size.byte_count();
+                let has_ascii_glyphs = cached.ascii_glyphs.is_some();
+                let mut ascii_cell_colors: Vec<Hsla> = if has_ascii_glyphs {
+                    Vec::with_capacity(cached.ascii_cells.len())
+                } else {
+                    Vec::new()
+                };
+                let mut cell_cursor = 0;
+                let cells = &cached.ascii_cells;
+                let (sel_start_j, sel_end_j) = if params.min_sel <= params.max_sel {
+                    let sel_byte_start = (params.min_sel / group_bytes) * group_bytes;
+                    let sel_byte_end = (params.max_sel / group_bytes).saturating_add(1).saturating_mul(group_bytes);
+                    if sel_byte_start < next_offset && sel_byte_end > offset {
+                        (sel_byte_start.saturating_sub(offset), sel_byte_end.saturating_sub(offset).min(chunk.len()))
                     } else {
-                        Vec::new()
-                    };
-                    let mut cell_cursor = 0;
-                    let cells = &cached.ascii_cells;
+                        (0, 0)
+                    }
+                } else {
+                    (0, 0)
+                };
 
-                    // 1. Background Quads Pass & Glyph Color Collection for ASCII Cells
-                    for j in 0..chunk.len() {
-                        let byte_pos = offset + j;
-                        let in_selected_group = if params.min_sel <= params.max_sel {
-                            let group_start = (byte_pos / group_bytes) * group_bytes;
-                            let group_end = group_start + group_bytes;
-                            group_start <= params.max_sel && group_end > params.min_sel
-                        } else {
-                            false
-                        };
+                // 1. Coalesced Background Quads Pass & Glyph Color Collection for ASCII Cells
+                let mut paint_ascii_hl = |start: usize, end: usize, color: Hsla| {
+                    let hl_bounds = Bounds::new(
+                        point(ascii_content_start_x + px(start as f32 * ASCII_CELL_WIDTH), params.bounds.top() + px(1.0)),
+                        size(px((end - start + 1) as f32 * ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)),
+                    );
+                    window.paint_quad(fill(hl_bounds, color));
+                };
+                let mut hl_tracker = ColorRunTracker::default();
+                for j in 0..chunk.len() {
+                    let byte_pos = offset + j;
+                    let in_selected_group = j >= sel_start_j && j < sel_end_j;
+                    let current_hl_color = highlight_color_for_range(byte_pos, byte_pos.saturating_add(1), active_row_highlights);
+                    hl_tracker.push(j, current_hl_color, &mut paint_ascii_hl);
 
-                        let current_hl_color = highlight_color_for_range(byte_pos, byte_pos.saturating_add(1), active_row_highlights);
-
-                        let ascii_item_bounds = Bounds::new(
-                            point(ascii_content_start_x + px(j as f32 * ASCII_CELL_WIDTH), params.bounds.top() + px(1.0)),
-                            size(px(ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)),
-                        );
-
-                        // Highlight (bookmark) quad
-                        if let Some(hl_color) = current_hl_color
-                            && hl_color.a > 0.0
-                        {
-                            window.paint_quad(fill(ascii_item_bounds, hl_color));
+                    if has_ascii_glyphs {
+                        while cells.get(cell_cursor).is_some_and(|c| c.cell_idx < j) {
+                            cell_cursor += 1;
                         }
-
-                        // Structure field active underline in ASCII
-                        if let Some((ref af_range, field_hsla)) = row_active_underline
-                            && af_range.contains(&byte_pos)
-                        {
-                            let underline_bounds = Bounds::new(
-                                point(ascii_item_bounds.left(), params.bounds.top() + px(ROW_HEIGHT - 2.0)),
-                                size(ascii_item_bounds.size.width, px(2.0)),
+                        if let Some(cell) = cells.get(cell_cursor).filter(|c| c.cell_idx == j) {
+                            let text_color = ascii_item_text_color_with(
+                                in_selected_group,
+                                current_hl_color,
+                                cell.byte,
+                                cell.is_printable,
+                                &params.category_palette,
+                                fg_color,
+                                muted_color,
+                                |fg, bg| contrast_cache.get_or_compute(fg, bg, |f, b| ensure_contrast(f, b, 4.5)),
                             );
-                            window.paint_quad(fill(underline_bounds, field_hsla));
-                        }
-
-                        // Translucent selection quad (overlaid on top of highlight)
-                        if in_selected_group && selection_bg.a > 0.0 {
-                            window.paint_quad(fill(ascii_item_bounds, selection_bg));
-                        }
-
-                        if has_ascii_glyphs {
-                            while cells.get(cell_cursor).is_some_and(|c| c.cell_idx < j) {
-                                cell_cursor += 1;
-                            }
-                            if let Some(cell) = cells.get(cell_cursor).filter(|c| c.cell_idx == j) {
-                                let text_color = ascii_item_text_color_with(
-                                    in_selected_group,
-                                    current_hl_color,
-                                    cell.byte,
-                                    cell.is_printable,
-                                    &params.category_palette,
-                                    fg_color,
-                                    muted_color,
-                                    |fg, bg| contrast_cache.get_or_compute(fg, bg, |f, b| ensure_contrast(f, b, 4.5)),
-                                );
-                                ascii_cell_colors.push(text_color);
-                                cell_cursor += 1;
-                            }
+                            ascii_cell_colors.push(text_color);
+                            cell_cursor += 1;
                         }
                     }
+                }
+                hl_tracker.finish(&mut paint_ascii_hl);
 
-                    // 2. Cursor Border Pass for ASCII Column / Groups
-                    if params.active_column == EditColumn::Ascii && !params.insert_mode {
+                // Structure field active underline in ASCII
+                if let Some((ref af_range, field_hsla)) = row_active_underline {
+                    let ul_start = af_range.start.saturating_sub(offset);
+                    let ul_end = af_range.end.saturating_sub(offset).min(chunk.len());
+                    if ul_end > ul_start {
+                        let underline_bounds = Bounds::new(
+                            point(
+                                ascii_content_start_x + px(ul_start as f32 * ASCII_CELL_WIDTH),
+                                params.bounds.top() + px(ROW_HEIGHT - 2.0),
+                            ),
+                            size(px((ul_end - ul_start) as f32 * ASCII_CELL_WIDTH), px(2.0)),
+                        );
+                        window.paint_quad(fill(underline_bounds, field_hsla));
+                    }
+                }
+
+                // Translucent selection quad (overlaid on top of highlight & underline)
+                if sel_end_j > sel_start_j && selection_bg.a > 0.0 {
+                    let sel_bounds = Bounds::new(
+                        point(ascii_content_start_x + px(sel_start_j as f32 * ASCII_CELL_WIDTH), params.bounds.top() + px(1.0)),
+                        size(px((sel_end_j - sel_start_j) as f32 * ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)),
+                    );
+                    window.paint_quad(fill(sel_bounds, selection_bg));
+                }
+
+                // 2. Cursor Border Pass for ASCII Column / Groups (only evaluated on the cursor row)
+                if is_cursor_row && !params.insert_mode {
+                    if params.active_column == EditColumn::Ascii {
                         if let Some(char_range) = params.ascii_cursor_char_range.as_ref().filter(|cr| cr.start < next_offset && cr.end > offset) {
                             let cell_start = char_range.start.saturating_sub(offset);
                             let cell_end = (char_range.end.saturating_sub(offset)).min(chunk.len());
@@ -2113,13 +2155,11 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             let ascii_box_bounds = Bounds::new(point(ascii_x, params.bounds.top() + px(1.0)), size(px(ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)));
                             paint_cursor_border(window, ascii_box_bounds, cursor_border_color);
                         }
-                    } else if params.active_column != EditColumn::Ascii {
+                    } else {
                         for group in hex_source_ref.groups.iter() {
                             let item_start_offset = offset + group.chunk_start;
                             let item_end_offset = offset + group.chunk_end;
-                            let is_cursor = params.cursor_offset >= item_start_offset && params.cursor_offset < item_end_offset;
-
-                            if is_cursor && !params.insert_mode {
+                            if params.cursor_offset >= item_start_offset && params.cursor_offset < item_end_offset {
                                 let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
                                 let group_start_x = ascii_content_start_x + px(group.chunk_start as f32 * ASCII_CELL_WIDTH);
                                 let group_width = px((group.chunk_end - group.chunk_start) as f32 * ASCII_CELL_WIDTH);
@@ -2128,239 +2168,189 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                                 paint_underscore_cursor_at(window, ascii_group_bounds, group_start_x, group_width, cursor_border_color);
                             }
                         }
-                        if is_eof_on_this_row && !params.insert_mode {
+                        if is_eof_on_this_row {
                             let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
                             let ascii_x = ascii_content_start_x + px(chunk_len as f32 * ASCII_CELL_WIDTH);
                             let ascii_box_bounds = Bounds::new(point(ascii_x, params.bounds.top() + px(1.0)), size(px(ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)));
                             paint_underscore_cursor_at(window, ascii_box_bounds, ascii_x, px(ASCII_CELL_WIDTH), cursor_border_color);
                         }
                     }
+                }
 
-                    // Paint each precomputed glyph centered in its fixed byte cell
-                    if let Some(ref ascii_glyphs) = cached.ascii_glyphs {
-                        paint_centered_ascii_glyphs(
-                            ascii_glyphs,
-                            &ascii_cell_colors,
-                            point(ascii_content_start_x, params.bounds.top() + px(2.0)),
-                            line_height,
-                            window,
-                        );
-                    }
+                // Paint each precomputed glyph centered in its fixed byte cell
+                if let Some(ref ascii_glyphs) = cached.ascii_glyphs {
+                    paint_centered_ascii_glyphs(
+                        ascii_glyphs,
+                        &ascii_cell_colors,
+                        point(ascii_content_start_x, params.bounds.top() + px(2.0)),
+                        line_height,
+                        window,
+                    );
+                }
 
-                    if insert_cursor_active {
-                        let cursor_x = if params.insert_cursor_offset >= offset && params.insert_cursor_offset < next_offset {
-                            Some(ascii_content_start_x + px((params.insert_cursor_offset - offset) as f32 * ASCII_CELL_WIDTH))
-                        } else if params.insert_cursor_offset == params.doc.buffer.len()
-                            && next_offset == params.doc.buffer.len()
-                            && params.insert_cursor_offset == next_offset
-                        {
-                            Some(ascii_content_start_x + px(chunk_len as f32 * ASCII_CELL_WIDTH))
-                        } else if chunk_len == 0 && params.insert_cursor_offset == offset {
-                            Some(ascii_content_start_x)
-                        } else {
-                            None
-                        };
+                if insert_cursor_active && is_cursor_row {
+                    let cursor_x = if params.insert_cursor_offset >= offset && params.insert_cursor_offset < next_offset {
+                        Some(ascii_content_start_x + px((params.insert_cursor_offset - offset) as f32 * ASCII_CELL_WIDTH))
+                    } else if params.insert_cursor_offset == params.doc.buffer.len()
+                        && next_offset == params.doc.buffer.len()
+                        && params.insert_cursor_offset == next_offset
+                    {
+                        Some(ascii_content_start_x + px(chunk_len as f32 * ASCII_CELL_WIDTH))
+                    } else if chunk_len == 0 && params.insert_cursor_offset == offset {
+                        Some(ascii_content_start_x)
+                    } else {
+                        None
+                    };
 
-                        if let Some(cursor_x) = cursor_x {
-                            let cursor_border_color = caret_color;
-                            let ascii_cursor_bounds =
-                                Bounds::new(point(cursor_x, params.bounds.top() + px(1.0)), size(px(ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)));
-                            match params.active_column {
-                                EditColumn::Ascii if params.cursor_visible => {
-                                    paint_insert_cursor_at(window, ascii_cursor_bounds, cursor_x, cursor_border_color);
-                                }
-                                EditColumn::Hex => {
-                                    paint_underscore_cursor_at(window, ascii_cursor_bounds, cursor_x, px(ASCII_CELL_WIDTH), cursor_border_color);
-                                }
-                                EditColumn::Ascii => {}
+                    if let Some(cursor_x) = cursor_x {
+                        let cursor_border_color = caret_color;
+                        let ascii_cursor_bounds = Bounds::new(point(cursor_x, params.bounds.top() + px(1.0)), size(px(ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)));
+                        match params.active_column {
+                            EditColumn::Ascii if params.cursor_visible => {
+                                paint_insert_cursor_at(window, ascii_cursor_bounds, cursor_x, cursor_border_color);
                             }
+                            EditColumn::Hex => {
+                                paint_underscore_cursor_at(window, ascii_cursor_bounds, cursor_x, px(ASCII_CELL_WIDTH), cursor_border_color);
+                            }
+                            EditColumn::Ascii => {}
                         }
                     }
+                }
 
-                    // Edge fades when the ASCII row is horizontally scrolled or clipped.
-                    if params.ascii_scroll_x > 1.0 {
-                        let bg = bg_color_theme;
-                        for step in 0..5 {
-                            let x = ascii_start_x + px(step as f32 * 3.2);
-                            let alpha = 1.0 - (step as f32 / 5.0);
-                            window.paint_quad(fill(
-                                Bounds::new(point(x, params.bounds.top()), size(px(3.4), px(ROW_HEIGHT))),
-                                bg.opacity(alpha * 0.95),
-                            ));
-                        }
-                    }
+                // Edge fades when the ASCII row is horizontally scrolled or clipped.
+                if params.ascii_scroll_x > 1.0 {
+                    paint_horizontal_fade(window, ascii_start_x, params.bounds.top(), 5, 3.2, 3.4, bg_color_theme, true);
+                }
 
-                    if params.ascii_scroll_x + ascii_width < chunk.len() as f32 * ASCII_CELL_WIDTH - 1.0 {
-                        let fade_w = 22.0;
-                        let fade_start = ascii_start_x + px(ascii_width - fade_w);
-                        let bg = bg_color_theme;
-                        for step in 0..6 {
-                            let x = fade_start + px(step as f32 * 3.6);
-                            let alpha = (step + 1) as f32 / 7.0;
-                            window.paint_quad(fill(
-                                Bounds::new(point(x, params.bounds.top()), size(px(3.8), px(ROW_HEIGHT))),
-                                bg.opacity(alpha * 0.95),
-                            ));
-                        }
-                    }
-                });
-            },
-        );
+                if params.ascii_scroll_x + ascii_width < chunk.len() as f32 * ASCII_CELL_WIDTH - 1.0 {
+                    paint_horizontal_fade(
+                        window,
+                        ascii_start_x + px(ascii_width - 22.0),
+                        params.bounds.top(),
+                        6,
+                        3.6,
+                        3.8,
+                        bg_color_theme,
+                        false,
+                    );
+                }
+            });
+        }
     }
 
     // 4. Description Column (when structure definition is present)
     if let Some(ref desc) = cached.desc {
-        let desc_mask_bounds = Bounds::new(point(desc_start_x, params.bounds.top()), size(px(params.desc_col_width), px(ROW_HEIGHT)));
-        window.with_content_mask(
-            Some(ContentMask {
-                bounds: scrollable_mask_bounds,
-            }),
-            |window| {
-                window.with_content_mask(Some(ContentMask { bounds: desc_mask_bounds }), |window| {
-                    // Vertical tree guide lines for indentation depth
-                    if desc.indent_level > 0 {
-                        for lvl in 1..=desc.indent_level {
-                            let guide_x = desc_start_x - px(params.desc_scroll_x) + px((lvl - 1) as f32 * 14.0 + 5.0);
-                            if guide_x >= desc_start_x && guide_x < desc_end_x {
-                                window.paint_quad(fill(
-                                    Bounds::new(point(guide_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
-                                    desc_palette.tree_guide,
-                                ));
-                            }
-                        }
-                    }
-
-                    // Paint Lucide chevron icon if container header
-                    if let Some(ref icon_path) = desc.chevron_icon_path {
-                        let icon_x = desc_start_x - px(params.desc_scroll_x) + px(desc.indent_px);
-                        let icon_y = params.bounds.top() + px((ROW_HEIGHT - CHEVRON_ICON_SIZE) / 2.0);
-                        let icon_bounds = Bounds::new(point(icon_x, icon_y), size(px(CHEVRON_ICON_SIZE), px(CHEVRON_ICON_SIZE)));
-                        let _ = window.paint_svg(icon_bounds, icon_path.clone(), None, TransformationMatrix::unit(), desc_palette.header_icon, cx);
-                    }
-
-                    let text_pos = point(desc_start_x - px(params.desc_scroll_x) + px(desc.text_offset_px), params.bounds.top() + px(2.0));
-                    if let Some(af) = active_leaf_field {
-                        for &(f_offset, f_size, span_start_x, span_width_px) in &desc.leaf_field_spans {
-                            if f_offset == af.offset && f_size == af.size && span_width_px > 0.0 {
-                                window.paint_quad(fill(
-                                    Bounds::new(point(text_pos.x + px(span_start_x), text_pos.y), size(px(span_width_px), line_height)),
-                                    desc_palette.active_bg,
-                                ));
-                            }
-                        }
-                    }
-                    if let Some(ref shaped) = desc.shaped_base_desc {
-                        let _ = shaped.paint(text_pos, line_height, TextAlign::Left, None, window, cx);
-                    }
-
-                    // Left fade
-                    if params.desc_scroll_x > 1.0 {
-                        let bg = bg_color_theme;
-                        for step in 0..5 {
-                            let x = desc_start_x + px(step as f32 * 3.2);
-                            let alpha = 1.0 - (step as f32 / 5.0);
-                            window.paint_quad(fill(
-                                Bounds::new(point(x, params.bounds.top()), size(px(3.4), px(ROW_HEIGHT))),
-                                bg.opacity(alpha * 0.95),
-                            ));
-                        }
-                    }
-
-                    // Right fade
-                    if params.desc_scroll_x + params.desc_col_width < desc.desc_text_width - 1.0 {
-                        let fade_w = 20.0;
-                        let fade_start = desc_end_x - px(fade_w);
-                        let bg = bg_color_theme;
-                        for step in 0..5 {
-                            let x = fade_start + px(step as f32 * 4.0);
-                            let alpha = (step + 1) as f32 / 6.0;
-                            window.paint_quad(fill(
-                                Bounds::new(point(x, params.bounds.top()), size(px(4.2), px(ROW_HEIGHT))),
-                                bg.opacity(alpha * 0.95),
-                            ));
-                        }
-                    }
-                });
-            },
+        let desc_mask_bounds = clip_column_mask(
+            scrollable_mask_bounds,
+            Bounds::new(point(desc_start_x, params.bounds.top()), size(px(params.desc_col_width), px(ROW_HEIGHT))),
         );
+        if desc_mask_bounds.size.width > px(0.0) {
+            window.with_content_mask(Some(ContentMask { bounds: desc_mask_bounds }), |window| {
+                // Vertical tree guide lines for indentation depth
+                if desc.indent_level > 0 {
+                    for lvl in 1..=desc.indent_level {
+                        let guide_x = desc_start_x - px(params.desc_scroll_x) + px((lvl - 1) as f32 * 14.0 + 5.0);
+                        if guide_x >= desc_start_x && guide_x < desc_end_x {
+                            window.paint_quad(fill(
+                                Bounds::new(point(guide_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+                                desc_palette.tree_guide,
+                            ));
+                        }
+                    }
+                }
+
+                // Paint Lucide chevron icon if container header
+                if let Some(ref icon_path) = desc.chevron_icon_path {
+                    let icon_x = desc_start_x - px(params.desc_scroll_x) + px(desc.indent_px);
+                    let icon_y = params.bounds.top() + px((ROW_HEIGHT - CHEVRON_ICON_SIZE) / 2.0);
+                    let icon_bounds = Bounds::new(point(icon_x, icon_y), size(px(CHEVRON_ICON_SIZE), px(CHEVRON_ICON_SIZE)));
+                    let _ = window.paint_svg(icon_bounds, icon_path.clone(), None, TransformationMatrix::unit(), desc_palette.header_icon, cx);
+                }
+
+                let text_pos = point(desc_start_x - px(params.desc_scroll_x) + px(desc.text_offset_px), params.bounds.top() + px(2.0));
+                if let Some(af) = active_leaf_field {
+                    for &(f_offset, f_size, span_start_x, span_width_px) in &desc.leaf_field_spans {
+                        if f_offset == af.offset && f_size == af.size && span_width_px > 0.0 {
+                            window.paint_quad(fill(
+                                Bounds::new(point(text_pos.x + px(span_start_x), text_pos.y), size(px(span_width_px), line_height)),
+                                desc_palette.active_bg,
+                            ));
+                        }
+                    }
+                }
+                if let Some(ref shaped) = desc.shaped_base_desc {
+                    let _ = shaped.paint(text_pos, line_height, TextAlign::Left, None, window, cx);
+                }
+
+                // Left fade
+                if params.desc_scroll_x > 1.0 {
+                    paint_horizontal_fade(window, desc_start_x, params.bounds.top(), 5, 3.2, 3.4, bg_color_theme, true);
+                }
+
+                // Right fade
+                if params.desc_scroll_x + params.desc_col_width < desc.desc_text_width - 1.0 {
+                    paint_horizontal_fade(window, desc_end_x - px(20.0), params.bounds.top(), 5, 4.0, 4.2, bg_color_theme, false);
+                }
+            });
+        }
     }
 
     // 5. Bookmark Comments Column
     if !params.bookmark_comments.is_empty() {
-        let comment_mask_bounds = Bounds::new(point(comment_start_x, params.bounds.top()), size(px(params.comment_col_width), px(ROW_HEIGHT)));
-        let comment_end_x = comment_start_x + px(params.comment_col_width);
-
-        let dot_size = 8.0;
-        let dot_radius = 4.0;
-        let dot_margin_right = 5.0;
-        let item_spacing = 14.0;
-
-        let mut total_content_width = 4.0;
-        for item in params.bookmark_comments {
-            let text_w = comment_shapes.ensure_shaped_width(item.clean_text, muted_color, &font, params.font_size, window);
-            total_content_width += dot_size + dot_margin_right + text_w + item_spacing;
-        }
-        let comment_text_width = total_content_width;
-
-        window.with_content_mask(
-            Some(ContentMask {
-                bounds: scrollable_mask_bounds,
-            }),
-            |window| {
-                window.with_content_mask(Some(ContentMask { bounds: comment_mask_bounds }), |window| {
-                    let mut cur_x = comment_start_x - px(params.comment_scroll_x) + px(4.0);
-                    let dot_y = params.bounds.top() + px((ROW_HEIGHT - dot_size) / 2.0);
-
-                    for item in params.bookmark_comments {
-                        let Some((shaped_comment, text_w)) = comment_shapes.get(item.clean_text, muted_color, params.font_size) else {
-                            continue;
-                        };
-                        let dot_bounds = Bounds::new(point(cur_x, dot_y), size(px(dot_size), px(dot_size)));
-                        let mut dot_quad = fill(dot_bounds, item.badge_color);
-                        dot_quad.corner_radii = Corners {
-                            top_left: px(dot_radius),
-                            top_right: px(dot_radius),
-                            bottom_left: px(dot_radius),
-                            bottom_right: px(dot_radius),
-                        };
-                        window.paint_quad(dot_quad);
-
-                        let text_x = cur_x + px(dot_size + dot_margin_right);
-                        let _ = shaped_comment.paint(point(text_x, params.bounds.top() + px(2.0)), line_height, TextAlign::Left, None, window, cx);
-
-                        cur_x = text_x + px(text_w + item_spacing);
-                    }
-
-                    // Left fade
-                    if params.comment_scroll_x > 1.0 {
-                        let bg = bg_color_theme;
-                        for step in 0..5 {
-                            let x = comment_start_x + px(step as f32 * 3.2);
-                            let alpha = 1.0 - (step as f32 / 5.0);
-                            window.paint_quad(fill(
-                                Bounds::new(point(x, params.bounds.top()), size(px(3.4), px(ROW_HEIGHT))),
-                                bg.opacity(alpha * 0.95),
-                            ));
-                        }
-                    }
-
-                    // Right fade
-                    if params.comment_scroll_x + params.comment_col_width < comment_text_width - 1.0 {
-                        let fade_w = 20.0;
-                        let fade_start = comment_end_x - px(fade_w);
-                        let bg = bg_color_theme;
-                        for step in 0..5 {
-                            let x = fade_start + px(step as f32 * 4.0);
-                            let alpha = (step + 1) as f32 / 6.0;
-                            window.paint_quad(fill(
-                                Bounds::new(point(x, params.bounds.top()), size(px(4.2), px(ROW_HEIGHT))),
-                                bg.opacity(alpha * 0.95),
-                            ));
-                        }
-                    }
-                });
-            },
+        let comment_mask_bounds = clip_column_mask(
+            scrollable_mask_bounds,
+            Bounds::new(point(comment_start_x, params.bounds.top()), size(px(params.comment_col_width), px(ROW_HEIGHT))),
         );
+        if comment_mask_bounds.size.width > px(0.0) {
+            let comment_end_x = comment_start_x + px(params.comment_col_width);
+
+            let dot_size = 8.0;
+            let dot_radius = 4.0;
+            let dot_margin_right = 5.0;
+            let item_spacing = 14.0;
+
+            let mut total_content_width = 4.0;
+            for item in params.bookmark_comments {
+                let text_w = comment_shapes.ensure_shaped_width(item.clean_text, muted_color, &font, params.font_size, window);
+                total_content_width += dot_size + dot_margin_right + text_w + item_spacing;
+            }
+            let comment_text_width = total_content_width;
+
+            window.with_content_mask(Some(ContentMask { bounds: comment_mask_bounds }), |window| {
+                let mut cur_x = comment_start_x - px(params.comment_scroll_x) + px(4.0);
+                let dot_y = params.bounds.top() + px((ROW_HEIGHT - dot_size) / 2.0);
+
+                for item in params.bookmark_comments {
+                    let Some((shaped_comment, text_w)) = comment_shapes.get(item.clean_text, muted_color, params.font_size) else {
+                        continue;
+                    };
+                    let dot_bounds = Bounds::new(point(cur_x, dot_y), size(px(dot_size), px(dot_size)));
+                    let mut dot_quad = fill(dot_bounds, item.badge_color);
+                    dot_quad.corner_radii = Corners {
+                        top_left: px(dot_radius),
+                        top_right: px(dot_radius),
+                        bottom_left: px(dot_radius),
+                        bottom_right: px(dot_radius),
+                    };
+                    window.paint_quad(dot_quad);
+
+                    let text_x = cur_x + px(dot_size + dot_margin_right);
+                    let _ = shaped_comment.paint(point(text_x, params.bounds.top() + px(2.0)), line_height, TextAlign::Left, None, window, cx);
+
+                    cur_x = text_x + px(text_w + item_spacing);
+                }
+
+                // Left fade
+                if params.comment_scroll_x > 1.0 {
+                    paint_horizontal_fade(window, comment_start_x, params.bounds.top(), 5, 3.2, 3.4, bg_color_theme, true);
+                }
+
+                // Right fade
+                if params.comment_scroll_x + params.comment_col_width < comment_text_width - 1.0 {
+                    paint_horizontal_fade(window, comment_end_x - px(20.0), params.bounds.top(), 5, 4.0, 4.2, bg_color_theme, false);
+                }
+            });
+        }
     }
 }
 
@@ -2856,5 +2846,33 @@ mod tests {
         assert_eq!(span_x_from_glyph_positions(glyphs, 160.0, 12, 24), (84.0, 76.0));
         assert_eq!(span_x_from_glyph_positions(glyphs, 160.0, 10, 10), (0.0, 0.0));
         assert_eq!(span_x_from_glyph_positions(glyphs, 160.0, 30, 40), (0.0, 0.0));
+    }
+
+    #[test]
+    fn test_color_run_tracker_coalesces_and_clips_masks() {
+        use super::{ColorRunTracker, clip_column_mask};
+        use gpui_kit::{Bounds, hsla, point, px, size};
+
+        let c1 = hsla(0.1, 0.5, 0.5, 0.8);
+        let c2 = hsla(0.6, 0.5, 0.5, 0.8);
+        let transparent = hsla(0.0, 0.0, 0.0, 0.0);
+
+        let inputs = [Some(c1), Some(c1), Some(c1), Some(c2), None, Some(transparent), Some(c2), Some(c2)];
+        let mut runs = Vec::new();
+        let mut tracker = ColorRunTracker::default();
+        for (i, c) in inputs.into_iter().enumerate() {
+            tracker.push(i, c, |s, e, color| runs.push((s, e, color)));
+        }
+        tracker.finish(|s, e, color| runs.push((s, e, color)));
+        assert_eq!(runs, vec![(0, 2, c1), (3, 3, c2), (6, 7, c2)]);
+
+        let scroll_bounds = Bounds::new(point(px(100.0), px(20.0)), size(px(300.0), px(20.0)));
+        let partial_col = Bounds::new(point(px(50.0), px(20.0)), size(px(120.0), px(20.0)));
+        let offscreen_col = Bounds::new(point(px(420.0), px(20.0)), size(px(80.0), px(20.0)));
+
+        let clipped = clip_column_mask(scroll_bounds, partial_col);
+        assert_eq!(clipped.origin.x, px(100.0));
+        assert_eq!(clipped.size.width, px(70.0));
+        assert_eq!(clip_column_mask(scroll_bounds, offscreen_col).size.width, px(0.0));
     }
 }
