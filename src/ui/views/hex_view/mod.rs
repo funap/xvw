@@ -342,10 +342,10 @@ impl HexView {
                     this.hex_content_width = 0.0;
                     this.cursor_reveal_pending = true;
                 }
-                this.clamp_scroll_offsets(cx);
                 if cursor_changed {
                     this.ensure_cursor_visible(cx);
                 }
+                this.clamp_scroll_offsets(cx);
                 cx.notify();
             });
 
@@ -812,11 +812,11 @@ impl HexView {
     }
 
     pub fn clamp_scroll_offsets(&mut self, cx: &App) {
-        let max_hex = self.max_hex_scroll(cx);
-        let max_desc = self.max_desc_scroll(cx);
-        let max_comment = self.max_comment_scroll(cx);
+        if !self.scroll.has_nonzero_horizontal_scroll() {
+            return;
+        }
         let layout = self.current_layout(cx);
-        self.scroll.clamp_scroll_offsets(max_hex, max_desc, max_comment, layout);
+        self.scroll.clamp_scroll_offsets(layout);
     }
 
     pub fn set_top_overlay_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
