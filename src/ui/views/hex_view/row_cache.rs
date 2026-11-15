@@ -35,14 +35,11 @@ pub struct CachedRowDesc {
     pub leaf_fields: Vec<IndexedField>,
 }
 
-/// Cached structure indexing results for one row (used for byte tints and active underlines).
-#[derive(Clone, Debug)]
+/// Cached structure indexing flags for one row.
+#[derive(Clone, Copy, Debug)]
 pub struct CachedRowStructureFields {
     pub is_structure_header_row: bool,
     pub is_collapsed_struct_row: bool,
-    pub first_leaf: Option<IndexedField>,
-    pub is_uniform_row_leaf: bool,
-    pub row_leaf_fields: Vec<Option<IndexedField>>,
 }
 
 /// Complete cached layout and shaped text for a single painted row.

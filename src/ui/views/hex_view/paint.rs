@@ -856,43 +856,6 @@ pub fn calculate_description_indent_level(
     }
 }
 
-#[inline]
-fn resolve_row_leaf_fields<'a>(
-    parse_res: Option<&'a ParseResult>,
-    offset: usize,
-    chunk_len: usize,
-    first_leaf: Option<&'a IndexedField>,
-    row_leaves: &'a [IndexedField],
-) -> Vec<Option<Cow<'a, IndexedField>>> {
-    let mut result = Vec::with_capacity(chunk_len);
-    for j in 0..chunk_len {
-        let byte_pos = offset + j;
-        let mut best: Option<&'a IndexedField> = None;
-
-        if let Some(fl) = first_leaf
-            && fl.offset <= byte_pos
-            && byte_pos < fl.offset + fl.size
-        {
-            best = Some(fl);
-        }
-
-        for leaf in row_leaves {
-            if leaf.offset <= byte_pos && byte_pos < leaf.offset + leaf.size && best.is_none_or(|b| leaf.depth > b.depth) {
-                best = Some(leaf);
-            }
-        }
-
-        if let Some(b) = best {
-            result.push(Some(Cow::Borrowed(b)));
-        } else if let Some(pr) = parse_res {
-            result.push(pr.query_deepest_leaf_at(byte_pos));
-        } else {
-            result.push(None);
-        }
-    }
-    result
-}
-
 pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usize, window: &mut Window) -> CachedRow {
     let chunk_len = next_offset - offset;
     let chunk = params.doc.buffer.get_range(offset, chunk_len);
@@ -940,29 +903,10 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
         None
     };
 
-    let is_uniform_row_leaf = first_leaf.as_ref().is_none_or(|fl| fl.offset + fl.size >= next_offset)
-        && row_leaves.iter().all(|lf| {
-            first_leaf
-                .as_ref()
-                .is_some_and(|fl| lf.offset == fl.offset && lf.size == fl.size && lf.depth <= fl.depth)
-        });
-
-    let row_leaf_fields: Vec<Option<IndexedField>> = if is_uniform_row_leaf || chunk_len == 0 {
-        Vec::new()
-    } else {
-        resolve_row_leaf_fields(params.parse_result, offset, chunk_len, first_leaf.as_deref(), &row_leaves)
-            .into_iter()
-            .map(|opt| opt.map(|c| c.into_owned()))
-            .collect()
-    };
-
     let structure_fields = if is_struct_mode {
         Some(CachedRowStructureFields {
             is_structure_header_row,
             is_collapsed_struct_row,
-            first_leaf: first_leaf.as_deref().cloned(),
-            is_uniform_row_leaf,
-            row_leaf_fields,
         })
     } else {
         None
@@ -1431,16 +1375,15 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let comment_shapes = caches.comment_shapes;
 
     let physical_address = cached.physical_address;
-    let (is_structure_header_row, is_collapsed_struct_row, first_leaf, is_uniform_row_leaf, row_leaf_fields) = if let Some(ref sf) = cached.structure_fields {
-        (
-            sf.is_structure_header_row,
-            sf.is_collapsed_struct_row,
-            sf.first_leaf.as_ref(),
-            sf.is_uniform_row_leaf,
-            &sf.row_leaf_fields[..],
-        )
+    let (is_structure_header_row, is_collapsed_struct_row) = cached
+        .structure_fields
+        .map_or((false, false), |sf| (sf.is_structure_header_row, sf.is_collapsed_struct_row));
+    let row_active_underline: Option<(Range<usize>, Hsla)> = if is_struct_mode && !is_structure_header_row && !is_collapsed_struct_row {
+        active_leaf_field
+            .filter(|af| af.offset < next_offset && af.offset + af.size > offset)
+            .map(|af| (af.offset..af.offset + af.size, af.color.map(Hsla::from).unwrap_or(desc_palette.type_name)))
     } else {
-        (false, false, None, false, &[][..])
+        None
     };
 
     // 1. Draw Left Columns (Address OR Offset)
@@ -1740,24 +1683,14 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     };
 
                     // 0. Structure field active underline
-                    if is_struct_mode && params.parse_result.is_some() {
-                        let is_in_active_field = active_leaf_field.is_some_and(|af| item_start_offset >= af.offset && item_start_offset < af.offset + af.size);
-
-                        if is_in_active_field {
-                            let field_at_item = if is_uniform_row_leaf {
-                                first_leaf
-                            } else {
-                                row_leaf_fields.get(group.chunk_start).and_then(|f| f.as_ref())
-                            };
-                            if let Some(field) = field_at_item {
-                                let field_hsla = field.color.map(Hsla::from).unwrap_or(desc_palette.type_name);
-                                let underline_bounds = Bounds::new(
-                                    point(group_start_x, params.bounds.top() + px(ROW_HEIGHT - 2.0)),
-                                    size(group_end_x - group_start_x, px(2.0)),
-                                );
-                                window.paint_quad(fill(underline_bounds, field_hsla));
-                            }
-                        }
+                    if let Some((ref af_range, field_hsla)) = row_active_underline
+                        && af_range.contains(&item_start_offset)
+                    {
+                        let underline_bounds = Bounds::new(
+                            point(group_start_x, params.bounds.top() + px(ROW_HEIGHT - 2.0)),
+                            size(group_end_x - group_start_x, px(2.0)),
+                        );
+                        window.paint_quad(fill(underline_bounds, field_hsla));
                     }
 
                     // 1. Highlight (bookmark) background quad
@@ -2043,23 +1976,14 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         }
 
                         // Structure field active underline in ASCII
-                        if is_struct_mode && params.parse_result.is_some() {
-                            let is_ascii_in_active = active_leaf_field.is_some_and(|af| byte_pos >= af.offset && byte_pos < af.offset + af.size);
-                            if is_ascii_in_active {
-                                let ascii_field = if is_uniform_row_leaf {
-                                    first_leaf
-                                } else {
-                                    row_leaf_fields.get(j).and_then(|f| f.as_ref())
-                                };
-                                if let Some(field) = ascii_field {
-                                    let field_hsla = field.color.map(Hsla::from).unwrap_or(desc_palette.type_name);
-                                    let underline_bounds = Bounds::new(
-                                        point(ascii_item_bounds.left(), params.bounds.top() + px(ROW_HEIGHT - 2.0)),
-                                        size(ascii_item_bounds.size.width, px(2.0)),
-                                    );
-                                    window.paint_quad(fill(underline_bounds, field_hsla));
-                                }
-                            }
+                        if let Some((ref af_range, field_hsla)) = row_active_underline
+                            && af_range.contains(&byte_pos)
+                        {
+                            let underline_bounds = Bounds::new(
+                                point(ascii_item_bounds.left(), params.bounds.top() + px(ROW_HEIGHT - 2.0)),
+                                size(ascii_item_bounds.size.width, px(2.0)),
+                            );
+                            window.paint_quad(fill(underline_bounds, field_hsla));
                         }
 
                         // Translucent selection quad (overlaid on top of highlight)
