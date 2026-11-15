@@ -1,4 +1,6 @@
-use super::layout::{build_ascii_char_map, calculate_scroll_top_for_range, centered_glyph_offset, cursor_in_row_offset, is_cursor_header_column};
+use super::layout::{
+    build_ascii_char_map, calculate_scroll_top_for_range, centered_glyph_offset, cursor_in_row_offset, for_each_ascii_char, is_cursor_header_column,
+};
 use super::paint::{highlight_color_for_range, is_cursor_row};
 use super::types::{AUTO_FIT_SCAN_BYTES, AsciiChar, HexGroupInfo, HexViewLayout, HexViewLayoutState, HorizontalScrollTarget, LayoutInput, ScrollColumn};
 use super::{
@@ -1219,4 +1221,24 @@ fn check_search_visibility_lifecycle() {
     assert_eq!(highlight_color_for_range(10, 11, &merged3), Some(find_prominent));
     // Byte 13 is overridden again by Find Widget
     assert_eq!(highlight_color_for_range(13, 14, &merged3), Some(find_prominent));
+}
+
+#[test]
+fn test_for_each_ascii_char_matches_map_fast_and_multibyte_paths() {
+    let sample = b"\x00AB\x7f\xe3\x81\x82CD\x82\xa0\xff";
+    for encoding in [Encoding::Ascii, Encoding::Utf8, Encoding::ShiftJis] {
+        for row_offset in [0, 3, 5, sample.len()] {
+            let row_len = 6;
+            let expected: Vec<(usize, AsciiChar)> = build_ascii_char_map(encoding, sample, row_offset, row_len)
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, opt)| opt.map(|ch| (i, ch)))
+                .collect();
+            let mut visited = Vec::new();
+            for_each_ascii_char(encoding, sample, row_offset, row_len, |idx, ch| {
+                visited.push((idx, ch));
+            });
+            assert_eq!(visited, expected, "mismatch for {encoding:?} at offset {row_offset}");
+        }
+    }
 }

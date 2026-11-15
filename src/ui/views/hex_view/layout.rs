@@ -11,9 +11,27 @@ pub fn ascii_byte_index_from_world_x(world_x: f32, column: ColumnLayout, scroll_
     (content_x / ASCII_CELL_WIDTH) as usize
 }
 
-pub fn build_ascii_char_map(encoding: Encoding, buffer: &[u8], row_offset: usize, row_len: usize) -> Vec<Option<AsciiChar>> {
-    let mut map = vec![None; row_len];
-    let row_end = row_offset + row_len;
+/// Visits decoded ASCII/character entries for a single row (`[row_offset, row_offset + row_len)`)
+/// in ascending `display_offset` order without allocating an intermediate `Vec`.
+pub fn for_each_ascii_char(encoding: Encoding, buffer: &[u8], row_offset: usize, row_len: usize, mut visit: impl FnMut(usize, AsciiChar)) {
+    let row_end = row_offset.saturating_add(row_len).min(buffer.len());
+    if row_offset >= row_end {
+        return;
+    }
+
+    if encoding == Encoding::Ascii {
+        for (idx, &b) in buffer[row_offset..row_end].iter().enumerate() {
+            let ch = if (32..=126).contains(&b) {
+                AsciiChar::Printable(b as char, 1)
+            } else {
+                AsciiChar::NonPrintable
+            };
+            visit(idx, ch);
+        }
+        return;
+    }
+
+    let logical_row_end = row_offset + row_len;
     let mut local_offset = 0;
 
     if encoding.is_multibyte() && row_offset > 0 {
@@ -54,19 +72,26 @@ pub fn build_ascii_char_map(encoding: Encoding, buffer: &[u8], row_offset: usize
         }
         if let Some((character, byte_len)) = encoding.decode_char_at(buffer, absolute_offset) {
             let byte_len = byte_len.max(1);
-            let display_offset = if encoding.is_multibyte() && absolute_offset.saturating_add(byte_len) > row_end {
+            let display_offset = if encoding.is_multibyte() && absolute_offset.saturating_add(byte_len) > logical_row_end {
                 row_len - 1
             } else {
                 local_offset
             };
-            map[display_offset] = Some(AsciiChar::Printable(character, byte_len));
+            visit(display_offset, AsciiChar::Printable(character, byte_len));
             local_offset += byte_len;
         } else {
-            map[local_offset] = Some(AsciiChar::NonPrintable);
+            visit(local_offset, AsciiChar::NonPrintable);
             local_offset += 1;
         }
     }
+}
 
+#[cfg(test)]
+pub fn build_ascii_char_map(encoding: Encoding, buffer: &[u8], row_offset: usize, row_len: usize) -> Vec<Option<AsciiChar>> {
+    let mut map = vec![None; row_len];
+    for_each_ascii_char(encoding, buffer, row_offset, row_len, |idx, ch| {
+        map[idx] = Some(ch);
+    });
     map
 }
 

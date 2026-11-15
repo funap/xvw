@@ -1027,11 +1027,9 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
     // ASCII column
     let mut ascii_cells = Vec::with_capacity(chunk.len());
     let ascii_glyphs = if params.show_ascii && chunk_len > 0 && !is_collapsed_struct_row {
-        let char_map = build_ascii_char_map(params.encoding, params.doc.buffer.data(), offset, chunk.len());
         let mut ascii_text = String::with_capacity(chunk.len());
         let mut cell_spans = Vec::with_capacity(chunk.len());
-        for (j, opt) in char_map.into_iter().enumerate() {
-            let item = if let Some(item) = opt { item } else { continue };
+        for_each_ascii_char(params.encoding, params.doc.buffer.data(), offset, chunk.len(), |j, item| {
             let c = item.character();
             let text_byte_start = ascii_text.len();
             ascii_text.push(c);
@@ -1043,7 +1041,7 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
                 byte,
                 is_printable: item.is_printable(),
             });
-        }
+        });
         if !ascii_text.is_empty() {
             let run = TextRun {
                 len: ascii_text.len(),
