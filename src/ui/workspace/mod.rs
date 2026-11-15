@@ -1587,10 +1587,9 @@ impl Workspace {
 
     fn sync_activity_bar(&self, cx: &mut Context<Self>) {
         let is_visible = self.is_left_panel_visible;
-        let active_tab = self.left_panel.read(cx).active_tab;
-        let checksum_panel = self.left_panel.read(cx).checksum_panel.clone();
-        checksum_panel.update(cx, |panel, cx| {
-            panel.set_panel_active(is_visible && active_tab == LeftPanelTab::Checksum, cx);
+        let active_tab = self.left_panel.update(cx, |panel, cx| {
+            panel.set_panel_visible(is_visible, cx);
+            panel.active_tab
         });
         self.activity_bar.update(cx, |activity_bar, cx| {
             if is_visible {

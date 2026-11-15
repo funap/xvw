@@ -33,6 +33,7 @@ pub struct LeftPanel {
     pub checksum_panel: Entity<ChecksumPanel>,
     pub bookmark_panel: Entity<BookmarkPanel>,
     pub active_tab: LeftPanelTab,
+    is_panel_visible: bool,
 }
 
 impl EventEmitter<FileTreeViewEvent> for LeftPanel {}
@@ -45,7 +46,11 @@ impl LeftPanel {
     pub fn new(file_tree: Entity<FileTreeView>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search_panel = cx.new(|cx| SearchPanel::new(None, window, cx));
         let strings_panel = cx.new(|cx| StringsPanel::new(None, window, cx));
-        let struct_tree = cx.new(|cx| StructTreeView::new(None, None, window, cx));
+        let struct_tree = cx.new(|cx| {
+            let mut panel = StructTreeView::new(None, None, window, cx);
+            panel.set_panel_active(false, cx);
+            panel
+        });
         let data_inspector = cx.new(|cx| DataInspector::new(None, window, cx));
         let visual_map = cx.new(|cx| VisualMapPanel::new(None, cx));
         let checksum_panel = cx.new(|cx| {
@@ -94,6 +99,7 @@ impl LeftPanel {
             checksum_panel,
             bookmark_panel,
             active_tab: LeftPanelTab::Files,
+            is_panel_visible: true,
         }
     }
 
@@ -135,12 +141,28 @@ impl LeftPanel {
         });
     }
 
-    pub fn set_tab(&mut self, tab: LeftPanelTab, cx: &mut Context<Self>) {
-        self.active_tab = tab;
-        let is_checksum = tab == LeftPanelTab::Checksum;
+    pub fn set_panel_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if self.is_panel_visible == visible {
+            return;
+        }
+        self.is_panel_visible = visible;
+        self.sync_active_panels(cx);
+    }
+
+    fn sync_active_panels(&self, cx: &mut Context<Self>) {
+        let is_structure = self.is_panel_visible && self.active_tab == LeftPanelTab::Structure;
+        self.struct_tree.update(cx, |panel, cx| {
+            panel.set_panel_active(is_structure, cx);
+        });
+        let is_checksum = self.is_panel_visible && self.active_tab == LeftPanelTab::Checksum;
         self.checksum_panel.update(cx, |panel, cx| {
             panel.set_panel_active(is_checksum, cx);
         });
+    }
+
+    pub fn set_tab(&mut self, tab: LeftPanelTab, cx: &mut Context<Self>) {
+        self.active_tab = tab;
+        self.sync_active_panels(cx);
         cx.notify();
     }
 }
