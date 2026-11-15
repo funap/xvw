@@ -55,6 +55,48 @@ pub fn init(cx: &mut App) {
     search_bar::init(cx);
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HighlightSyncState {
+    bookmark_version: u64,
+    cursor_offset: Option<usize>,
+    search_generation: usize,
+    search_current_result: Option<usize>,
+    search_results_len: usize,
+    find_generation: usize,
+    has_search: bool,
+    scroll_top_row: Option<usize>,
+}
+
+impl HighlightSyncState {
+    fn from_snapshot(ed: &Editor, has_search: bool, scroll_top_row: Option<usize>) -> Self {
+        Self {
+            bookmark_version: ed.bookmarks().version(),
+            cursor_offset: Some(ed.cursor.offset),
+            search_generation: ed.search_state.generation,
+            search_current_result: ed.search_state.current_result(),
+            search_results_len: ed.search_state.results.len(),
+            find_generation: ed.find_state.generation,
+            has_search,
+            scroll_top_row,
+        }
+    }
+
+    fn needs_editor_refresh(self, last: Self) -> bool {
+        let search_changed = self.search_generation != last.search_generation
+            || self.search_current_result != last.search_current_result
+            || self.search_results_len != last.search_results_len;
+        let find_changed = self.find_generation != last.find_generation;
+        let bookmark_changed = self.bookmark_version != last.bookmark_version;
+        let cursor_changed_with_search = self.has_search && self.cursor_offset != last.cursor_offset;
+        let search_visibility_changed = self.has_search != last.has_search;
+        bookmark_changed || cursor_changed_with_search || search_changed || find_changed || search_visibility_changed
+    }
+
+    fn needs_scroll_refresh(self, last: Self) -> bool {
+        self.has_search && self != last
+    }
+}
+
 pub struct EditorView {
     editor: Entity<Editor>,
     focus_handle: FocusHandle,
@@ -65,12 +107,7 @@ pub struct EditorView {
     goto_bar: Entity<GotoOffsetBar>,
     structure_reparse_task: Option<Task<()>>,
     tab_group: Option<WeakEntity<TabGroup>>,
-    last_bookmark_version: u64,
-    last_cursor_offset: Option<usize>,
-    last_search_generation: usize,
-    last_search_current_result: Option<usize>,
-    last_search_results_len: usize,
-    last_find_generation: usize,
+    last_highlight_sync: HighlightSyncState,
     _appearance_subscription: Subscription,
     _bytes_per_row_subscription: Subscription,
     _editor_subscription: Subscription,
@@ -172,11 +209,9 @@ impl EditorView {
 
         // Subscribe to HexView scroll events to update highlights when scrolling
         cx.subscribe(&hex_view, |this, _, event: &crate::ui::views::hex_view::HexViewEvent, cx| {
-            if let crate::ui::views::hex_view::HexViewEvent::Scrolled(_) = event {
-                let has_search = (this.is_search_visible
-                    && (!this.search_bar.read(cx).query(cx).is_empty() || !this.editor.read(cx).find_state.query.is_empty()))
-                    || !this.editor.read(cx).search_state.query.is_empty();
-                if has_search {
+            if let crate::ui::views::hex_view::HexViewEvent::Scrolled(scroll_row) = event {
+                let current = this.capture_highlight_sync_state(this.editor.read(cx), Some(*scroll_row), cx);
+                if current.needs_scroll_refresh(this.last_highlight_sync) {
                     this.update_highlights(cx);
                 }
             }
@@ -214,33 +249,16 @@ impl EditorView {
         });
 
         let _editor_subscription = cx.observe(&editor, |this, editor, cx| {
-            let (bm_ver, cur, search_gen, search_current, search_results_len, find_gen, has_editor_search, has_find_search, pending_reparse) = {
+            let (current, pending_reparse) = {
                 let ed = editor.read(cx);
-                (
-                    ed.bookmarks().version(),
-                    ed.cursor.offset,
-                    ed.search_state.generation,
-                    ed.search_state.current_result(),
-                    ed.search_state.results.len(),
-                    ed.find_state.generation,
-                    !ed.search_state.query.is_empty(),
-                    !ed.find_state.query.is_empty(),
-                    ed.pending_structure_reparse(),
-                )
+                let scroll_top_row = Some(this.hex_view.read(cx).current_scroll_top_row());
+                (this.capture_highlight_sync_state(ed, scroll_top_row, cx), ed.pending_structure_reparse())
             };
-            let has_search = (this.is_search_visible && (!this.search_bar.read(cx).query(cx).is_empty() || has_find_search)) || has_editor_search;
 
-            let search_changed = search_gen != this.last_search_generation
-                || search_current != this.last_search_current_result
-                || search_results_len != this.last_search_results_len;
-            let find_changed = find_gen != this.last_find_generation;
-            let bookmark_changed = bm_ver != this.last_bookmark_version;
-            let cursor_changed_with_search = has_search && Some(cur) != this.last_cursor_offset;
-
-            if bookmark_changed || cursor_changed_with_search || search_changed || find_changed {
+            if current.needs_editor_refresh(this.last_highlight_sync) {
                 this.update_highlights(cx);
             } else {
-                this.last_cursor_offset = Some(cur);
+                this.last_highlight_sync.cursor_offset = current.cursor_offset;
             }
 
             if let Some((_, generation)) = pending_reparse {
@@ -275,12 +293,10 @@ impl EditorView {
             }
         });
 
-        let last_bookmark_version = editor.read(cx).bookmarks().version();
-        let last_cursor_offset = Some(editor.read(cx).cursor.offset);
-        let last_search_generation = editor.read(cx).search_state.generation;
-        let last_search_current_result = editor.read(cx).search_state.current_result();
-        let last_search_results_len = editor.read(cx).search_state.results.len();
-        let last_find_generation = editor.read(cx).find_state.generation;
+        let last_highlight_sync = {
+            let ed = editor.read(cx);
+            HighlightSyncState::from_snapshot(ed, !ed.search_state.query.is_empty(), None)
+        };
 
         Self {
             editor,
@@ -292,12 +308,7 @@ impl EditorView {
             goto_bar,
             structure_reparse_task: None,
             tab_group: None,
-            last_bookmark_version,
-            last_cursor_offset,
-            last_search_generation,
-            last_search_current_result,
-            last_search_results_len,
-            last_find_generation,
+            last_highlight_sync,
             _appearance_subscription,
             _bytes_per_row_subscription,
             _editor_subscription,
@@ -462,14 +473,20 @@ impl EditorView {
         self.update_highlights(cx);
     }
 
+    fn has_active_search(&self, editor: &Editor, cx: &App) -> bool {
+        (self.is_search_visible && (!self.search_bar.read(cx).query(cx).is_empty() || !editor.find_state.query.is_empty()))
+            || !editor.search_state.query.is_empty()
+    }
+
+    fn capture_highlight_sync_state(&self, editor: &Editor, scroll_top_row: Option<usize>, cx: &App) -> HighlightSyncState {
+        let has_search = self.has_active_search(editor, cx);
+        HighlightSyncState::from_snapshot(editor, has_search, scroll_top_row)
+    }
+
     fn update_highlights(&mut self, cx: &mut Context<Self>) {
+        let scroll_top_row = Some(self.hex_view.read(cx).current_scroll_top_row());
         let editor = self.editor.read(cx);
-        self.last_bookmark_version = editor.bookmarks().version();
-        self.last_cursor_offset = Some(editor.cursor.offset);
-        self.last_search_generation = editor.search_state.generation;
-        self.last_search_current_result = editor.search_state.current_result();
-        self.last_search_results_len = editor.search_state.results.len();
-        self.last_find_generation = editor.find_state.generation;
+        self.last_highlight_sync = self.capture_highlight_sync_state(editor, scroll_top_row, cx);
         let mut highlights = Vec::new();
 
         // 1. Add user custom bookmarks from editor
@@ -1382,5 +1399,36 @@ mod tests {
         let find = vec![(15..25, find_color)];
         let composed = compose_search_highlights(search, find.clone());
         assert_eq!(composed, vec![(10..15, search_color), (25..30, search_color), (15..25, find_color)]);
+    }
+
+    #[test]
+    fn test_highlight_sync_state_skips_redundant_scroll_after_editor_refresh() {
+        let last = super::HighlightSyncState {
+            bookmark_version: 2,
+            cursor_offset: Some(0x2000),
+            search_generation: 5,
+            search_current_result: Some(0x2000),
+            search_results_len: 12,
+            find_generation: 1,
+            has_search: true,
+            scroll_top_row: Some(128),
+        };
+
+        // Scrolled event arriving for the same scroll row and editor snapshot should not rescan.
+        assert!(!last.needs_scroll_refresh(last));
+        assert!(!last.needs_editor_refresh(last));
+
+        // Scrolling to a new row with active search triggers a refresh.
+        let mut moved_scroll = last;
+        moved_scroll.scroll_top_row = Some(140);
+        assert!(moved_scroll.needs_scroll_refresh(last));
+
+        // Moving cursor without active search only tracks cursor unless bookmarks/search changed.
+        let mut no_search = last;
+        no_search.has_search = false;
+        let mut cursor_moved = no_search;
+        cursor_moved.cursor_offset = Some(0x2010);
+        assert!(!cursor_moved.needs_editor_refresh(no_search));
+        assert!(!cursor_moved.needs_scroll_refresh(no_search));
     }
 }
