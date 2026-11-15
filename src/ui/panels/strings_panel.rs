@@ -115,6 +115,13 @@ impl StringsTableDelegate {
     fn sort_indices(&mut self) {
         sort_string_indices(&self.results, &mut self.visible_indices, self.sort_column);
     }
+
+    fn display_address(&self, offset: usize, cx: &App) -> usize {
+        self.editor
+            .as_ref()
+            .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.offset_to_address(offset)))
+            .unwrap_or_else(|| crate::core::address_map::AddressMap::default().offset_to_address(offset))
+    }
 }
 
 impl TableDelegate for StringsTableDelegate {
@@ -156,27 +163,38 @@ impl TableDelegate for StringsTableDelegate {
     }
 
     fn fit_column(&mut self, col_ix: usize, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> Option<Pixels> {
-        let address_map = self
-            .editor
-            .as_ref()
-            .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
-            .unwrap_or_default();
-        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
-
-        let max_len = self
-            .visible_indices
-            .iter()
-            .take(128)
-            .filter_map(|&index| {
-                self.results.get(index).map(|item| match col_ix {
-                    0 => hex_case.format_prefixed_pad(address_map.offset_to_address(item.offset), 8).chars().count(),
-                    1 => item.byte_len.to_string().chars().count(),
-                    2 => preview_text(&item.text).chars().count(),
-                    _ => 0,
-                })
-            })
-            .max()
-            .unwrap_or(0);
+        let max_len = match col_ix {
+            0 => {
+                let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
+                let default_map = crate::core::address_map::AddressMap::default();
+                let doc = self.editor.as_ref().and_then(|ed| ed.read(cx).document.read().ok());
+                let address_map = doc.as_ref().map_or(&default_map, |d| &d.address_map);
+                self.visible_indices
+                    .iter()
+                    .take(128)
+                    .filter_map(|&index| self.results.get(index))
+                    .map(|item| hex_case.format_prefixed_pad(address_map.offset_to_address(item.offset), 8).chars().count())
+                    .max()
+                    .unwrap_or(0)
+            }
+            1 => self
+                .visible_indices
+                .iter()
+                .take(128)
+                .filter_map(|&index| self.results.get(index))
+                .map(|item| if item.byte_len == 0 { 1 } else { item.byte_len.ilog10() as usize + 1 })
+                .max()
+                .unwrap_or(0),
+            2 => self
+                .visible_indices
+                .iter()
+                .take(128)
+                .filter_map(|&index| self.results.get(index))
+                .map(|item| preview_text(&item.text).chars().count())
+                .max()
+                .unwrap_or(0),
+            _ => 0,
+        };
 
         Some(px(max_len as f32 * 7.5 + 24.0))
     }
@@ -188,13 +206,8 @@ impl TableDelegate for StringsTableDelegate {
         let Some(item) = self.results.get(index) else {
             return menu;
         };
-        let address_map = self
-            .editor
-            .as_ref()
-            .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
-            .unwrap_or_default();
         let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
-        let offset_value = hex_case.format_prefixed_pad(address_map.offset_to_address(item.offset), 8);
+        let offset_value = hex_case.format_prefixed_pad(self.display_address(item.offset, cx), 8);
         let text_value = item.text.clone();
 
         menu.action_context(self.focus_handle.clone())
@@ -203,6 +216,9 @@ impl TableDelegate for StringsTableDelegate {
     }
 
     fn render_td(&mut self, row_ix: usize, col_ix: usize, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
+        if col_ix > 2 {
+            return div().into_any_element();
+        }
         let Some(&index) = self.visible_indices.get(row_ix) else {
             return div().into_any_element();
         };
@@ -212,40 +228,20 @@ impl TableDelegate for StringsTableDelegate {
 
         let theme = cx.theme();
         let font_family = cx.global::<Appearance>().font_family.clone();
-        let address_map = self
-            .editor
-            .as_ref()
-            .and_then(|ed| ed.read(cx).document.read().ok().map(|d| d.address_map.clone()))
-            .unwrap_or_default();
-        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
-
-        let offset_value = hex_case.format_prefixed_pad(address_map.offset_to_address(item.offset), 8);
-        let preview = preview_text(&item.text);
-
         let is_selected = self.selected_index == Some(index);
         let colors = strings_row_colors(is_selected, false, theme);
 
-        match col_ix {
-            0 => div()
-                .text_xs()
-                .font_family(font_family)
-                .text_color(colors.address_color)
-                .child(offset_value)
-                .into_any_element(),
-            1 => div()
-                .text_xs()
-                .font_family(font_family)
-                .text_color(colors.size_color)
-                .child(item.byte_len.to_string())
-                .into_any_element(),
-            2 => div()
-                .text_xs()
-                .font_family(font_family)
-                .text_color(colors.value_color)
-                .child(preview)
-                .into_any_element(),
-            _ => div().into_any_element(),
-        }
+        let (color, text) = match col_ix {
+            0 => {
+                let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
+                (colors.address_color, hex_case.format_prefixed_pad(self.display_address(item.offset, cx), 8))
+            }
+            1 => (colors.size_color, item.byte_len.to_string()),
+            2 => (colors.value_color, preview_text(&item.text).into_owned()),
+            _ => return div().into_any_element(),
+        };
+
+        div().text_xs().font_family(font_family).text_color(color).child(text).into_any_element()
     }
 }
 
@@ -860,11 +856,19 @@ impl Render for StringsPanel {
     }
 }
 
-fn preview_text(text: &str) -> String {
+fn preview_text(text: &str) -> std::borrow::Cow<'_, str> {
     const PREVIEW_LIMIT: usize = 256;
-    let mut characters = text.chars();
-    let preview: String = characters.by_ref().take(PREVIEW_LIMIT).collect();
-    if characters.next().is_some() { format!("{preview}…") } else { preview }
+    if text.len() <= PREVIEW_LIMIT {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    if let Some((end_byte, _)) = text.char_indices().nth(PREVIEW_LIMIT) {
+        let mut preview = String::with_capacity(end_byte + '…'.len_utf8());
+        preview.push_str(&text[..end_byte]);
+        preview.push('…');
+        std::borrow::Cow::Owned(preview)
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
 }
 
 impl Focusable for StringsPanel {
@@ -886,6 +890,14 @@ mod tests {
         let preview = preview_text(&long);
         assert_eq!(preview.chars().count(), 257); // 256 + '…'
         assert!(preview.ends_with('…'));
+
+        let utf8_exact = "あ".repeat(256);
+        assert!(matches!(preview_text(&utf8_exact), std::borrow::Cow::Borrowed(_)));
+
+        let utf8_over = "あ".repeat(260);
+        let utf8_preview = preview_text(&utf8_over);
+        assert_eq!(utf8_preview.chars().count(), 257);
+        assert!(utf8_preview.ends_with('…'));
     }
 
     #[test]
