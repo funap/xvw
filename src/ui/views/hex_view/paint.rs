@@ -191,9 +191,30 @@ pub fn selection_background_color(selection_color: Hsla, is_focused: bool, is_da
     selection_color.alpha(alpha)
 }
 
+/// Computes the text color for a hex group item using a supplied contrast resolver.
+#[inline]
+fn hex_item_text_color_with(
+    is_cursor_focused: bool,
+    is_selected: bool,
+    hl_color: Option<Hsla>,
+    item_slice: &[u8],
+    palette: &ByteCategoryPalette,
+    fg_color: Hsla,
+    resolve_contrast: impl FnOnce(Hsla, Hsla) -> Hsla,
+) -> Hsla {
+    if let Some(hl) = hl_color {
+        resolve_contrast(fg_color, hl)
+    } else if is_cursor_focused || is_selected {
+        fg_color
+    } else {
+        palette.color_for(group_category(item_slice))
+    }
+}
+
 /// Computes the text color for a hex group item taking into account cursor focus,
 /// active selection, highlights, and category palette.
 /// When a highlight background is present, `ensure_contrast` guarantees legibility.
+#[cfg(test)]
 #[inline]
 pub fn hex_item_text_color(
     is_cursor_focused: bool,
@@ -203,20 +224,15 @@ pub fn hex_item_text_color(
     palette: &ByteCategoryPalette,
     fg_color: Hsla,
 ) -> Hsla {
-    if let Some(hl) = hl_color {
-        ensure_contrast(fg_color, hl, 4.5)
-    } else if is_cursor_focused || is_selected {
-        fg_color
-    } else {
-        palette.color_for(group_category(item_slice))
-    }
+    hex_item_text_color_with(is_cursor_focused, is_selected, hl_color, item_slice, palette, fg_color, |fg, bg| {
+        ensure_contrast(fg, bg, 4.5)
+    })
 }
 
-/// Computes the text color for an ASCII character cell taking into account selection,
-/// highlights, printable status, and category palette.
-/// When a highlight background is present, `ensure_contrast` guarantees legibility.
+/// Computes the text color for an ASCII character cell using a supplied contrast resolver.
 #[inline]
-pub fn ascii_item_text_color(
+#[allow(clippy::too_many_arguments)]
+fn ascii_item_text_color_with(
     in_selected_group: bool,
     hl_color: Option<Hsla>,
     byte: u8,
@@ -224,10 +240,11 @@ pub fn ascii_item_text_color(
     palette: &ByteCategoryPalette,
     fg_color: Hsla,
     muted_color: Hsla,
+    resolve_contrast: impl FnOnce(Hsla, Hsla) -> Hsla,
 ) -> Hsla {
     if let Some(hl) = hl_color {
         let base = if !is_printable { muted_color } else { fg_color };
-        ensure_contrast(base, hl, 4.5)
+        resolve_contrast(base, hl)
     } else if in_selected_group {
         if !is_printable { muted_color } else { fg_color }
     } else {
@@ -241,6 +258,25 @@ pub fn ascii_item_text_color(
             color
         }
     }
+}
+
+/// Computes the text color for an ASCII character cell taking into account selection,
+/// highlights, printable status, and category palette.
+/// When a highlight background is present, `ensure_contrast` guarantees legibility.
+#[cfg(test)]
+#[inline]
+pub fn ascii_item_text_color(
+    in_selected_group: bool,
+    hl_color: Option<Hsla>,
+    byte: u8,
+    is_printable: bool,
+    palette: &ByteCategoryPalette,
+    fg_color: Hsla,
+    muted_color: Hsla,
+) -> Hsla {
+    ascii_item_text_color_with(in_selected_group, hl_color, byte, is_printable, palette, fg_color, muted_color, |fg, bg| {
+        ensure_contrast(fg, bg, 4.5)
+    })
 }
 
 /// Paint every glyph centered in its fixed Hex cell while reusing the line
@@ -440,24 +476,28 @@ pub fn rel_luminance(c: Hsla) -> f32 {
     0.2126 * channel_to_linear(rgba.r) + 0.7152 * channel_to_linear(rgba.g) + 0.0722 * channel_to_linear(rgba.b)
 }
 
-/// Calculates contrast ratio between two colors according to WCAG 2.1 specs.
+/// Calculates contrast ratio between two precomputed relative luminances according to WCAG 2.1 specs.
 #[inline]
-pub fn contrast_ratio(c1: Hsla, c2: Hsla) -> f32 {
-    let l1 = rel_luminance(c1);
-    let l2 = rel_luminance(c2);
+fn contrast_from_luminances(l1: f32, l2: f32) -> f32 {
     let (lighter, darker) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
     (lighter + 0.05) / (darker + 0.05)
+}
+
+/// Calculates contrast ratio between two colors according to WCAG 2.1 specs.
+#[cfg(test)]
+#[inline]
+pub fn contrast_ratio(c1: Hsla, c2: Hsla) -> f32 {
+    contrast_from_luminances(rel_luminance(c1), rel_luminance(c2))
 }
 
 /// Adjusts color lightness if necessary to guarantee a minimum WCAG contrast ratio against `background`.
 pub fn ensure_contrast(color: Hsla, background: Hsla, min_ratio: f32) -> Hsla {
     let mut solid_color = color;
     solid_color.a = 1.0;
-    let ratio = contrast_ratio(solid_color, background);
-    if ratio >= min_ratio {
+    let bg_lum = rel_luminance(background);
+    if contrast_from_luminances(rel_luminance(solid_color), bg_lum) >= min_ratio {
         return solid_color;
     }
-    let bg_lum = rel_luminance(background);
     let is_dark_bg = bg_lum < 0.2;
 
     for _ in 0..25 {
@@ -466,7 +506,7 @@ pub fn ensure_contrast(color: Hsla, background: Hsla, min_ratio: f32) -> Hsla {
         } else {
             solid_color.l = (solid_color.l - 0.03).max(0.0);
         }
-        if contrast_ratio(solid_color, background) >= min_ratio {
+        if contrast_from_luminances(rel_luminance(solid_color), bg_lum) >= min_ratio {
             break;
         }
     }
@@ -1396,7 +1436,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         let cached_row = build_cached_row(&params, offset, next_offset, window);
         params.row_cache.insert(params.row_idx, cached_row);
     }
-    let cached = params.row_cache.get(params.row_idx).unwrap();
+    let (cached, contrast_cache) = params.row_cache.row_and_contrast_mut(params.row_idx).expect("cached row inserted");
 
     let physical_address = cached.physical_address;
     let (is_structure_header_row, is_collapsed_struct_row, first_leaf, is_uniform_row_leaf, row_leaf_fields) = if let Some(ref sf) = cached.structure_fields {
@@ -1665,13 +1705,14 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         };
 
         let current_hl_color = highlight_color_for_range(item_start_offset, item_end_offset, active_row_highlights);
-        let text_color = hex_item_text_color(
+        let text_color = hex_item_text_color_with(
             is_cursor && params.is_focused,
             is_selected,
             current_hl_color,
             item_slice,
             &params.category_palette,
             fg_color,
+            |fg, bg| contrast_cache.get_or_compute(fg, bg, |f, b| ensure_contrast(f, b, 4.5)),
         );
 
         group_visuals.push((current_hl_color, is_selected, is_cursor));
@@ -2039,7 +2080,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                                 cell_cursor += 1;
                             }
                             if let Some(cell) = cells.get(cell_cursor).filter(|c| c.cell_idx == j) {
-                                let text_color = ascii_item_text_color(
+                                let text_color = ascii_item_text_color_with(
                                     in_selected_group,
                                     current_hl_color,
                                     cell.byte,
@@ -2047,6 +2088,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                                     &params.category_palette,
                                     fg_color,
                                     muted_color,
+                                    |fg, bg| contrast_cache.get_or_compute(fg, bg, |f, b| ensure_contrast(f, b, 4.5)),
                                 );
                                 ascii_entries.push(AsciiCellEntry {
                                     cell_idx: cell.cell_idx,
