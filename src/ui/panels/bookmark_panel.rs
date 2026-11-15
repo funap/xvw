@@ -71,6 +71,8 @@ pub struct BookmarkPanel {
     pub editing_id: Option<String>,
     pub comment_input: Entity<InputState>,
     pub color_picker_id: Option<String>,
+    is_panel_active: bool,
+    needs_editor_sync: bool,
     _editor_subscription: Option<Subscription>,
     _input_subscription: Option<Subscription>,
 }
@@ -95,12 +97,29 @@ impl BookmarkPanel {
             editing_id: None,
             comment_input,
             color_picker_id: None,
+            is_panel_active: true,
+            needs_editor_sync: false,
             _editor_subscription: None,
             _input_subscription: Some(input_sub),
         };
 
         this.set_editor(editor, cx);
         this
+    }
+
+    /// Controls whether editor updates sync bookmark selection eagerly or defer until activated.
+    pub fn set_panel_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.is_panel_active == active {
+            return;
+        }
+        self.is_panel_active = active;
+        if active && self.needs_editor_sync {
+            self.needs_editor_sync = false;
+            if let Some(editor) = self.editor.clone() {
+                self.sync_selected_from_cursor(&editor, cx);
+            }
+            cx.notify();
+        }
     }
 
     pub fn set_editor(&mut self, editor: Option<Entity<Editor>>, cx: &mut Context<Self>) {
@@ -121,13 +140,24 @@ impl BookmarkPanel {
 
         if let Some(ed) = &editor {
             self._editor_subscription = Some(cx.observe(ed, |this, editor, cx| {
+                if !this.is_panel_active {
+                    this.needs_editor_sync = true;
+                    return;
+                }
                 if this.sync_selected_from_cursor(&editor, cx) {
                     cx.notify();
                 }
             }));
-            self.sync_selected_from_cursor(ed, cx);
+            if self.is_panel_active {
+                self.sync_selected_from_cursor(ed, cx);
+            }
         }
-        cx.notify();
+        if self.is_panel_active {
+            self.needs_editor_sync = false;
+            cx.notify();
+        } else {
+            self.needs_editor_sync = true;
+        }
     }
 
     fn sync_selected_from_cursor(&mut self, editor: &Entity<Editor>, cx: &mut Context<Self>) -> bool {

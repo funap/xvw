@@ -213,6 +213,8 @@ pub struct SearchPanel {
     pub last_query: String,
     pub match_len: usize,
     pub search_task: Option<Task<()>>,
+    is_panel_active: bool,
+    needs_editor_sync: bool,
     _table_subscription: Option<Subscription>,
     _input_subscription: Option<Subscription>,
     _editor_subscription: Option<Subscription>,
@@ -277,6 +279,8 @@ impl SearchPanel {
             last_query: String::new(),
             match_len: 0,
             search_task: None,
+            is_panel_active: true,
+            needs_editor_sync: false,
             _table_subscription: Some(table_subscription),
             _input_subscription: Some(input_sub),
             _editor_subscription: None,
@@ -284,6 +288,21 @@ impl SearchPanel {
 
         this.set_editor(editor, cx);
         this
+    }
+
+    /// Controls whether editor cursor updates sync search selection immediately or defer until activated.
+    pub fn set_panel_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.is_panel_active == active {
+            return;
+        }
+        self.is_panel_active = active;
+        if active && self.needs_editor_sync {
+            self.needs_editor_sync = false;
+            if let Some(editor) = self.editor.clone() {
+                self.sync_selected_index_from_editor(&editor, cx);
+            }
+            cx.notify();
+        }
     }
 
     pub fn set_editor(&mut self, editor: Option<Entity<Editor>>, cx: &mut Context<Self>) {
@@ -294,16 +313,25 @@ impl SearchPanel {
         self.selected_index = None;
         self.is_searching = false;
         self.search_task = None;
+        self.needs_editor_sync = false;
         self.sync_table_state(cx);
 
         if let Some(ed) = &editor {
             self._editor_subscription = Some(cx.observe(ed, |this, ed, cx| {
+                if !this.is_panel_active {
+                    this.needs_editor_sync = true;
+                    return;
+                }
                 if this.sync_selected_index_from_editor(&ed, cx) {
                     cx.notify();
                 }
             }));
         }
-        cx.notify();
+        if self.is_panel_active {
+            cx.notify();
+        } else {
+            self.needs_editor_sync = true;
+        }
     }
 
     pub fn set_mode(&mut self, mode: SearchMode, window: &mut Window, cx: &mut Context<Self>) {

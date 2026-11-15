@@ -34,25 +34,15 @@ pub struct DataInspector {
     pub original_selection: Option<Selection>,
     pub edit_input: Entity<InputState>,
     pub edit_error: Option<String>,
+    is_panel_active: bool,
+    needs_editor_sync: bool,
     _input_subscription: Option<Subscription>,
 }
 
 impl DataInspector {
     pub fn new(editor: Option<Entity<Editor>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
-        let _editor_subscription = editor.as_ref().map(|ed| {
-            cx.observe(ed, |this, ed, cx| {
-                if this.editing_field.is_some() {
-                    let ed_read = ed.read(cx);
-                    if ed_read.cursor.offset != this.editing_offset || ed_read.is_read_only() {
-                        this.editing_field = None;
-                        this.original_selection = None;
-                        this.edit_error = None;
-                    }
-                }
-                cx.notify();
-            })
-        });
+        let _editor_subscription = editor.as_ref().map(|ed| Self::subscribe_editor(ed, cx));
 
         let edit_input = cx.new(|cx| InputState::new(window, cx));
         let _input_subscription = cx.subscribe_in(&edit_input, window, |this, input, event: &input::InputEvent, window, cx| match event {
@@ -91,7 +81,46 @@ impl DataInspector {
             original_selection: None,
             edit_input,
             edit_error: None,
+            is_panel_active: true,
+            needs_editor_sync: false,
             _input_subscription: Some(_input_subscription),
+        }
+    }
+
+    fn subscribe_editor(ed: &Entity<Editor>, cx: &mut Context<Self>) -> Subscription {
+        cx.observe(ed, |this, ed, cx| {
+            if !this.is_panel_active {
+                this.needs_editor_sync = true;
+                return;
+            }
+            this.sync_edit_state(&ed, cx);
+            cx.notify();
+        })
+    }
+
+    fn sync_edit_state(&mut self, ed: &Entity<Editor>, cx: &App) {
+        if self.editing_field.is_some() {
+            let ed_read = ed.read(cx);
+            if ed_read.cursor.offset != self.editing_offset || ed_read.is_read_only() {
+                self.editing_field = None;
+                self.original_selection = None;
+                self.edit_error = None;
+            }
+        }
+    }
+
+    /// Controls whether editor updates redraw the inspector eagerly or defer until activated.
+    pub fn set_panel_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.is_panel_active == active {
+            return;
+        }
+        self.is_panel_active = active;
+        if active && self.needs_editor_sync {
+            self.needs_editor_sync = false;
+            if let Some(editor) = self.editor.clone() {
+                self.sync_edit_state(&editor, cx);
+            }
+            cx.notify();
         }
     }
 
@@ -102,19 +131,14 @@ impl DataInspector {
         self._editor_subscription = None;
         self.editor = editor.clone();
         if let Some(ed) = &editor {
-            self._editor_subscription = Some(cx.observe(ed, |this, ed, cx| {
-                if this.editing_field.is_some() {
-                    let ed_read = ed.read(cx);
-                    if ed_read.cursor.offset != this.editing_offset || ed_read.is_read_only() {
-                        this.editing_field = None;
-                        this.original_selection = None;
-                        this.edit_error = None;
-                    }
-                }
-                cx.notify();
-            }));
+            self._editor_subscription = Some(Self::subscribe_editor(ed, cx));
         }
-        cx.notify();
+        if self.is_panel_active {
+            self.needs_editor_sync = false;
+            cx.notify();
+        } else {
+            self.needs_editor_sync = true;
+        }
     }
 
     pub fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
