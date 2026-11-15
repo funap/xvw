@@ -381,18 +381,16 @@ pub fn paint_centered_ascii_glyphs(shaped: &ShapedLine, entries: &[AsciiCellEntr
 
 #[inline]
 pub fn format_offset_08(offset: usize, hex_case: HexCase) -> SharedString {
-    if offset > 0xFFFF_FFFF {
-        SharedString::from(hex_case.format_offset(offset, 16))
-    } else {
-        let digits = hex_case.digits();
-        let mut buf = [b'0'; 8];
-        let mut val = offset;
-        for i in (0..8).rev() {
-            buf[i] = digits[val & 0xf];
-            val >>= 4;
-        }
-        SharedString::from(std::str::from_utf8(&buf).expect("valid ascii utf8").to_string())
+    let digits = hex_case.digits();
+    let mut buf = [b'0'; 16];
+    let width = if offset > 0xFFFF_FFFF { 16 } else { 8 };
+    let mut val = offset;
+    for i in (16 - width..16).rev() {
+        buf[i] = digits[val & 0xf];
+        val >>= 4;
     }
+    let slice = std::str::from_utf8(&buf[16 - width..]).expect("valid ascii utf8");
+    SharedString::from(std::sync::Arc::<str>::from(slice))
 }
 
 #[inline]

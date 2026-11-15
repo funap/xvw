@@ -1,6 +1,6 @@
 use super::types::*;
 use crate::core::encoding::Encoding;
-use crate::core::radix::{ByteGroupSize, DisplayRadix, HexCase, format_group};
+use crate::core::radix::{ByteGroupSize, DisplayRadix, HexCase, digit_count, format_group_into};
 use gpui_kit::*;
 use std::ops::Range;
 
@@ -142,8 +142,10 @@ pub fn build_hex_text_source(
 ) -> HexTextSource {
     let chunk = if chunk.len() > 1024 { &chunk[..1024] } else { chunk };
     let group_bytes = group_size.byte_count();
-    let mut text = String::with_capacity(chunk.len().saturating_mul(3));
-    let mut groups = Vec::with_capacity(chunk.len().div_ceil(group_bytes));
+    let group_count = chunk.len().div_ceil(group_bytes);
+    let total_digits = digit_count(radix, group_size);
+    let mut text = String::with_capacity(group_count.saturating_mul(total_digits + 1));
+    let mut groups = Vec::with_capacity(group_count);
     let mut chunk_idx = 0;
 
     while chunk_idx < chunk.len() {
@@ -155,14 +157,15 @@ pub fn build_hex_text_source(
             text.push(' ');
         }
         let text_start = text.len();
-        text.push_str(&format_group(
+        format_group_into(
+            &mut text,
             &chunk[chunk_idx..chunk_idx + item_slice_len],
             start_slot,
             radix,
             group_size,
             is_big_endian,
             hex_case,
-        ));
+        );
         let text_end = text.len();
 
         groups.push(HexGroupInfo {

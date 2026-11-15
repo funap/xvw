@@ -387,114 +387,146 @@ pub fn digit_count(radix: DisplayRadix, group_size: ByteGroupSize) -> usize {
 /// Formats a group slice of bytes based on the selected Radix, Group Size, Endianness, and starting slot within the group.
 ///
 /// If `start_slot == 0 && bytes.len() == group_size.byte_count()`, the integer value is formatted with exact padding (space padding for decimal, zero padding for hex/octal/binary).
+#[inline]
+fn push_hex_uint(buf: &mut String, val: u64, hex_digits: usize, digits: &[u8; 16]) {
+    for shift in (0..hex_digits).rev() {
+        let nibble = ((val >> (shift * 4)) & 0xf) as usize;
+        buf.push(digits[nibble] as char);
+    }
+}
+
+/// Formats a byte slice representing up to `group_size` bytes into `buf` without intermediate allocations.
+///
 /// If `bytes.len() < group_size.byte_count()` or `start_slot > 0` (e.g. midway line break), each byte slot `k` (0..group_size)
 /// is formatted at its exact positional offset, with missing slots padded with '.' so byte position can be identified.
-pub fn format_group(bytes: &[u8], start_slot: usize, radix: DisplayRadix, group_size: ByteGroupSize, is_big_endian: bool, hex_case: HexCase) -> String {
+pub fn format_group_into(
+    buf: &mut String,
+    bytes: &[u8],
+    start_slot: usize,
+    radix: DisplayRadix,
+    group_size: ByteGroupSize,
+    is_big_endian: bool,
+    hex_case: HexCase,
+) {
+    use std::fmt::Write;
+
     let expected = group_size.byte_count();
     let total_digits = digit_count(radix, group_size);
 
     if bytes.is_empty() {
-        return ".".repeat(total_digits);
+        for _ in 0..total_digits {
+            buf.push('.');
+        }
+        return;
     }
 
     if radix == DisplayRadix::Decimal {
         let copy_len = bytes.len().min(expected.saturating_sub(start_slot));
-        return match group_size {
-            ByteGroupSize::One => format!("{:3}", bytes[0]),
+        match group_size {
+            ByteGroupSize::One => {
+                let _ = write!(buf, "{:3}", bytes[0]);
+            }
             ByteGroupSize::Two => {
                 let mut arr = [0u8; 2];
                 arr[start_slot..start_slot + copy_len].copy_from_slice(&bytes[..copy_len]);
                 let val = if is_big_endian { u16::from_be_bytes(arr) } else { u16::from_le_bytes(arr) };
-                format!("{:5}", val)
+                let _ = write!(buf, "{:5}", val);
             }
             ByteGroupSize::Four => {
                 let mut arr = [0u8; 4];
                 arr[start_slot..start_slot + copy_len].copy_from_slice(&bytes[..copy_len]);
                 let val = if is_big_endian { u32::from_be_bytes(arr) } else { u32::from_le_bytes(arr) };
-                format!("{:10}", val)
+                let _ = write!(buf, "{:10}", val);
             }
             ByteGroupSize::Eight => {
                 let mut arr = [0u8; 8];
                 arr[start_slot..start_slot + copy_len].copy_from_slice(&bytes[..copy_len]);
                 let val = if is_big_endian { u64::from_be_bytes(arr) } else { u64::from_le_bytes(arr) };
-                format!("{:20}", val)
+                let _ = write!(buf, "{:20}", val);
             }
-        };
+        }
+        return;
     }
 
     if radix == DisplayRadix::Octal {
         let copy_len = bytes.len().min(expected.saturating_sub(start_slot));
-        return match group_size {
-            ByteGroupSize::One => format!("{:03o}", bytes[0]),
+        match group_size {
+            ByteGroupSize::One => {
+                let _ = write!(buf, "{:03o}", bytes[0]);
+            }
             ByteGroupSize::Two => {
                 let mut arr = [0u8; 2];
                 arr[start_slot..start_slot + copy_len].copy_from_slice(&bytes[..copy_len]);
                 let val = if is_big_endian { u16::from_be_bytes(arr) } else { u16::from_le_bytes(arr) };
-                format!("{:06o}", val)
+                let _ = write!(buf, "{:06o}", val);
             }
             ByteGroupSize::Four => {
                 let mut arr = [0u8; 4];
                 arr[start_slot..start_slot + copy_len].copy_from_slice(&bytes[..copy_len]);
                 let val = if is_big_endian { u32::from_be_bytes(arr) } else { u32::from_le_bytes(arr) };
-                format!("{:011o}", val)
+                let _ = write!(buf, "{:011o}", val);
             }
             ByteGroupSize::Eight => {
                 let mut arr = [0u8; 8];
                 arr[start_slot..start_slot + copy_len].copy_from_slice(&bytes[..copy_len]);
                 let val = if is_big_endian { u64::from_be_bytes(arr) } else { u64::from_le_bytes(arr) };
-                format!("{:022o}", val)
+                let _ = write!(buf, "{:022o}", val);
             }
-        };
+        }
+        return;
     }
 
+    let digits = hex_case.digits();
     if start_slot == 0 && bytes.len() >= expected {
         match (group_size, radix) {
-            (ByteGroupSize::One, DisplayRadix::Hexadecimal) => hex_case.format_byte(bytes[0]),
-            (ByteGroupSize::One, DisplayRadix::Binary) => format!("{:08b}", bytes[0]),
-
+            (ByteGroupSize::One, DisplayRadix::Hexadecimal) => {
+                push_hex_uint(buf, u64::from(bytes[0]), 2, digits);
+            }
+            (ByteGroupSize::One, DisplayRadix::Binary) => {
+                let _ = write!(buf, "{:08b}", bytes[0]);
+            }
             (ByteGroupSize::Two, DisplayRadix::Hexadecimal) => {
                 let arr: [u8; 2] = [bytes[0], bytes[1]];
                 let val = if is_big_endian { u16::from_be_bytes(arr) } else { u16::from_le_bytes(arr) };
-                hex_case.format_u16(val)
+                push_hex_uint(buf, u64::from(val), 4, digits);
             }
             (ByteGroupSize::Two, DisplayRadix::Binary) => {
                 let arr: [u8; 2] = [bytes[0], bytes[1]];
                 let val = if is_big_endian { u16::from_be_bytes(arr) } else { u16::from_le_bytes(arr) };
-                format!("{:016b}", val)
+                let _ = write!(buf, "{:016b}", val);
             }
-
             (ByteGroupSize::Four, DisplayRadix::Hexadecimal) => {
                 let arr: [u8; 4] = [bytes[0], bytes[1], bytes[2], bytes[3]];
                 let val = if is_big_endian { u32::from_be_bytes(arr) } else { u32::from_le_bytes(arr) };
-                hex_case.format_u32(val)
+                push_hex_uint(buf, u64::from(val), 8, digits);
             }
             (ByteGroupSize::Four, DisplayRadix::Binary) => {
                 let arr: [u8; 4] = [bytes[0], bytes[1], bytes[2], bytes[3]];
                 let val = if is_big_endian { u32::from_be_bytes(arr) } else { u32::from_le_bytes(arr) };
-                format!("{:032b}", val)
+                let _ = write!(buf, "{:032b}", val);
             }
-
             (ByteGroupSize::Eight, DisplayRadix::Hexadecimal) => {
                 let arr: [u8; 8] = [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]];
                 let val = if is_big_endian { u64::from_be_bytes(arr) } else { u64::from_le_bytes(arr) };
-                hex_case.format_u64(val)
+                push_hex_uint(buf, val, 16, digits);
             }
             (ByteGroupSize::Eight, DisplayRadix::Binary) => {
                 let arr: [u8; 8] = [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]];
                 let val = if is_big_endian { u64::from_be_bytes(arr) } else { u64::from_le_bytes(arr) };
-                format!("{:064b}", val)
+                let _ = write!(buf, "{:064b}", val);
             }
             _ => unreachable!(),
         }
     } else {
-        // Partial group for Hexadecimal and Binary: format each slot k in 0..expected
-        let mut formatted = String::with_capacity(total_digits);
+        let start_len = buf.len();
         for k in 0..expected {
             if k >= start_slot && (k - start_slot) < bytes.len() {
                 let b = bytes[k - start_slot];
                 match radix {
-                    DisplayRadix::Hexadecimal => formatted.push_str(&hex_case.format_byte(b)),
-                    DisplayRadix::Binary => formatted.push_str(&format!("{:08b}", b)),
+                    DisplayRadix::Hexadecimal => push_hex_uint(buf, u64::from(b), 2, digits),
+                    DisplayRadix::Binary => {
+                        let _ = write!(buf, "{:08b}", b);
+                    }
                     _ => unreachable!(),
                 }
             } else {
@@ -503,16 +535,29 @@ pub fn format_group(bytes: &[u8], start_slot: usize, radix: DisplayRadix, group_
                     DisplayRadix::Binary => 8,
                     _ => unreachable!(),
                 };
-                formatted.push_str(&".".repeat(slot_dots));
+                for _ in 0..slot_dots {
+                    buf.push('.');
+                }
             }
         }
-        if formatted.len() < total_digits {
-            formatted.push_str(&".".repeat(total_digits - formatted.len()));
-        } else if formatted.len() > total_digits {
-            formatted.truncate(total_digits);
+        let written = buf.len() - start_len;
+        if written < total_digits {
+            for _ in 0..(total_digits - written) {
+                buf.push('.');
+            }
+        } else if written > total_digits {
+            buf.truncate(start_len + total_digits);
         }
-        formatted
     }
+}
+
+/// Format a byte slice representing up to `group_size` bytes into a single string.
+/// If `bytes.len() < group_size.byte_count()` or `start_slot > 0` (e.g. midway line break), each byte slot `k` (0..group_size)
+/// is formatted at its exact positional offset, with missing slots padded with '.' so byte position can be identified.
+pub fn format_group(bytes: &[u8], start_slot: usize, radix: DisplayRadix, group_size: ByteGroupSize, is_big_endian: bool, hex_case: HexCase) -> String {
+    let mut buf = String::with_capacity(digit_count(radix, group_size));
+    format_group_into(&mut buf, bytes, start_slot, radix, group_size, is_big_endian, hex_case);
+    buf
 }
 
 /// Returns the next byte offset in visual reading order (left to right) on screen.
@@ -1118,5 +1163,35 @@ mod tests {
     fn test_category_color_fallback_on_unknown_variant() {
         let de: CategoryColor = serde_json::from_str("\"unknown_color\"").expect("deserialize unknown");
         assert_eq!(de, CategoryColor::Default);
+    }
+
+    #[test]
+    fn test_format_group_into_matches_format_group_across_modes() {
+        let data = [0x00, 0x0a, 0x1b, 0x2c, 0x7f, 0x80, 0xab, 0xff];
+        let mut buf = String::new();
+        for radix in DisplayRadix::ALL {
+            for group_size in ByteGroupSize::ALL {
+                for is_big_endian in [false, true] {
+                    for hex_case in HexCase::ALL {
+                        let expected_cap = digit_count(radix, group_size);
+                        // Empty, partial leading, partial trailing, and full slices
+                        let cases: &[(&[u8], usize)] = &[
+                            (&[][..], 0),
+                            (&data[..1], 0),
+                            (&data[..group_size.byte_count()], 0),
+                            (&data[..1], group_size.byte_count().saturating_sub(1)),
+                        ];
+                        for &(slice, start_slot) in cases {
+                            buf.clear();
+                            buf.push_str("prefix:");
+                            format_group_into(&mut buf, slice, start_slot, radix, group_size, is_big_endian, hex_case);
+                            let expected = format_group(slice, start_slot, radix, group_size, is_big_endian, hex_case);
+                            assert_eq!(expected.len(), expected_cap);
+                            assert_eq!(&buf["prefix:".len()..], expected);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
