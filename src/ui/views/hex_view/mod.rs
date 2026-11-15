@@ -23,7 +23,9 @@ pub use layout::{
     ascii_byte_index_from_world_x, bounded_auto_fit_range, build_hex_text_source, calculate_scroll_top_for_range, can_chain_to_outer, cursor_in_row_offset,
     hex_grid_width, hex_grid_x, hex_group_x, is_cursor_header_column, make_hex_view_layout, measure_hex_cell_width, weighted_text_width,
 };
-pub use paint::{CHEVRON_ICON_GAP, CHEVRON_ICON_SIZE, DescriptionPalette, RowPaintParams, calculate_description_indent_level, paint_hex_row, paint_scrollbar};
+pub use paint::{
+    CHEVRON_ICON_GAP, CHEVRON_ICON_SIZE, DescriptionPalette, RowPaintParams, calculate_description_indent_level, paint_hex_row, paint_scrollbar, row_byte_range,
+};
 pub use types::*;
 
 use crate::actions::{
@@ -167,7 +169,8 @@ pub struct HexView {
     bounds: std::cell::Cell<Option<Bounds<Pixels>>>,
     list_bounds: std::cell::Cell<Option<Bounds<Pixels>>>,
     highlights: Arc<Vec<(Range<usize>, Hsla)>>,
-    max_highlight_len: usize,
+    highlights_version: u64,
+    effective_highlights_cache: std::rc::Rc<std::cell::RefCell<EffectiveHighlightsCache>>,
     show_offset: bool,
     show_header: bool,
     show_ascii: bool,
@@ -223,6 +226,7 @@ impl HexView {
         };
         let cached_desc_palette = std::rc::Rc::new(std::cell::Cell::new(None));
         let row_cache = std::rc::Rc::new(std::cell::RefCell::new(RowRenderCache::default()));
+        let effective_highlights_cache = std::rc::Rc::new(std::cell::RefCell::new(EffectiveHighlightsCache::default()));
         let font_size_prop = px(14.0);
         let hex_col_width = 0.0;
         let focus_handle = cx.focus_handle();
@@ -366,7 +370,8 @@ impl HexView {
             bounds: std::cell::Cell::new(None),
             list_bounds: std::cell::Cell::new(None),
             highlights: Arc::new(Vec::new()),
-            max_highlight_len: 0,
+            highlights_version: 0,
+            effective_highlights_cache,
             show_offset: true,
             show_header: true,
             show_ascii: true,
@@ -1050,14 +1055,17 @@ impl HexView {
         if self.highlights.as_ref() == &highlights {
             return;
         }
-        self.max_highlight_len = highlights.iter().map(|(r, _)| r.end.saturating_sub(r.start)).max().unwrap_or(0);
         self.highlights = Arc::new(highlights);
+        self.highlights_version = self.highlights_version.wrapping_add(1);
         cx.notify();
     }
 
     pub fn set_highlights_arc(&mut self, highlights: Arc<Vec<(Range<usize>, Hsla)>>, cx: &mut Context<Self>) {
-        self.max_highlight_len = highlights.iter().map(|(r, _)| r.end.saturating_sub(r.start)).max().unwrap_or(0);
+        if Arc::ptr_eq(&self.highlights, &highlights) || self.highlights.as_ref() == highlights.as_ref() {
+            return;
+        }
         self.highlights = highlights;
+        self.highlights_version = self.highlights_version.wrapping_add(1);
         cx.notify();
     }
 
@@ -3742,8 +3750,9 @@ impl Render for HexView {
                 let is_big_endian = self.is_big_endian;
                 let active_column = self.input.active_column();
                 let pending_hex_digit = self.input.pending_hex_digit();
-                let _max_highlight_len = self.max_highlight_len;
                 let highlights = self.highlights.clone();
+                let highlights_version = self.highlights_version;
+                let effective_highlights_cache = self.effective_highlights_cache.clone();
                 let is_dragging_scrollbar = self.scroll.is_dragging_scrollbar;
                 let scrollbar_hovered = self.scroll.scrollbar_hovered;
                 let scrollbar_view = view.clone();
@@ -3790,7 +3799,18 @@ impl Render for HexView {
                             }
                         });
 
-                        let (parse_result, collapsed_structs, bookmark_items, doc_arc, line_starts, cursor_offset, insert_cursor_offset, min_sel, max_sel) = {
+                        let (
+                            parse_result,
+                            collapsed_structs,
+                            bookmark_items,
+                            bookmark_version,
+                            doc_arc,
+                            line_starts,
+                            cursor_offset,
+                            insert_cursor_offset,
+                            min_sel,
+                            max_sel,
+                        ) = {
                             let editor = editor_entity.read(cx);
                             let (min_sel, max_sel) = editor
                                 .selection_range()
@@ -3804,6 +3824,7 @@ impl Render for HexView {
                                 },
                                 editor.structure.collapsed_struct_ids.clone(),
                                 editor.bookmarks().snapshot_arc(),
+                                editor.bookmarks().version(),
                                 editor.document.clone(),
                                 editor.line_starts(),
                                 editor.cursor.offset,
@@ -3814,51 +3835,25 @@ impl Render for HexView {
                         };
                         let doc = doc_arc.read().expect("document read lock");
 
-                        // Construct combined highlights from the shared snapshot and search results
-                        let (effective_highlights, effective_max_hl_len) = if highlights.is_empty() {
-                            let hl: Vec<(Range<usize>, Hsla)> = bookmark_items.iter().map(|h| (h.range(), h.rgba_color().into())).collect();
-                            let max_len = hl.iter().map(|(r, _)| r.end.saturating_sub(r.start)).max().unwrap_or(0);
-                            (hl, max_len)
-                        } else {
-                            // Two-pointer merge since both bookmark_items and highlights are sorted by start offset
-                            let mut hl = Vec::with_capacity(bookmark_items.len() + highlights.len());
-                            let mut b_iter = bookmark_items.iter().peekable();
-                            let mut h_iter = highlights.iter().peekable();
-
-                            while let (Some(&b), Some((hr, hc))) = (b_iter.peek(), h_iter.peek()) {
-                                let br = b.range();
-                                if br.start < hr.start {
-                                    hl.push((br, b.rgba_color().into()));
-                                    b_iter.next();
-                                } else if hr.start < br.start {
-                                    hl.push((hr.clone(), *hc));
-                                    h_iter.next();
-                                } else if br == *hr {
-                                    hl.push((br, b.rgba_color().into()));
-                                    b_iter.next();
-                                    h_iter.next();
-                                } else if br.end <= hr.end {
-                                    hl.push((br, b.rgba_color().into()));
-                                    b_iter.next();
-                                } else {
-                                    hl.push((hr.clone(), *hc));
-                                    h_iter.next();
-                                }
-                            }
-                            for b in b_iter {
-                                hl.push((b.range(), b.rgba_color().into()));
-                            }
-                            for (hr, hc) in h_iter {
-                                hl.push((hr.clone(), *hc));
-                            }
-                            let max_len = hl.iter().map(|(r, _)| r.end.saturating_sub(r.start)).max().unwrap_or(0);
-                            (hl, max_len)
-                        };
-
                         let list_h = f32::from(bounds.size.height);
                         let visible_rows = (list_h / ROW_HEIGHT).ceil() as usize + 1;
                         let top_row = scroll_offset.min(total_rows.saturating_sub(1));
                         let end_row = (top_row + visible_rows).min(total_rows);
+                        let total_size = doc.buffer.len();
+                        let vp_start = line_starts.get(top_row).unwrap_or(total_size);
+                        let vp_end = if end_row < line_starts.len() {
+                            line_starts.get(end_row).unwrap_or(total_size)
+                        } else {
+                            total_size
+                        };
+                        let viewport_highlights = {
+                            let mut hl_cache = effective_highlights_cache.borrow_mut();
+                            hl_cache.ensure_updated(bookmark_version, &bookmark_items, highlights_version, &highlights);
+                            let mut vp = Vec::new();
+                            hl_cache.collect_viewport(vp_start, vp_end, &mut vp);
+                            vp
+                        };
+                        let mut hl_sweep = HighlightSweep::new(&viewport_highlights);
                         let category_palette = custom_category_palette.unwrap_or_else(|| {
                             let colors = *cx.global::<ByteCategoryColors>();
                             ByteCategoryPalette::from_colors(colors, cx.theme())
@@ -3931,6 +3926,10 @@ impl Render for HexView {
                             if row_y >= bounds.bottom() {
                                 break;
                             }
+                            let Some((row_offset, row_next_offset)) = row_byte_range(&line_starts, row_idx, total_size) else {
+                                continue;
+                            };
+                            let active_row_highlights = hl_sweep.advance_to(row_offset, row_next_offset);
                             let row_bounds = Bounds::new(point(bounds.left(), row_y), size(bounds.size.width, px(ROW_HEIGHT)));
                             paint_hex_row(
                                 RowPaintParams {
@@ -3951,9 +3950,8 @@ impl Render for HexView {
                                     insert_cursor_offset,
                                     min_sel,
                                     max_sel,
-                                    highlights: effective_highlights.as_slice(),
+                                    highlights: active_row_highlights,
                                     bookmark_items: visible_comment_bookmarks.as_slice(),
-                                    max_highlight_len: effective_max_hl_len,
                                     show_offset,
                                     show_ascii,
                                     ascii_col_width,

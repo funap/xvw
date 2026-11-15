@@ -1,3 +1,4 @@
+use crate::core::bookmark::BookmarkItem;
 use crate::core::encoding::Encoding;
 use crate::core::radix::{ByteGroupSize, DisplayRadix, HexCase};
 use crate::core::structure::IndexedField;
@@ -5,6 +6,7 @@ use crate::ui::views::hex_view::types::HexTextSource;
 use gpui_kit::*;
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::ops::Range;
 
 /// Cached ASCII cell layout data for one character slot in a row.
 #[derive(Clone, Copy, Debug)]
@@ -238,11 +240,141 @@ impl RowRenderCache {
     }
 }
 
+/// Merges sorted bookmark highlights and search highlights by start offset, matching `BookmarkItem` precedence on exact ties.
+fn merge_sorted_highlights(bookmark_items: &[BookmarkItem], highlights: &[(Range<usize>, Hsla)], out: &mut Vec<(Range<usize>, Hsla)>) {
+    if highlights.is_empty() {
+        out.reserve(bookmark_items.len());
+        for b in bookmark_items {
+            out.push((b.range(), b.rgba_color().into()));
+        }
+        return;
+    }
+
+    out.reserve(bookmark_items.len() + highlights.len());
+    let mut b_iter = bookmark_items.iter().peekable();
+    let mut h_iter = highlights.iter().peekable();
+
+    while let (Some(&b), Some((hr, hc))) = (b_iter.peek(), h_iter.peek()) {
+        let br = b.range();
+        if br.start < hr.start {
+            out.push((br, b.rgba_color().into()));
+            b_iter.next();
+        } else if hr.start < br.start {
+            out.push((hr.clone(), *hc));
+            h_iter.next();
+        } else if br == *hr {
+            out.push((br, b.rgba_color().into()));
+            b_iter.next();
+            h_iter.next();
+        } else if br.end <= hr.end {
+            out.push((br, b.rgba_color().into()));
+            b_iter.next();
+        } else {
+            out.push((hr.clone(), *hc));
+            h_iter.next();
+        }
+    }
+    for b in b_iter {
+        out.push((b.range(), b.rgba_color().into()));
+    }
+    for (hr, hc) in h_iter {
+        out.push((hr.clone(), *hc));
+    }
+}
+
+/// Caches merged highlight ranges and maintains block-level max-end bounds for fast viewport queries.
+#[derive(Default)]
+pub struct EffectiveHighlightsCache {
+    initialized: bool,
+    bookmark_version: u64,
+    highlights_version: u64,
+    items: Vec<(Range<usize>, Hsla)>,
+    block_max_end: Vec<usize>,
+}
+
+impl EffectiveHighlightsCache {
+    const BLOCK_SIZE: usize = 64;
+
+    pub fn ensure_updated(&mut self, bookmark_version: u64, bookmark_items: &[BookmarkItem], highlights_version: u64, highlights: &[(Range<usize>, Hsla)]) {
+        if self.initialized && self.bookmark_version == bookmark_version && self.highlights_version == highlights_version {
+            return;
+        }
+        self.initialized = true;
+        self.bookmark_version = bookmark_version;
+        self.highlights_version = highlights_version;
+        self.items.clear();
+        self.block_max_end.clear();
+
+        merge_sorted_highlights(bookmark_items, highlights, &mut self.items);
+        for chunk in self.items.chunks(Self::BLOCK_SIZE) {
+            let max_end = chunk.iter().map(|(r, _)| r.end).max().unwrap_or(0);
+            self.block_max_end.push(max_end);
+        }
+    }
+
+    pub fn collect_viewport(&self, vp_start: usize, vp_end: usize, out: &mut Vec<(Range<usize>, Hsla)>) {
+        out.clear();
+        if self.items.is_empty() || vp_end <= vp_start {
+            return;
+        }
+        let end_idx = self.items.partition_point(|(r, _)| r.start < vp_end);
+        if end_idx == 0 {
+            return;
+        }
+        let block_count = end_idx.div_ceil(Self::BLOCK_SIZE);
+        for (block_idx, &block_max) in self.block_max_end[..block_count].iter().enumerate() {
+            if block_max <= vp_start {
+                continue;
+            }
+            let start = block_idx * Self::BLOCK_SIZE;
+            let end = (start + Self::BLOCK_SIZE).min(end_idx);
+            for (range, color) in &self.items[start..end] {
+                if range.end > vp_start {
+                    out.push((range.clone(), *color));
+                }
+            }
+        }
+    }
+}
+
+/// Incremental sweep cursor yielding the active highlights for consecutive rows within a viewport.
+pub struct HighlightSweep<'a> {
+    viewport: &'a [(Range<usize>, Hsla)],
+    cursor: usize,
+    active: Vec<(Range<usize>, Hsla)>,
+}
+
+impl<'a> HighlightSweep<'a> {
+    pub fn new(viewport: &'a [(Range<usize>, Hsla)]) -> Self {
+        Self {
+            viewport,
+            cursor: 0,
+            active: Vec::new(),
+        }
+    }
+
+    #[inline]
+    pub fn advance_to(&mut self, offset: usize, next_offset: usize) -> &[(Range<usize>, Hsla)] {
+        self.active.retain(|(r, _)| r.end > offset);
+        while let Some((r, c)) = self.viewport.get(self.cursor) {
+            if r.start >= next_offset {
+                break;
+            }
+            if r.end > offset {
+                self.active.push((r.clone(), *c));
+            }
+            self.cursor += 1;
+        }
+        &self.active
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CachedRow, HighlightContrastCache, RowRenderCache};
+    use super::{CachedRow, EffectiveHighlightsCache, HighlightContrastCache, HighlightSweep, RowRenderCache};
+    use crate::core::bookmark::{BookmarkColor, BookmarkItem};
     use crate::ui::views::hex_view::types::HexTextSource;
-    use gpui_kit::{SharedString, hsla};
+    use gpui_kit::{Hsla, SharedString, hsla};
 
     fn sample_cached_row(addr: usize) -> CachedRow {
         CachedRow {
@@ -279,6 +411,40 @@ mod tests {
         assert!(cache.get(0).is_some(), "recently accessed row should survive eviction");
         assert!(cache.get(559).is_some(), "newly inserted row should remain cached");
         assert!(cache.get(1).is_none(), "oldest cold row should be evicted");
+    }
+
+    #[test]
+    fn effective_highlights_cache_and_sweep_match_brute_force() {
+        let mut bookmarks: Vec<BookmarkItem> = (0..200).map(|i| BookmarkItem::new(i * 32 + 4, 4, BookmarkColor::Orange, "")).collect();
+        // Prepend a giant spanning bookmark across the entire range (tests block max-end skip correctness)
+        bookmarks.insert(0, BookmarkItem::new(0, 20_000, BookmarkColor::Blue, ""));
+        let search_hl: Vec<(std::ops::Range<usize>, Hsla)> = vec![(0..4, hsla(0.2, 0.5, 0.5, 1.0)), (4_000..4_008, hsla(0.5, 0.5, 0.5, 1.0))];
+
+        let mut cache = EffectiveHighlightsCache::default();
+        cache.ensure_updated(1, &bookmarks, 1, &search_hl);
+
+        let vp_start = 3_968;
+        let vp_end = 4_064;
+        let mut viewport = Vec::new();
+        cache.collect_viewport(vp_start, vp_end, &mut viewport);
+
+        // Verify viewport results match brute-force intersection against cache.items
+        let expected_vp: Vec<_> = cache.items.iter().filter(|(r, _)| r.start < vp_end && r.end > vp_start).cloned().collect();
+        assert_eq!(viewport, expected_vp);
+
+        // Sweep across monotonic rows including zero-byte structure header rows [4000, 4000) and trailing EOF [4064, 4064)
+        let rows = [(3_968, 3_984), (3_984, 4_000), (4_000, 4_000), (4_000, 4_016), (4_016, 4_032), (4_064, 4_064)];
+        let mut sweep = HighlightSweep::new(&viewport);
+        for &(offset, next_offset) in &rows {
+            let active = sweep.advance_to(offset, next_offset);
+            let expected_row: Vec<_> = cache.items.iter().filter(|(r, _)| r.start < next_offset && r.end > offset).cloned().collect();
+            assert_eq!(active, expected_row.as_slice(), "mismatch on row {offset}..{next_offset}");
+        }
+
+        // Calling again with same versions must preserve cached items without rebuilding
+        let ptr_before = cache.items.as_ptr();
+        cache.ensure_updated(1, &[], 1, &[]);
+        assert_eq!(cache.items.as_ptr(), ptr_before);
     }
 
     #[test]

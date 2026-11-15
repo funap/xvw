@@ -136,14 +136,22 @@ fn hex_insert_cursor_end_geometry(group: HexGroupInfo, origin_x: Pixels, cell_wi
     )
 }
 
-pub fn row_highlights(highlights: &[(Range<usize>, Hsla)], max_len: usize, offset: usize, next_offset: usize) -> &[(Range<usize>, Hsla)] {
-    if highlights.is_empty() {
-        return &[];
+/// Returns the byte range `[offset, next_offset)` covered by `row_idx`, including any trailing EOF cursor row.
+#[inline]
+pub fn row_byte_range(line_starts: &LineMap, row_idx: usize, total_size: usize) -> Option<(usize, usize)> {
+    if row_idx < line_starts.len() {
+        let offset = line_starts.get(row_idx)?;
+        let next_offset = if row_idx + 1 < line_starts.len() {
+            line_starts.get(row_idx + 1).unwrap_or(total_size)
+        } else {
+            total_size
+        };
+        Some((offset, next_offset))
+    } else if row_idx == line_starts.len() {
+        Some((total_size, total_size))
+    } else {
+        None
     }
-    let start_search = offset.saturating_sub(max_len);
-    let search_start = highlights.partition_point(|(r, _)| r.start < start_search);
-    let search_end = highlights.partition_point(|(r, _)| r.start < next_offset);
-    &highlights[search_start..search_end]
 }
 
 /// Return the smallest matching highlight for the specified range.
@@ -426,7 +434,6 @@ pub struct RowPaintParams<'a> {
     pub max_sel: usize,
     pub highlights: &'a [(Range<usize>, Hsla)],
     pub bookmark_items: &'a [BookmarkItem],
-    pub max_highlight_len: usize,
     pub show_offset: bool,
     pub show_ascii: bool,
     pub ascii_col_width: f32,
@@ -1200,28 +1207,13 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
 }
 
 pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) {
-    let (offset, next_offset) = if params.row_idx < params.line_starts.len() {
-        let offset = match params.line_starts.get(params.row_idx) {
-            Some(o) => o,
-            None => return,
-        };
-        let next_offset = if params.row_idx + 1 < params.line_starts.len() {
-            params.line_starts.get(params.row_idx + 1).unwrap_or(params.doc.buffer.len())
-        } else {
-            params.doc.buffer.len()
-        };
-        (offset, next_offset)
-    } else if params.row_idx == params.line_starts.len() {
-        let buf_len = params.doc.buffer.len();
-        (buf_len, buf_len)
-    } else {
+    let total_size = params.doc.buffer.len();
+    let Some((offset, next_offset)) = row_byte_range(params.line_starts, params.row_idx, total_size) else {
         return;
     };
 
     let chunk_len = next_offset - offset;
     let chunk = params.doc.buffer.get_range(offset, chunk_len);
-
-    let total_size = params.doc.buffer.len();
     let active_cursor_offset = if params.insert_mode {
         params.insert_cursor_offset
     } else {
@@ -1232,7 +1224,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
     let is_struct_mode = params.parse_result.is_some();
 
-    let active_row_highlights = row_highlights(params.highlights, params.max_highlight_len, offset, next_offset);
+    let active_row_highlights = params.highlights;
     let desc_palette = params.desc_palette;
     let selection_bg = params.theme_colors.selection_bg;
     let caret_color = params.theme_colors.caret_color;
