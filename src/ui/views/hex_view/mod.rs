@@ -40,7 +40,7 @@ use crate::actions::{
     ToggleBookmarkYellow, ToggleByteOrder, ToggleHideUnbookmarked, ToggleInlineStructureView, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
 };
 use crate::app_state::InsertModeState;
-use crate::core::bookmark::{BookmarkColor, BookmarkItem};
+use crate::core::bookmark::BookmarkColor;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::format::CopyFormat;
@@ -3883,20 +3883,10 @@ impl Render for HexView {
                             None
                         };
 
-                        // Pre-filter comment bookmarks that intersect the visible viewport
-                        let visible_comment_bookmarks: Vec<BookmarkItem> = bookmark_items
-                            .iter()
-                            .filter(|h| {
-                                if h.comment.trim().is_empty() {
-                                    return false;
-                                }
-                                let h_last_byte = (h.offset + h.size).saturating_sub(1).max(h.offset);
-                                let h_start_row = crate::core::editor::Editor::find_line_index(h.offset, &line_starts);
-                                let h_end_row = crate::core::editor::Editor::find_line_index(h_last_byte, &line_starts);
-                                h_end_row >= top_row && h_start_row <= end_row
-                            })
-                            .cloned()
-                            .collect();
+                        // Pre-bucket visible comment bookmarks once per frame by display row
+                        let visible_comment_bookmarks =
+                            collect_visible_comment_refs(&bookmark_items, &line_starts, total_size, top_row, end_row, vp_start, vp_end);
+                        let mut comment_cursor = 0usize;
 
                         let theme = cx.theme();
                         let theme_colors = RowThemeColors::from_theme(theme, is_focused);
@@ -3930,12 +3920,20 @@ impl Render for HexView {
                                 continue;
                             };
                             let active_row_highlights = hl_sweep.advance_to(row_offset, row_next_offset);
+                            while visible_comment_bookmarks.get(comment_cursor).is_some_and(|c| c.row_idx < row_idx) {
+                                comment_cursor += 1;
+                            }
+                            let mut comment_end = comment_cursor;
+                            while visible_comment_bookmarks.get(comment_end).is_some_and(|c| c.row_idx == row_idx) {
+                                comment_end += 1;
+                            }
+                            let row_bookmark_comments = &visible_comment_bookmarks[comment_cursor..comment_end];
+                            comment_cursor = comment_end;
                             let row_bounds = Bounds::new(point(bounds.left(), row_y), size(bounds.size.width, px(ROW_HEIGHT)));
                             paint_hex_row(
                                 RowPaintParams {
                                     row_idx,
                                     bounds: row_bounds,
-                                    top_visible_row: top_row,
                                     doc: &doc,
                                     line_starts: &line_starts,
                                     parse_result: parse_result.as_deref(),
@@ -3951,7 +3949,7 @@ impl Render for HexView {
                                     min_sel,
                                     max_sel,
                                     highlights: active_row_highlights,
-                                    bookmark_items: visible_comment_bookmarks.as_slice(),
+                                    bookmark_comments: row_bookmark_comments,
                                     show_offset,
                                     show_ascii,
                                     ascii_col_width,

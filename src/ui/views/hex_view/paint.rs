@@ -1,7 +1,6 @@
 use super::layout::*;
 use super::row_cache::*;
 use super::types::*;
-use crate::core::bookmark::BookmarkItem;
 use crate::core::document::Document;
 use crate::core::editor::LineMap;
 use crate::core::encoding::Encoding;
@@ -417,7 +416,6 @@ pub fn is_cursor_row(active_cursor_offset: usize, row_idx: usize, offset: usize,
 pub struct RowPaintParams<'a> {
     pub row_idx: usize,
     pub bounds: Bounds<Pixels>,
-    pub top_visible_row: usize,
     pub doc: &'a Document,
     pub line_starts: &'a LineMap,
     pub parse_result: Option<&'a ParseResult>,
@@ -433,7 +431,7 @@ pub struct RowPaintParams<'a> {
     pub min_sel: usize,
     pub max_sel: usize,
     pub highlights: &'a [(Range<usize>, Hsla)],
-    pub bookmark_items: &'a [BookmarkItem],
+    pub bookmark_comments: &'a [RowCommentRef<'a>],
     pub show_offset: bool,
     pub show_ascii: bool,
     pub ascii_col_width: f32,
@@ -1428,7 +1426,9 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         let cached_row = build_cached_row(&params, offset, next_offset, window);
         params.row_cache.insert(params.row_idx, cached_row);
     }
-    let (cached, contrast_cache) = params.row_cache.row_and_contrast_mut(params.row_idx).expect("cached row inserted");
+    let (cached, caches) = params.row_cache.row_and_caches_mut(params.row_idx).expect("cached row inserted");
+    let contrast_cache = caches.contrast;
+    let comment_shapes = caches.comment_shapes;
 
     let physical_address = cached.physical_address;
     let (is_structure_header_row, is_collapsed_struct_row, first_leaf, is_uniform_row_leaf, row_leaf_fields) = if let Some(ref sf) = cached.structure_fields {
@@ -2327,24 +2327,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     }
 
     // 5. Bookmark Comments Column
-    let row_bookmark_comments: Vec<(Hsla, SharedString)> = params
-        .bookmark_items
-        .iter()
-        .filter(|h| {
-            let h_end_offset = h.offset.saturating_add(h.size);
-            let h_last_byte = h_end_offset.saturating_sub(1).max(h.offset);
-            if h.offset > next_offset || h_last_byte < offset || h.comment.trim().is_empty() {
-                return false;
-            }
-            let h_start_row = crate::core::editor::Editor::find_line_index(h.offset, params.line_starts);
-            let h_end_row = crate::core::editor::Editor::find_line_index(h_last_byte, params.line_starts);
-            let display_row = h_start_row.max(params.top_visible_row);
-            params.row_idx == display_row && params.row_idx <= h_end_row
-        })
-        .map(|h| (h.color.to_badge_hsla(), SharedString::from(h.comment.trim().to_string())))
-        .collect();
-
-    if !row_bookmark_comments.is_empty() {
+    if !params.bookmark_comments.is_empty() {
         let comment_mask_bounds = Bounds::new(point(comment_start_x, params.bounds.top()), size(px(params.comment_col_width), px(ROW_HEIGHT)));
         let comment_end_x = comment_start_x + px(params.comment_col_width);
 
@@ -2353,30 +2336,9 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         let dot_margin_right = 5.0;
         let item_spacing = 14.0;
 
-        let mut shaped_items = Vec::new();
         let mut total_content_width = 4.0;
-
-        for (badge_color, comment_shared) in &row_bookmark_comments {
-            let clean_comment = if comment_shared.contains('\n') || comment_shared.contains('\r') {
-                let first_line = comment_shared.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-                SharedString::from(first_line.to_string())
-            } else {
-                comment_shared.clone()
-            };
-            if clean_comment.is_empty() {
-                continue;
-            }
-            let run = TextRun {
-                len: clean_comment.len(),
-                font: font.clone(),
-                color: muted_color,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            let shaped_comment = window.text_system().shape_line(clean_comment, params.font_size, &[run], None);
-            let text_w = f32::from(shaped_comment.width);
-            shaped_items.push((*badge_color, shaped_comment, text_w));
+        for item in params.bookmark_comments {
+            let text_w = comment_shapes.ensure_shaped_width(item.clean_text, muted_color, &font, params.font_size, window);
             total_content_width += dot_size + dot_margin_right + text_w + item_spacing;
         }
         let comment_text_width = total_content_width;
@@ -2390,9 +2352,12 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     let mut cur_x = comment_start_x - px(params.comment_scroll_x) + px(4.0);
                     let dot_y = params.bounds.top() + px((ROW_HEIGHT - dot_size) / 2.0);
 
-                    for (badge_color, shaped_comment, text_w) in shaped_items {
+                    for item in params.bookmark_comments {
+                        let Some((shaped_comment, text_w)) = comment_shapes.get(item.clean_text, muted_color) else {
+                            continue;
+                        };
                         let dot_bounds = Bounds::new(point(cur_x, dot_y), size(px(dot_size), px(dot_size)));
-                        let mut dot_quad = fill(dot_bounds, badge_color);
+                        let mut dot_quad = fill(dot_bounds, item.badge_color);
                         dot_quad.corner_radii = Corners {
                             top_left: px(dot_radius),
                             top_right: px(dot_radius),

@@ -1,7 +1,9 @@
 use crate::core::bookmark::BookmarkItem;
+use crate::core::editor::{Editor, LineMap};
 use crate::core::encoding::Encoding;
 use crate::core::radix::{ByteGroupSize, DisplayRadix, HexCase};
 use crate::core::structure::IndexedField;
+use crate::ui::color::BookmarkColorExt;
 use crate::ui::views::hex_view::types::HexTextSource;
 use gpui_kit::*;
 use std::cell::Cell;
@@ -102,6 +104,144 @@ struct CachedRowEntry {
     last_used: Cell<u64>,
 }
 
+/// Returns the trimmed first non-empty line of a bookmark comment, if any.
+#[inline]
+pub fn clean_comment_first_line(comment: &str) -> Option<&str> {
+    let trimmed = comment.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.contains('\n') || trimmed.contains('\r') {
+        trimmed.split(['\n', '\r']).map(str::trim).find(|line| !line.is_empty())
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// Pre-filtered visible bookmark comment associated with its display row index.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RowCommentRef<'a> {
+    pub row_idx: usize,
+    pub badge_color: Hsla,
+    pub clean_text: &'a str,
+}
+
+/// Collects and row-buckets visible bookmark comments for `[top_row, end_row)` once per frame.
+pub fn collect_visible_comment_refs<'a>(
+    bookmark_items: &'a [BookmarkItem],
+    line_starts: &LineMap,
+    total_size: usize,
+    top_row: usize,
+    end_row: usize,
+    vp_start: usize,
+    vp_end: usize,
+) -> Vec<RowCommentRef<'a>> {
+    if bookmark_items.is_empty() || end_row <= top_row {
+        return Vec::new();
+    }
+
+    let end_bm = bookmark_items.partition_point(|h| h.offset <= vp_end);
+    let mut visible = Vec::new();
+
+    for h in &bookmark_items[..end_bm] {
+        let Some(clean_text) = clean_comment_first_line(&h.comment) else {
+            continue;
+        };
+        let h_end_offset = h.offset.saturating_add(h.size);
+        let h_last_byte = h_end_offset.saturating_sub(1).max(h.offset);
+        if h_last_byte < vp_start {
+            continue;
+        }
+        let h_start_row = Editor::find_line_index(h.offset, line_starts);
+        if h_start_row >= end_row {
+            continue;
+        }
+        let display_row = h_start_row.max(top_row);
+        let h_end_row = Editor::find_line_index(h_last_byte, line_starts);
+        if display_row > h_end_row {
+            continue;
+        }
+        if let Some((row_offset, row_next_offset)) = super::paint::row_byte_range(line_starts, display_row, total_size)
+            && h.offset <= row_next_offset
+            && h_last_byte >= row_offset
+        {
+            visible.push(RowCommentRef {
+                row_idx: display_row,
+                badge_color: h.color.to_badge_hsla(),
+                clean_text,
+            });
+        }
+    }
+
+    visible.sort_by_key(|item| item.row_idx);
+    visible
+}
+
+/// Caches shaped single-line bookmark comments keyed by text and foreground color bits.
+#[derive(Default)]
+pub struct CommentShapeCache {
+    entries: HashMap<String, Vec<([u32; 4], ShapedLine, f32)>>,
+}
+
+impl CommentShapeCache {
+    const MAX_UNIQUE_TEXTS: usize = 256;
+
+    #[inline]
+    fn color_key(color: Hsla) -> [u32; 4] {
+        [color.h.to_bits(), color.s.to_bits(), color.l.to_bits(), color.a.to_bits()]
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    #[inline]
+    pub fn get(&self, text: &str, color: Hsla) -> Option<(&ShapedLine, f32)> {
+        let key = Self::color_key(color);
+        let variants = self.entries.get(text)?;
+        variants.iter().find(|(k, _, _)| *k == key).map(|(_, shaped, width)| (shaped, *width))
+    }
+
+    pub fn ensure_shaped_width(&mut self, text: &str, color: Hsla, font: &Font, font_size: Pixels, window: &mut Window) -> f32 {
+        let key = Self::color_key(color);
+        if let Some(variants) = self.entries.get(text)
+            && let Some((_, _, width)) = variants.iter().find(|(k, _, _)| *k == key)
+        {
+            return *width;
+        }
+
+        if self.entries.len() >= Self::MAX_UNIQUE_TEXTS && !self.entries.contains_key(text) {
+            self.entries.clear();
+        }
+
+        let shared = SharedString::from(text.to_string());
+        let run = TextRun {
+            len: shared.len(),
+            font: font.clone(),
+            color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped = window.text_system().shape_line(shared, font_size, &[run], None);
+        let width = f32::from(shaped.width);
+
+        if let Some(variants) = self.entries.get_mut(text) {
+            variants.push((key, shaped, width));
+        } else {
+            self.entries.insert(text.to_string(), vec![(key, shaped, width)]);
+        }
+        width
+    }
+}
+
+/// Disjoint mutable caches exposed to `paint_hex_row` alongside a cached row reference.
+pub struct RowPaintCaches<'a> {
+    pub contrast: &'a mut HighlightContrastCache,
+    pub comment_shapes: &'a mut CommentShapeCache,
+}
+
 /// Frame-to-frame row render cache for HexView to minimize text shaping and layout allocations.
 #[derive(Default)]
 pub struct RowRenderCache {
@@ -122,6 +262,7 @@ pub struct RowRenderCache {
     rows: HashMap<usize, CachedRowEntry>,
     access_tick: Cell<u64>,
     contrast_cache: HighlightContrastCache,
+    comment_shapes: CommentShapeCache,
 }
 
 impl RowRenderCache {
@@ -168,6 +309,9 @@ impl RowRenderCache {
         theme_bg: Hsla,
         theme_fg: Hsla,
     ) {
+        if self.font_size != font_size || &self.font_family != font_family {
+            self.comment_shapes.clear();
+        }
         if self.generation != generation
             || self.layout_version != layout_version
             || self.bytes_per_row != bytes_per_row
@@ -209,12 +353,15 @@ impl RowRenderCache {
     }
 
     #[inline]
-    pub fn row_and_contrast_mut(&mut self, row_idx: usize) -> Option<(&CachedRow, &mut HighlightContrastCache)> {
+    pub fn row_and_caches_mut(&mut self, row_idx: usize) -> Option<(&CachedRow, RowPaintCaches<'_>)> {
         let tick = self.next_tick();
-        let contrast_cache = &mut self.contrast_cache;
+        let caches = RowPaintCaches {
+            contrast: &mut self.contrast_cache,
+            comment_shapes: &mut self.comment_shapes,
+        };
         self.rows.get(&row_idx).map(|entry| {
             entry.last_used.set(tick);
-            (&entry.row, contrast_cache)
+            (&entry.row, caches)
         })
     }
 
@@ -371,8 +518,13 @@ impl<'a> HighlightSweep<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CachedRow, EffectiveHighlightsCache, HighlightContrastCache, HighlightSweep, RowRenderCache};
+    use super::{
+        CachedRow, EffectiveHighlightsCache, HighlightContrastCache, HighlightSweep, RowCommentRef, RowRenderCache, clean_comment_first_line,
+        collect_visible_comment_refs,
+    };
     use crate::core::bookmark::{BookmarkColor, BookmarkItem};
+    use crate::core::editor::LineMap;
+    use crate::ui::color::BookmarkColorExt;
     use crate::ui::views::hex_view::types::HexTextSource;
     use gpui_kit::{Hsla, SharedString, hsla};
 
@@ -445,6 +597,48 @@ mod tests {
         let ptr_before = cache.items.as_ptr();
         cache.ensure_updated(1, &[], 1, &[]);
         assert_eq!(cache.items.as_ptr(), ptr_before);
+    }
+
+    #[test]
+    fn clean_comment_first_line_trims_and_skips_blank_lines() {
+        assert_eq!(clean_comment_first_line(""), None);
+        assert_eq!(clean_comment_first_line("   \n\t \r\n "), None);
+        assert_eq!(clean_comment_first_line("  hello world  "), Some("hello world"));
+        assert_eq!(clean_comment_first_line("\r\n  \n  first line \r\n second line"), Some("first line"));
+    }
+
+    #[test]
+    fn collect_visible_comment_refs_buckets_and_clamps_to_top_row() {
+        // 8 rows * 16 bytes = 128 bytes
+        let line_starts = LineMap::Standard {
+            total_size: 128,
+            bytes_per_row: 16,
+        };
+        let bookmarks = vec![
+            BookmarkItem::new(0, 8, BookmarkColor::Red, "before viewport"),
+            BookmarkItem::new(16, 48, BookmarkColor::Blue, "  \n  multi row spans top  \n detail"),
+            BookmarkItem::new(48, 8, BookmarkColor::Green, "visible row 3"),
+            BookmarkItem::new(64, 16, BookmarkColor::Yellow, "   "),
+            BookmarkItem::new(96, 8, BookmarkColor::Cyan, "after viewport"),
+        ];
+
+        // Viewport covers rows 2..5 => bytes [32, 80)
+        let refs = collect_visible_comment_refs(&bookmarks, &line_starts, 128, 2, 5, 32, 80);
+        assert_eq!(
+            refs,
+            vec![
+                RowCommentRef {
+                    row_idx: 2,
+                    badge_color: BookmarkColor::Blue.to_badge_hsla(),
+                    clean_text: "multi row spans top",
+                },
+                RowCommentRef {
+                    row_idx: 3,
+                    badge_color: BookmarkColor::Green.to_badge_hsla(),
+                    clean_text: "visible row 3",
+                },
+            ]
+        );
     }
 
     #[test]
