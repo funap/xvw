@@ -45,6 +45,8 @@
   選択したバイトや範囲を、`i8`〜`i64`、`u8`〜`u64`（リトル／ビッグエンディアン）、`f32`/`f64`、Unixタイムスタンプ、2進数ビット列、文字列表現などにリアルタイムで同時デコード表示。
 - 📊 **2Dビジュアルマップ＆エントロピー表示**  
   バイト値をグレースケール、バイトカテゴリ、レインボーなどのカラーモードで2Dビットマップ可視化。コード領域、圧縮領域、暗号化ペイロードなどを視覚的に識別可能。
+- 📦 **zlibストリーム検索＆展開**  
+  Zlibパネルからバイナリ内のzlib圧縮領域（Adler-32チェックサム検証済み）をスキャンし、アドレス・サイズ・プレビューによる絞り込みやソート、該当領域へのジャンプ、および展開結果の新規ドキュメントタブ作成が可能。
 - ⚖️ **2画面同期バイナリDiff（差分比較）**  
   2つのバイナリファイルを左右に並べて比較。同期スクロール、差分カウンター、明確な差分ハイライト機能を搭載。
 - 📝 **統合スクラッチパッド**  
@@ -158,7 +160,7 @@ xvw firmware.bin --ksy specs/firmware.ksy
 xvw --diff original.bin patched.bin
 
 # 特定サイドバーパネルの初期表示指定
-# (指定可能: files, strings, structure, inspector, map, checksum, bookmarks)
+# (指定可能: files, strings, zlib, structure, inspector, map, checksum, bookmarks)
 xvw binary.bin --panel map
 ```
 
