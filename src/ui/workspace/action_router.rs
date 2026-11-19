@@ -1244,6 +1244,10 @@ impl Workspace {
         self.select_activity(Activity::Strings, window, cx);
     }
 
+    pub(crate) fn on_action_show_zlib_tab(&mut self, _: &ShowZlibTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_activity(Activity::Zlib, window, cx);
+    }
+
     pub(crate) fn on_action_show_structure_tab(&mut self, _: &ShowStructureTab, window: &mut Window, cx: &mut Context<Self>) {
         self.select_activity(Activity::Structure, window, cx);
     }
@@ -1265,6 +1269,7 @@ impl Workspace {
             Activity::Files => LeftPanelTab::Files,
             Activity::Search => LeftPanelTab::Search,
             Activity::Strings => LeftPanelTab::Strings,
+            Activity::Zlib => LeftPanelTab::Zlib,
             Activity::Structure => LeftPanelTab::Structure,
             Activity::Inspector => LeftPanelTab::Inspector,
             Activity::Map => LeftPanelTab::Map,

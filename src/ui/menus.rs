@@ -536,6 +536,7 @@ fn build_view_menu() -> MenuDef {
                     MenuItemDef::action("Files", crate::actions::ShowFilesTab),
                     MenuItemDef::action("Search", crate::actions::ShowSearchTab),
                     MenuItemDef::action("Strings", crate::actions::ShowStringsTab),
+                    MenuItemDef::action("Zlib", crate::actions::ShowZlibTab),
                     MenuItemDef::action("Structure", crate::actions::ShowStructureTab),
                     MenuItemDef::action("Inspector", crate::actions::ShowInspectorTab),
                     MenuItemDef::action("2D Visual Map", crate::actions::OpenVisualMap),
@@ -1063,11 +1064,12 @@ mod tests {
         #[cfg(not(target_os = "macos"))]
         assert_eq!(diff_prev.shortcut.as_deref(), Some("Shift+F3"));
 
-        // Check that all 8 left panels are available in commands
+        // Check that all 9 left panels are available in commands
         let panel_commands = [
             "View: Panels > Files",
             "View: Panels > Search",
             "View: Panels > Strings",
+            "View: Panels > Zlib",
             "View: Panels > Structure",
             "View: Panels > Inspector",
             "View: Panels > 2D Visual Map",

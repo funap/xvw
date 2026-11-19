@@ -298,6 +298,9 @@ pub struct ShowSearchTab;
 pub struct ShowStringsTab;
 
 #[derive(Clone, PartialEq, Action)]
+pub struct ShowZlibTab;
+
+#[derive(Clone, PartialEq, Action)]
 pub struct ShowStructureTab;
 
 #[derive(Clone, PartialEq, Action)]

@@ -354,6 +354,7 @@ fn test_panel_activity_all_activities_mapping() {
     assert_eq!(Workspace::activity_to_tab(Activity::Files), LeftPanelTab::Files);
     assert_eq!(Workspace::activity_to_tab(Activity::Search), LeftPanelTab::Search);
     assert_eq!(Workspace::activity_to_tab(Activity::Strings), LeftPanelTab::Strings);
+    assert_eq!(Workspace::activity_to_tab(Activity::Zlib), LeftPanelTab::Zlib);
     assert_eq!(Workspace::activity_to_tab(Activity::Structure), LeftPanelTab::Structure);
     assert_eq!(Workspace::activity_to_tab(Activity::Inspector), LeftPanelTab::Inspector);
     assert_eq!(Workspace::activity_to_tab(Activity::Map), LeftPanelTab::Map);
@@ -439,4 +440,39 @@ fn test_resizable_state_clear_resets_sizes() {
     // clearing empty or populated state resets sizes
     state.clear();
     assert!(state.sizes().is_empty());
+}
+
+#[test]
+fn test_next_unique_decompressed_document_path_avoids_open_tab_collisions() {
+    use super::next_unique_decompressed_document_path;
+    use crate::core::format::HexCase;
+    use std::path::{Path, PathBuf};
+
+    let source = Path::new("/nonexistent-xvw-dir/firmware.bin");
+    let first = next_unique_decompressed_document_path(source, 0x1040, HexCase::Lower, &[]);
+    assert_eq!(first, PathBuf::from("/nonexistent-xvw-dir/firmware_zlib_0x1040.bin"));
+
+    let open = vec![first.clone()];
+    let second = next_unique_decompressed_document_path(source, 0x1040, HexCase::Lower, &open);
+    assert_eq!(second, PathBuf::from("/nonexistent-xvw-dir/firmware_zlib_0x1040_2.bin"));
+
+    let open_two = vec![first, second.clone()];
+    let third = next_unique_decompressed_document_path(source, 0x1040, HexCase::Lower, &open_two);
+    assert_eq!(third, PathBuf::from("/nonexistent-xvw-dir/firmware_zlib_0x1040_3.bin"));
+}
+
+#[test]
+fn test_decompressed_document_starts_editable_and_clean() {
+    use crate::core::buffer::Buffer;
+    use crate::core::document::Document;
+    use std::path::PathBuf;
+
+    let payload = b"decompressed payload bytes".to_vec();
+    let path = PathBuf::from("/nonexistent-xvw-dir/sample_zlib_0x20.bin");
+    let doc = Document::new(path.clone(), Buffer::new(payload.clone()));
+
+    assert_eq!(doc.path(), path.as_path());
+    assert_eq!(doc.data(), payload.as_slice());
+    assert!(!doc.is_dirty());
+    assert!(!doc.is_read_only());
 }

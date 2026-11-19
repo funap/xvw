@@ -13,6 +13,7 @@ pub enum Activity {
     Checksum = 5,
     Bookmarks = 6,
     Strings = 7,
+    Zlib = 8,
 }
 
 pub enum ActivityBarEvent {
@@ -68,6 +69,7 @@ impl Render for ActivityBar {
                     .child(self.render_icon(Activity::Files, IconName::Files, "Files", cx))
                     .child(self.render_icon(Activity::Search, IconName::Search, "Search", cx))
                     .child(self.render_icon(Activity::Strings, IconName::SearchText, "Strings", cx))
+                    .child(self.render_icon(Activity::Zlib, IconName::Boxes, "Zlib", cx))
                     .child(self.render_icon(Activity::Structure, IconName::Braces, "Structure", cx))
                     .child(self.render_icon(Activity::Inspector, IconName::Binary, "Inspector", cx))
                     .child(self.render_icon(Activity::Map, IconName::Map, "Map", cx))

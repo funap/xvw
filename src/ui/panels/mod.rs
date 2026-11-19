@@ -8,5 +8,6 @@ pub mod search_panel;
 pub mod strings_panel;
 pub mod struct_tree_view;
 pub mod visual_map_panel;
+pub mod zlib_panel;
 
 pub use common::*;
