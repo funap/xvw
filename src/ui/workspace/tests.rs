@@ -444,20 +444,21 @@ fn test_resizable_state_clear_resets_sizes() {
 
 #[test]
 fn test_next_unique_decompressed_document_path_avoids_open_tab_collisions() {
-    use super::next_unique_decompressed_document_path;
     use crate::core::format::HexCase;
+    use crate::service::ZlibService;
     use std::path::{Path, PathBuf};
 
+    let service = ZlibService::new();
     let source = Path::new("/nonexistent-xvw-dir/firmware.bin");
-    let first = next_unique_decompressed_document_path(source, 0x1040, HexCase::Lower, &[]);
+    let first = service.resolve_unique_decompressed_path(source, 0x1040, HexCase::Lower, &[]);
     assert_eq!(first, PathBuf::from("/nonexistent-xvw-dir/firmware_zlib_0x1040.bin"));
 
     let open = vec![first.clone()];
-    let second = next_unique_decompressed_document_path(source, 0x1040, HexCase::Lower, &open);
+    let second = service.resolve_unique_decompressed_path(source, 0x1040, HexCase::Lower, &open);
     assert_eq!(second, PathBuf::from("/nonexistent-xvw-dir/firmware_zlib_0x1040_2.bin"));
 
     let open_two = vec![first, second.clone()];
-    let third = next_unique_decompressed_document_path(source, 0x1040, HexCase::Lower, &open_two);
+    let third = service.resolve_unique_decompressed_path(source, 0x1040, HexCase::Lower, &open_two);
     assert_eq!(third, PathBuf::from("/nonexistent-xvw-dir/firmware_zlib_0x1040_3.bin"));
 }
 

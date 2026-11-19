@@ -1,18 +1,69 @@
 use crate::core::format::HexCase;
 use crate::core::new_file::MAX_BUFFER_SIZE;
 use flate2::{Decompress, FlushDecompress, Status};
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Minimum possible compressed byte length for a valid RFC 1950 zlib stream:
 /// 2-byte header + 2-byte empty deflate block + 4-byte Adler-32 checksum.
 pub const MIN_ZLIB_STREAM_LEN: usize = 8;
 
-const SCAN_SCRATCH_LEN: usize = 16 * 1024;
+/// Maximum number of leading decompressed bytes retained per [`ZlibMatch`] for preview generation.
+pub const ZLIB_PREVIEW_SAMPLE_BYTES: usize = 64;
+
+/// Match `miniz_oxide`'s 32 KiB sliding window dictionary so large streams drain in fewer calls.
+const SCAN_SCRATCH_LEN: usize = 32 * 1024;
 const DECOMPRESS_SCRATCH_LEN: usize = 32 * 1024;
-const ZLIB_PREVIEW_SAMPLE_BYTES: usize = 64;
+/// Upper bound on speculative initial output buffer reservation from caller-supplied size hints.
+const MAX_INITIAL_DECOMPRESS_RESERVE: usize = 64 * 1024 * 1024;
+/// Minimum compressed stream bytes required for a stored (`BTYPE = 0`) deflate block:
+/// 2-byte zlib header + 1-byte block header + 4-byte `LEN`/`NLEN` + 4-byte Adler-32 trailer.
+const MIN_STORED_BLOCK_STREAM_LEN: usize = 11;
+/// Check cooperative cancellation roughly once per 4 KiB during linear byte scanning.
+const CANCEL_CHECK_INTERVAL_MASK: usize = 0x0FFF;
+
 const ZLIB_TEXT_PREVIEW_CHARS: usize = 48;
 const ZLIB_HEX_PREVIEW_BYTES: usize = 16;
+
+/// Errors returned while validating or decompressing an embedded RFC 1950 zlib stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ZlibError {
+    /// The requested start offset lies outside the source buffer.
+    OffsetOutOfBounds { offset: usize, len: usize },
+    /// The bounded input slice is shorter than [`MIN_ZLIB_STREAM_LEN`].
+    InputTooShort,
+    /// The two bytes at `offset` are not a valid RFC 1950 Deflate header.
+    InvalidHeader { offset: usize, cmf: u8, flg: u8 },
+    /// Streams with `FDICT=1` require an external dictionary and cannot be decoded standalone.
+    PresetDictionaryUnsupported,
+    /// The underlying inflate decoder rejected the bitstream or Adler-32 checksum.
+    DecompressionFailed(String),
+    /// Decompressed output exceeded [`MAX_BUFFER_SIZE`].
+    OutputLimitExceeded { max_bytes: usize },
+    /// Input ended before reaching the end of the Deflate stream and Adler-32 trailer.
+    TruncatedStream,
+    /// Cooperative cancellation was signaled before decompression finished.
+    Cancelled,
+}
+
+impl fmt::Display for ZlibError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OffsetOutOfBounds { offset, len } => write!(f, "Offset 0x{offset:X} is out of bounds (buffer length {len})"),
+            Self::InputTooShort => write!(f, "Slice is too short to contain a complete zlib stream"),
+            Self::InvalidHeader { offset, cmf, flg } => write!(f, "Invalid zlib header {cmf:02X} {flg:02X} at offset 0x{offset:X}"),
+            Self::PresetDictionaryUnsupported => write!(f, "Zlib streams with a preset dictionary (FDICT=1) are not supported"),
+            Self::DecompressionFailed(err) => write!(f, "Zlib decompression error: {err}"),
+            Self::OutputLimitExceeded { max_bytes } => write!(f, "Decompressed data exceeds maximum buffer limit of {max_bytes} bytes"),
+            Self::TruncatedStream => write!(f, "Truncated or incomplete zlib stream"),
+            Self::Cancelled => write!(f, "Zlib decompression cancelled"),
+        }
+    }
+}
+
+impl std::error::Error for ZlibError {}
 
 /// A validated RFC 1950 zlib stream found in a byte buffer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,16 +76,54 @@ pub struct ZlibMatch {
     pub decompressed_len: usize,
     /// The two-byte zlib header `(CMF, FLG)`.
     pub header: [u8; 2],
-    /// A concise human-readable preview of the decompressed payload.
-    pub preview: String,
+    sample: [u8; ZLIB_PREVIEW_SAMPLE_BYTES],
+    sample_len: u8,
+}
+
+impl ZlibMatch {
+    /// Creates a [`ZlibMatch`] retaining up to [`ZLIB_PREVIEW_SAMPLE_BYTES`] of `sample`.
+    pub fn from_sample(offset: usize, compressed_len: usize, decompressed_len: usize, header: [u8; 2], sample_bytes: &[u8]) -> Self {
+        let mut sample = [0u8; ZLIB_PREVIEW_SAMPLE_BYTES];
+        let copy_len = sample_bytes.len().min(ZLIB_PREVIEW_SAMPLE_BYTES);
+        sample[..copy_len].copy_from_slice(&sample_bytes[..copy_len]);
+        Self {
+            offset,
+            compressed_len,
+            decompressed_len,
+            header,
+            sample,
+            sample_len: copy_len as u8,
+        }
+    }
+
+    /// Returns the retained prefix of decompressed payload bytes for preview rendering.
+    #[inline]
+    pub fn preview_sample(&self) -> &[u8] {
+        &self.sample[..usize::from(self.sample_len)]
+    }
+
+    /// Formats a concise human-readable preview of this stream's decompressed payload.
+    pub fn format_preview(&self) -> String {
+        format_zlib_preview(self.preview_sample(), self.decompressed_len)
+    }
+}
+
+/// Outcome of scanning a buffer (or segmented ranges) for embedded zlib streams.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ZlibScanResult {
+    /// Discovered non-empty, Adler-32 verified zlib streams in ascending offset order.
+    pub matches: Vec<ZlibMatch>,
+    /// `true` if additional valid streams existed beyond the configured `max_results` limit.
+    pub is_truncated: bool,
+    /// `true` if scanning terminated early due to cooperative cancellation.
+    pub cancelled: bool,
 }
 
 /// Returns `true` if `(cmf, flg)` forms a valid RFC 1950 zlib header for Deflate (`CM == 8`, `CINFO <= 7`, `FCHECK` mod 31 == 0).
 #[inline]
 pub const fn is_valid_zlib_header(cmf: u8, flg: u8) -> bool {
-    let cm = cmf & 0x0F;
-    let cinfo = cmf >> 4;
-    if cm != 8 || cinfo > 7 {
+    // Bit 7 == 0 (CINFO <= 7) and low nibble == 8 (CM == 8).
+    if (cmf & 0x8F) != 0x08 {
         return false;
     }
     (((cmf as u16) << 8) | (flg as u16)).is_multiple_of(31)
@@ -54,172 +143,250 @@ const fn has_decompressable_prefix(slice: &[u8]) -> bool {
     if (flg & 0x20) != 0 {
         return false;
     }
-    // Reject deflate blocks with reserved `BTYPE == 0b11` before entering the decompressor.
-    ((slice[2] >> 1) & 0b11) != 0b11
+
+    let block_hdr = slice[2];
+    let bfinal = block_hdr & 0x01;
+    let btype = (block_hdr >> 1) & 0b11;
+    match btype {
+        // Stored / uncompressed block (RFC 1951 Section 3.2.4): LEN must equal !NLEN and fit with trailer.
+        0 => {
+            if slice.len() < MIN_STORED_BLOCK_STREAM_LEN {
+                return false;
+            }
+            let len = u16::from_le_bytes([slice[3], slice[4]]);
+            let nlen = u16::from_le_bytes([slice[5], slice[6]]);
+            if len != !nlen {
+                return false;
+            }
+            // Final zero-length stored block produces an empty payload, which we always skip.
+            if bfinal == 1 && len == 0 {
+                return false;
+            }
+            slice.len() >= MIN_STORED_BLOCK_STREAM_LEN + len as usize
+        }
+        // Fixed Huffman block: always enters the decompressor.
+        1 => true,
+        // Dynamic Huffman block (RFC 1951 Section 3.2.7): HLIT <= 29 (257..=286), HDIST <= 29 (1..=30).
+        2 => {
+            let hlit = block_hdr >> 3;
+            let hdist = slice[3] & 0x1F;
+            hlit <= 29 && hdist <= 29
+        }
+        // Reserved `BTYPE == 0b11` is always invalid.
+        _ => false,
+    }
+}
+
+#[inline]
+fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
+    cancel.is_some_and(|flag| flag.load(Ordering::Relaxed))
+}
+
+struct ProbeState {
+    decompress: Decompress,
+    scratch: Vec<u8>,
+}
+
+impl ProbeState {
+    fn new() -> Self {
+        Self {
+            decompress: Decompress::new(true),
+            scratch: vec![0u8; SCAN_SCRATCH_LEN],
+        }
+    }
+}
+
+enum ProbeOutcome {
+    Match(ZlibMatch),
+    NoMatch,
+    Cancelled,
 }
 
 /// Finds all complete, non-empty, Adler-32 verified zlib streams in `data`.
 #[allow(dead_code)]
 pub fn find_zlib_streams(data: &[u8]) -> Vec<ZlibMatch> {
-    find_zlib_streams_impl(data, None)
+    find_zlib_streams_segmented(data, &[], usize::MAX, None).matches
 }
 
 /// Finds non-empty zlib streams in `data` while capping returned matches at `max_results`.
-///
-/// The returned boolean is `true` when additional matches were omitted because `max_results` was reached.
-pub fn find_zlib_streams_limited(data: &[u8], max_results: usize) -> (Vec<ZlibMatch>, bool) {
-    if max_results == usize::MAX {
-        return (find_zlib_streams(data), false);
-    }
-
-    let scan_limit = max_results.saturating_add(1);
-    let mut matches = find_zlib_streams_impl(data, Some(scan_limit));
-    let is_truncated = matches.len() > max_results;
-    if is_truncated {
-        matches.truncate(max_results);
-    }
-    (matches, is_truncated)
+#[allow(dead_code)]
+pub fn find_zlib_streams_limited(data: &[u8], max_results: usize) -> ZlibScanResult {
+    find_zlib_streams_segmented(data, &[], max_results, None)
 }
 
-/// Finds non-empty zlib streams across multiple buffer segments while capping returned matches at `max_results`.
+/// Finds non-empty zlib streams across `ranges` while capping returned matches at `max_results`
+/// and honoring optional cooperative cancellation.
 ///
 /// If `ranges` is empty, the entire `data` slice is scanned as one contiguous buffer.
 /// When `ranges` are provided, each range is scanned independently so streams cannot falsely span address gaps.
-pub fn find_zlib_streams_segmented_limited(data: &[u8], ranges: &[std::ops::Range<usize>], max_results: usize) -> (Vec<ZlibMatch>, bool) {
-    if ranges.is_empty() {
-        return find_zlib_streams_limited(data, max_results);
-    }
-
+pub fn find_zlib_streams_segmented(data: &[u8], ranges: &[Range<usize>], max_results: usize, cancel: Option<&AtomicBool>) -> ZlibScanResult {
     if max_results == 0 || data.len() < MIN_ZLIB_STREAM_LEN {
-        return (Vec::new(), false);
+        return ZlibScanResult {
+            matches: Vec::new(),
+            is_truncated: false,
+            cancelled: false,
+        };
     }
 
-    let mut all_matches = Vec::new();
-    let mut is_truncated = false;
+    let scan_limit = if max_results == usize::MAX {
+        None
+    } else {
+        Some(max_results.saturating_add(1))
+    };
 
-    for range in ranges {
+    let mut matches = Vec::new();
+    let mut probe_state: Option<ProbeState> = None;
+    let mut cancelled = false;
+
+    let default_range = 0..data.len();
+    let effective_ranges = if ranges.is_empty() { std::slice::from_ref(&default_range) } else { ranges };
+
+    for range in effective_ranges {
         let start = range.start.min(data.len());
         let end = range.end.min(data.len());
         if end.saturating_sub(start) < MIN_ZLIB_STREAM_LEN {
             continue;
         }
 
-        let slice = &data[start..end];
-        let remaining = if max_results == usize::MAX {
-            usize::MAX
-        } else {
-            let rem = max_results.saturating_sub(all_matches.len());
-            if rem == 0 {
-                is_truncated = true;
-                break;
-            }
-            rem
-        };
-
-        let (mut seg_matches, seg_truncated) = find_zlib_streams_limited(slice, remaining);
-        for m in &mut seg_matches {
-            m.offset += start;
+        if scan_segment(data, start, end, scan_limit, cancel, &mut probe_state, &mut matches) {
+            cancelled = true;
+            break;
         }
-        all_matches.extend(seg_matches);
 
-        if seg_truncated || (max_results != usize::MAX && all_matches.len() >= max_results) {
-            is_truncated = true;
+        if let Some(limit) = scan_limit
+            && matches.len() >= limit
+        {
             break;
         }
     }
 
-    (all_matches, is_truncated)
+    let is_truncated = if !cancelled && max_results != usize::MAX && matches.len() > max_results {
+        matches.truncate(max_results);
+        true
+    } else {
+        false
+    };
+
+    ZlibScanResult {
+        matches,
+        is_truncated,
+        cancelled,
+    }
 }
 
-fn find_zlib_streams_impl(data: &[u8], max_results: Option<usize>) -> Vec<ZlibMatch> {
-    if data.len() < MIN_ZLIB_STREAM_LEN || max_results == Some(0) {
-        return Vec::new();
-    }
+/// Scans `data[start..end]`, pushing verified matches into `matches` and returning `true` if cancelled.
+fn scan_segment(
+    data: &[u8],
+    start: usize,
+    end: usize,
+    scan_limit: Option<usize>,
+    cancel: Option<&AtomicBool>,
+    probe_state: &mut Option<ProbeState>,
+    matches: &mut Vec<ZlibMatch>,
+) -> bool {
+    let mut offset = start;
+    while offset + MIN_ZLIB_STREAM_LEN <= end {
+        if ((offset - start) & CANCEL_CHECK_INTERVAL_MASK) == 0 && is_cancelled(cancel) {
+            return true;
+        }
 
-    let mut matches = Vec::new();
-    let mut decompress = Decompress::new(true);
-    let mut scratch = vec![0u8; SCAN_SCRATCH_LEN];
-    let mut offset = 0usize;
+        // Fast reject 31/32 of bytes before slicing or reading subsequent header bytes.
+        if (data[offset] & 0x8F) != 0x08 {
+            offset += 1;
+            continue;
+        }
 
-    while offset + MIN_ZLIB_STREAM_LEN <= data.len() {
-        let slice = &data[offset..];
+        let slice = &data[offset..end];
         if !has_decompressable_prefix(slice) {
             offset += 1;
             continue;
         }
 
-        if let Some((compressed_len, decompressed_len, preview)) = try_probe_zlib_at(slice, &mut decompress, &mut scratch) {
-            matches.push(ZlibMatch {
-                offset,
-                compressed_len,
-                decompressed_len,
-                header: [slice[0], slice[1]],
-                preview,
-            });
-
-            if let Some(limit) = max_results
-                && matches.len() >= limit
-            {
-                break;
+        let state = probe_state.get_or_insert_with(ProbeState::new);
+        match try_probe_zlib_at(offset, slice, state, cancel) {
+            ProbeOutcome::Match(matched) => {
+                let advance = matched.compressed_len;
+                matches.push(matched);
+                if let Some(limit) = scan_limit
+                    && matches.len() >= limit
+                {
+                    return false;
+                }
+                offset += advance;
             }
-
-            offset += compressed_len;
-        } else {
-            offset += 1;
+            ProbeOutcome::NoMatch => {
+                offset += 1;
+            }
+            ProbeOutcome::Cancelled => return true,
         }
     }
 
-    matches
+    false
 }
 
-fn try_probe_zlib_at(slice: &[u8], decompress: &mut Decompress, scratch: &mut [u8]) -> Option<(usize, usize, String)> {
-    decompress.reset(true);
+fn try_probe_zlib_at(offset: usize, slice: &[u8], state: &mut ProbeState, cancel: Option<&AtomicBool>) -> ProbeOutcome {
+    state.decompress.reset(true);
     let mut in_pos = 0usize;
     let mut sample = [0u8; ZLIB_PREVIEW_SAMPLE_BYTES];
     let mut sample_len = 0usize;
 
     loop {
-        let before_in = decompress.total_in();
-        let before_out = decompress.total_out();
+        if is_cancelled(cancel) {
+            return ProbeOutcome::Cancelled;
+        }
+
+        let before_in = state.decompress.total_in();
+        let before_out = state.decompress.total_out();
         let had_input = in_pos < slice.len();
 
         // Always stream with `FlushDecompress::None`: `miniz_oxide` returns `MZError::Buf` under
         // `FlushDecompress::Finish` whenever remaining decompressed output exceeds a single scratch
-        // slice (e.g. highly-compressible streams >16-32 KiB), whereas `None` drains cleanly and
+        // slice (e.g. highly-compressible streams >32 KiB), whereas `None` drains cleanly and
         // still emits `Status::StreamEnd` once the final block and Adler-32 trailer complete.
-        let status = decompress.decompress(&slice[in_pos..], scratch, FlushDecompress::None).ok()?;
-        let consumed = (decompress.total_in() - before_in) as usize;
-        let produced = (decompress.total_out() - before_out) as usize;
+        let Ok(status) = state.decompress.decompress(&slice[in_pos..], &mut state.scratch, FlushDecompress::None) else {
+            return ProbeOutcome::NoMatch;
+        };
+        let consumed = (state.decompress.total_in() - before_in) as usize;
+        let produced = (state.decompress.total_out() - before_out) as usize;
         in_pos += consumed;
 
         if sample_len < ZLIB_PREVIEW_SAMPLE_BYTES && produced > 0 {
             let take = produced.min(ZLIB_PREVIEW_SAMPLE_BYTES - sample_len);
-            sample[sample_len..sample_len + take].copy_from_slice(&scratch[..take]);
+            sample[sample_len..sample_len + take].copy_from_slice(&state.scratch[..take]);
             sample_len += take;
         }
 
-        if decompress.total_out() > MAX_BUFFER_SIZE as u64 {
-            return None;
+        if state.decompress.total_out() > MAX_BUFFER_SIZE as u64 {
+            return ProbeOutcome::NoMatch;
         }
 
         match status {
             Status::StreamEnd => {
-                let compressed_len = usize::try_from(decompress.total_in()).ok()?;
-                let decompressed_len = usize::try_from(decompress.total_out()).ok()?;
+                let Ok(compressed_len) = usize::try_from(state.decompress.total_in()) else {
+                    return ProbeOutcome::NoMatch;
+                };
+                let Ok(decompressed_len) = usize::try_from(state.decompress.total_out()) else {
+                    return ProbeOutcome::NoMatch;
+                };
                 if compressed_len < MIN_ZLIB_STREAM_LEN || decompressed_len == 0 {
-                    return None;
+                    return ProbeOutcome::NoMatch;
                 }
-                let preview = format_zlib_preview(&sample[..sample_len], decompressed_len);
-                return Some((compressed_len, decompressed_len, preview));
+                return ProbeOutcome::Match(ZlibMatch::from_sample(
+                    offset,
+                    compressed_len,
+                    decompressed_len,
+                    [slice[0], slice[1]],
+                    &sample[..sample_len],
+                ));
             }
             Status::Ok => {
                 if consumed == 0 && produced == 0 {
-                    return None;
+                    return ProbeOutcome::NoMatch;
                 }
             }
             Status::BufError => {
                 if !had_input || (consumed == 0 && produced == 0) {
-                    return None;
+                    return ProbeOutcome::NoMatch;
                 }
             }
         }
@@ -231,9 +398,22 @@ fn try_probe_zlib_at(slice: &[u8], decompress: &mut Decompress, scratch: &mut [u
 /// When `max_compressed_len` is `Some(len)`, input is bounded to `[offset..offset + len]`
 /// clamped to `data.len()`. Rejects invalid headers, `FDICT=1` preset dictionary streams,
 /// truncated streams, Adler-32 mismatches, and outputs exceeding [`MAX_BUFFER_SIZE`].
-pub fn decompress_zlib_at(data: &[u8], offset: usize, max_compressed_len: Option<usize>) -> Result<Vec<u8>, String> {
+#[allow(dead_code)]
+pub fn decompress_zlib_at(data: &[u8], offset: usize, max_compressed_len: Option<usize>) -> Result<Vec<u8>, ZlibError> {
+    decompress_zlib_at_cancellable(data, offset, max_compressed_len, None, None)
+}
+
+/// Decompresses the zlib stream starting at `offset` in `data` with an optional output-size hint
+/// and cooperative cancellation flag.
+pub fn decompress_zlib_at_cancellable(
+    data: &[u8],
+    offset: usize,
+    max_compressed_len: Option<usize>,
+    expected_decompressed_len: Option<usize>,
+    cancel: Option<&AtomicBool>,
+) -> Result<Vec<u8>, ZlibError> {
     if offset >= data.len() {
-        return Err(format!("Offset 0x{offset:X} is out of bounds"));
+        return Err(ZlibError::OffsetOutOfBounds { offset, len: data.len() });
     }
 
     let end = match max_compressed_len {
@@ -243,40 +423,48 @@ pub fn decompress_zlib_at(data: &[u8], offset: usize, max_compressed_len: Option
     let slice = &data[offset..end];
 
     if slice.len() < MIN_ZLIB_STREAM_LEN {
-        return Err("Slice is too short to contain a complete zlib stream".to_string());
+        return Err(ZlibError::InputTooShort);
     }
     if !is_valid_zlib_header(slice[0], slice[1]) {
-        return Err(format!("Invalid zlib header {:02X} {:02X} at offset 0x{offset:X}", slice[0], slice[1]));
+        return Err(ZlibError::InvalidHeader {
+            offset,
+            cmf: slice[0],
+            flg: slice[1],
+        });
     }
     if (slice[1] & 0x20) != 0 {
-        return Err("Zlib streams with a preset dictionary (FDICT=1) are not supported".to_string());
+        return Err(ZlibError::PresetDictionaryUnsupported);
     }
 
     let mut decompress = Decompress::new(true);
     let mut scratch = vec![0u8; DECOMPRESS_SCRATCH_LEN];
-    let mut output = Vec::new();
+    let initial_cap = expected_decompressed_len.unwrap_or(0).min(MAX_INITIAL_DECOMPRESS_RESERVE).min(MAX_BUFFER_SIZE);
+    let mut output = Vec::with_capacity(initial_cap);
     let mut in_pos = 0usize;
 
     loop {
+        if is_cancelled(cancel) {
+            return Err(ZlibError::Cancelled);
+        }
+
         let before_in = decompress.total_in();
         let before_out = decompress.total_out();
         let had_input = in_pos < slice.len();
 
         let status = decompress
             .decompress(&slice[in_pos..], &mut scratch, FlushDecompress::None)
-            .map_err(|err| format!("Zlib decompression error: {err}"))?;
+            .map_err(|err| ZlibError::DecompressionFailed(err.to_string()))?;
         let consumed = (decompress.total_in() - before_in) as usize;
         let produced = (decompress.total_out() - before_out) as usize;
         in_pos += consumed;
 
-        let new_len = output
+        output
             .len()
             .checked_add(produced)
             .filter(|&len| len <= MAX_BUFFER_SIZE)
-            .ok_or_else(|| format!("Decompressed data exceeds maximum buffer limit of {MAX_BUFFER_SIZE} bytes"))?;
+            .ok_or(ZlibError::OutputLimitExceeded { max_bytes: MAX_BUFFER_SIZE })?;
 
         if produced > 0 {
-            output.reserve(new_len.saturating_sub(output.len()));
             output.extend_from_slice(&scratch[..produced]);
         }
 
@@ -284,12 +472,12 @@ pub fn decompress_zlib_at(data: &[u8], offset: usize, max_compressed_len: Option
             Status::StreamEnd => return Ok(output),
             Status::Ok => {
                 if consumed == 0 && produced == 0 {
-                    return Err("Truncated or incomplete zlib stream".to_string());
+                    return Err(ZlibError::TruncatedStream);
                 }
             }
             Status::BufError => {
                 if !had_input || (consumed == 0 && produced == 0) {
-                    return Err("Truncated or incomplete zlib stream".to_string());
+                    return Err(ZlibError::TruncatedStream);
                 }
             }
         }
@@ -445,6 +633,26 @@ mod tests {
     }
 
     #[test]
+    fn prefilter_rejects_invalid_stored_and_dynamic_block_headers() {
+        // BTYPE=0 with mismatched LEN/NLEN (0x0005 vs 0x0000)
+        assert!(!has_decompressable_prefix(&[
+            0x78, 0x01, 0x01, 0x05, 0x00, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        ]));
+        // BTYPE=0 with BFINAL=1 and LEN=0 (valid empty stream -> skipped)
+        assert!(!has_decompressable_prefix(&[0x78, 0x01, 0x01, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x01]));
+        // BTYPE=0 with valid LEN=1, NLEN=0xFFFE, and enough trailing bytes
+        assert!(has_decompressable_prefix(&[0x78, 0x01, 0x01, 0x01, 0x00, 0xFE, 0xFF, b'A', 0, 0, 0, 0]));
+        // BTYPE=0 with valid LEN=10 but truncated slice (< 11 + 10 = 21 bytes)
+        assert!(!has_decompressable_prefix(&[0x78, 0x01, 0x01, 0x0A, 0x00, 0xF5, 0xFF, 0, 0, 0, 0, 0]));
+        // BTYPE=2 with HLIT=30 (0b11110 << 3 | 0b100 = 0xF4) -> invalid (> 29)
+        assert!(!has_decompressable_prefix(&[0x78, 0x9C, 0xF4, 0x00, 0, 0, 0, 0]));
+        // BTYPE=2 with HDIST=30 (0x1E) -> invalid (> 29)
+        assert!(!has_decompressable_prefix(&[0x78, 0x9C, 0x04, 0x1E, 0, 0, 0, 0]));
+        // BTYPE=2 with HLIT=29 and HDIST=29 -> accepted by prefilter
+        assert!(has_decompressable_prefix(&[0x78, 0x9C, (29 << 3) | 0b100, 29, 0, 0, 0, 0]));
+    }
+
+    #[test]
     fn finds_embedded_and_adjacent_zlib_streams_with_exact_bounds() {
         let payload1 = b"Hello embedded zlib stream number one!";
         let payload2 = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x10";
@@ -466,13 +674,14 @@ mod tests {
         assert_eq!(matches[0].compressed_len, compressed1.len());
         assert_eq!(matches[0].decompressed_len, payload1.len());
         assert_eq!(matches[0].header, [compressed1[0], compressed1[1]]);
-        assert_eq!(matches[0].preview, "Hello embedded zlib stream number one!");
+        assert_eq!(matches[0].format_preview(), "Hello embedded zlib stream number one!");
 
         assert_eq!(matches[1].offset, offset2);
         assert_eq!(matches[1].compressed_len, compressed2.len());
         assert_eq!(matches[1].decompressed_len, payload2.len());
-        assert!(matches[1].preview.starts_with("89 50 4E 47"));
-        assert!(matches[1].preview.ends_with('…'));
+        let preview2 = matches[1].format_preview();
+        assert!(preview2.starts_with("89 50 4E 47"));
+        assert!(preview2.ends_with('…'));
 
         assert_eq!(decompress_zlib_at(&blob, offset1, Some(matches[0].compressed_len)).unwrap(), payload1);
         assert_eq!(decompress_zlib_at(&blob, offset2, Some(matches[1].compressed_len)).unwrap(), payload2);
@@ -480,7 +689,7 @@ mod tests {
 
     #[test]
     fn handles_multi_chunk_streams_and_all_compression_levels() {
-        // Larger than SCAN_SCRATCH_LEN (16 KiB) and DECOMPRESS_SCRATCH_LEN (32 KiB)
+        // Larger than SCAN_SCRATCH_LEN / DECOMPRESS_SCRATCH_LEN (32 KiB)
         let mut large_payload = Vec::with_capacity(50_000);
         for i in 0..50_000usize {
             large_payload.push(b'A' + (i % 26) as u8);
@@ -498,7 +707,7 @@ mod tests {
             assert_eq!(matches[0].compressed_len, compressed.len());
             assert_eq!(matches[0].decompressed_len, large_payload.len());
 
-            let restored = decompress_zlib_at(&data, 3, Some(matches[0].compressed_len)).unwrap();
+            let restored = decompress_zlib_at_cancellable(&data, 3, Some(matches[0].compressed_len), Some(matches[0].decompressed_len), None).unwrap();
             assert_eq!(restored, large_payload);
         }
     }
@@ -535,8 +744,9 @@ mod tests {
         assert_eq!(matches[0].offset, zero_offset);
         assert_eq!(matches[0].compressed_len, compressed.len());
         assert_eq!(matches[0].decompressed_len, zero_payload.len());
-        assert!(matches[0].preview.starts_with("00 00 00 00"));
-        assert!(matches[0].preview.ends_with('…'));
+        let preview0 = matches[0].format_preview();
+        assert!(preview0.starts_with("00 00 00 00"));
+        assert!(preview0.ends_with('…'));
 
         assert_eq!(matches[1].offset, second_offset);
         assert_eq!(matches[1].compressed_len, trailing_compressed.len());
@@ -548,8 +758,14 @@ mod tests {
 
         // Case 3: Truncating even 1 byte (inside Adler-32 trailer after >32 KiB output) must still fail
         assert!(find_zlib_streams(&compressed[..compressed.len() - 1]).is_empty());
-        assert!(decompress_zlib_at(&compressed[..compressed.len() - 1], 0, None).is_err());
-        assert!(decompress_zlib_at(&blob, zero_offset, Some(compressed.len() - 1)).is_err());
+        assert_eq!(
+            decompress_zlib_at(&compressed[..compressed.len() - 1], 0, None),
+            Err(ZlibError::TruncatedStream)
+        );
+        assert_eq!(
+            decompress_zlib_at(&blob, zero_offset, Some(compressed.len() - 1)),
+            Err(ZlibError::TruncatedStream)
+        );
     }
 
     #[test]
@@ -560,12 +776,12 @@ mod tests {
         let mut bad_adler = compressed.clone();
         *bad_adler.last_mut().unwrap() ^= 0x01;
         assert!(find_zlib_streams(&bad_adler).is_empty());
-        assert!(decompress_zlib_at(&bad_adler, 0, None).is_err());
+        assert!(matches!(decompress_zlib_at(&bad_adler, 0, None), Err(ZlibError::DecompressionFailed(_))));
 
         // Truncated by 1 byte
         let truncated = &compressed[..compressed.len() - 1];
         assert!(find_zlib_streams(truncated).is_empty());
-        assert!(decompress_zlib_at(truncated, 0, None).is_err());
+        assert_eq!(decompress_zlib_at(truncated, 0, None), Err(ZlibError::TruncatedStream));
 
         // Corrupted deflate payload byte
         let mut bad_deflate = compressed.clone();
@@ -576,8 +792,7 @@ mod tests {
         let mut fdict = vec![0x78, 0xBB, 0x00, 0x00, 0x00, 0x01];
         fdict.extend_from_slice(&compressed[2..]);
         assert!(find_zlib_streams(&fdict).is_empty());
-        let err = decompress_zlib_at(&fdict, 0, None).unwrap_err();
-        assert!(err.contains("FDICT=1"));
+        assert_eq!(decompress_zlib_at(&fdict, 0, None), Err(ZlibError::PresetDictionaryUnsupported));
     }
 
     #[test]
@@ -602,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn respects_max_results_and_segmented_boundaries() {
+    fn respects_max_results_exact_count_and_segmented_boundaries() {
         let s1 = compress_zlib(b"segment one", Compression::default());
         let s2 = compress_zlib(b"segment two", Compression::default());
         let s3 = compress_zlib(b"segment three", Compression::default());
@@ -614,19 +829,41 @@ mod tests {
         let off3 = blob.len();
         blob.extend_from_slice(&s3);
 
-        // Truncated to 2
-        let (limited, truncated) = find_zlib_streams_limited(&blob, 2);
-        assert!(truncated);
-        assert_eq!(limited.len(), 2);
+        // Truncated to 2 when 3 exist
+        let limited = find_zlib_streams_limited(&blob, 2);
+        assert!(limited.is_truncated);
+        assert!(!limited.cancelled);
+        assert_eq!(limited.matches.len(), 2);
 
-        // Split s2 across two segments so it cannot match when scanned segment-by-segment
+        // Exact limit match across multiple segments must NOT report `is_truncated = true`
         let split_point = off2 + s2.len() / 2;
         let ranges = vec![0..split_point, split_point..blob.len()];
-        let (seg_matches, seg_truncated) = find_zlib_streams_segmented_limited(&blob, &ranges, 10);
-        assert!(!seg_truncated);
-        assert_eq!(seg_matches.len(), 2);
-        assert_eq!(seg_matches[0].offset, 0);
-        assert_eq!(seg_matches[1].offset, off3);
+        let exact = find_zlib_streams_segmented(&blob, &ranges, 2, None);
+        assert!(!exact.is_truncated);
+        assert_eq!(exact.matches.len(), 2);
+        assert_eq!(exact.matches[0].offset, 0);
+        assert_eq!(exact.matches[1].offset, off3);
+
+        // Limit = 1 with 1 match in segment 0 and 1 match in segment 1 MUST report `is_truncated = true`
+        let cross_seg_truncated = find_zlib_streams_segmented(&blob, &ranges, 1, None);
+        assert!(cross_seg_truncated.is_truncated);
+        assert_eq!(cross_seg_truncated.matches.len(), 1);
+        assert_eq!(cross_seg_truncated.matches[0].offset, 0);
+    }
+
+    #[test]
+    fn honors_cooperative_cancellation_for_scan_and_decompress() {
+        let payload = b"cancellable zlib stream payload";
+        let compressed = compress_zlib(payload, Compression::default());
+        let cancel = AtomicBool::new(true);
+
+        let scan = find_zlib_streams_segmented(&compressed, &[], 10, Some(&cancel));
+        assert!(scan.cancelled);
+        assert!(!scan.is_truncated);
+        assert!(scan.matches.is_empty());
+
+        let decomp = decompress_zlib_at_cancellable(&compressed, 0, Some(compressed.len()), Some(payload.len()), Some(&cancel));
+        assert_eq!(decomp, Err(ZlibError::Cancelled));
     }
 
     #[test]

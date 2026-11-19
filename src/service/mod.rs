@@ -4,6 +4,7 @@ pub mod document_service;
 pub mod scratch_service;
 pub mod search_service;
 pub mod structure_service;
+pub mod zlib_service;
 
 pub use bookmark_service::BookmarkService;
 pub use diff_service::DiffService;
@@ -12,3 +13,4 @@ pub use document_service::DocumentService;
 pub use scratch_service::{ScratchEntry, ScratchService};
 pub use search_service::SearchService;
 pub use structure_service::StructureService;
+pub use zlib_service::ZlibService;

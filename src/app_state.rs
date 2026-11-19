@@ -1,4 +1,4 @@
-use crate::service::{DiffService, DocumentService, SearchService, StructureService};
+use crate::service::{DiffService, DocumentService, SearchService, StructureService, ZlibService};
 use gpui_kit::{App, BorrowAppContext, Global};
 
 /// Application-wide editing mode shared by every open document view.
@@ -57,6 +57,7 @@ pub struct AppState {
     pub structure_service: StructureService,
     pub search_service: SearchService,
     pub diff_service: DiffService,
+    pub zlib_service: ZlibService,
 }
 
 impl Global for AppState {}
@@ -75,6 +76,7 @@ impl AppState {
             structure_service: StructureService::new(),
             search_service: SearchService::new(),
             diff_service: DiffService::new(),
+            zlib_service: ZlibService::new(),
         };
         cx.set_global::<AppState>(state);
         cx.set_global(InsertModeState::default());
