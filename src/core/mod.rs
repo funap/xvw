@@ -28,3 +28,4 @@ pub mod selection;
 pub mod strings;
 pub mod structure;
 pub mod visual_map;
+pub mod zlib;

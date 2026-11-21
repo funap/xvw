@@ -389,6 +389,7 @@ impl Workspace {
                     file_tree.read(cx).focus_handle(cx),
                     left_read.search_panel.read(cx).focus_handle(cx),
                     left_read.strings_panel.read(cx).focus_handle(cx),
+                    left_read.zlib_panel.read(cx).focus_handle(cx),
                     left_read.struct_tree.read(cx).focus_handle(cx),
                     left_read.data_inspector.read(cx).focus_handle(cx),
                     left_read.visual_map.read(cx).focus_handle(cx),
@@ -483,6 +484,28 @@ impl Workspace {
                 }
                 crate::ui::panels::strings_panel::StringsPanelEvent::FocusEditor => {
                     this.restore_editor_focus(window, cx);
+                }
+            },
+        )
+        .detach();
+
+        cx.subscribe_in(
+            &left_panel,
+            window,
+            |this, _, event: &crate::ui::panels::zlib_panel::ZlibPanelEvent, window, cx| match event {
+                crate::ui::panels::zlib_panel::ZlibPanelEvent::NavigateTo { offset, len } => {
+                    if let Some(editor_view) = this.effective_editor_view(cx) {
+                        editor_view.update(cx, |view, cx| {
+                            let match_len = (*len).max(1);
+                            view.scroll_to_range_if_needed(*offset..offset.saturating_add(match_len), cx);
+                        });
+                    }
+                }
+                crate::ui::panels::zlib_panel::ZlibPanelEvent::FocusEditor => {
+                    this.restore_editor_focus(window, cx);
+                }
+                crate::ui::panels::zlib_panel::ZlibPanelEvent::OpenDecompressedDocument { source_path, address, buffer } => {
+                    this.open_decompressed_zlib_document(source_path, *address, buffer.clone(), window, cx);
                 }
             },
         )
@@ -1192,6 +1215,40 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(crate) fn open_decompressed_zlib_document(
+        &mut self,
+        source_path: &std::path::Path,
+        address: usize,
+        buffer: crate::core::buffer::Buffer,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let byte_len = buffer.len();
+        let open_paths = self.collect_open_tab_paths(cx);
+        let hex_case = cx.try_global::<crate::core::format::HexCase>().copied().unwrap_or_default();
+        let path = AppState::global(cx)
+            .zlib_service
+            .resolve_unique_decompressed_path(source_path, address, hex_case, &open_paths);
+        let filename = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "zlib.bin".into());
+
+        let document = Arc::new(RwLock::new(crate::core::document::Document::new(path, buffer)));
+        self.open_editor_view(document, window, cx);
+        self.restore_editor_focus(window, cx);
+        window.push_notification(crate::ui::notification::info(format!("Opened {filename} ({byte_len} B)")), cx);
+    }
+
+    fn collect_open_tab_paths(&self, cx: &App) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        for group in self.pane_tree.read(cx).all_groups() {
+            for tab in &group.read(cx).tabs {
+                if let Some(tab_path) = tab.path(cx) {
+                    paths.push(tab_path);
+                }
+            }
+        }
+        paths
+    }
+
     pub(crate) fn on_action_fill_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(active_editor) = self.active_editor(cx) else {
             return;
@@ -1533,6 +1590,7 @@ impl Workspace {
                                     "files" => Some(LeftPanelTab::Files),
                                     "search" => Some(LeftPanelTab::Search),
                                     "strings" => Some(LeftPanelTab::Strings),
+                                    "zlib" => Some(LeftPanelTab::Zlib),
                                     "structure" => Some(LeftPanelTab::Structure),
                                     "inspector" => Some(LeftPanelTab::Inspector),
                                     "map" | "visual_map" => Some(LeftPanelTab::Map),
@@ -1574,6 +1632,7 @@ impl Workspace {
         self.left_panel.update(cx, |panel, cx| {
             panel.file_tree.update(cx, |_, cx| cx.notify());
             panel.strings_panel.update(cx, |_, cx| cx.notify());
+            panel.zlib_panel.update(cx, |_, cx| cx.notify());
             panel.struct_tree.update(cx, |_, cx| cx.notify());
             panel.data_inspector.update(cx, |_, cx| cx.notify());
             panel.visual_map.update(cx, |_, cx| cx.notify());
@@ -1597,6 +1656,7 @@ impl Workspace {
                     LeftPanelTab::Files => activity_bar.set_activity(Some(Activity::Files), cx),
                     LeftPanelTab::Search => activity_bar.set_activity(Some(Activity::Search), cx),
                     LeftPanelTab::Strings => activity_bar.set_activity(Some(Activity::Strings), cx),
+                    LeftPanelTab::Zlib => activity_bar.set_activity(Some(Activity::Zlib), cx),
                     LeftPanelTab::Structure => activity_bar.set_activity(Some(Activity::Structure), cx),
                     LeftPanelTab::Inspector => activity_bar.set_activity(Some(Activity::Inspector), cx),
                     LeftPanelTab::Map => activity_bar.set_activity(Some(Activity::Map), cx),
@@ -1719,6 +1779,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_action_show_files_tab))
             .on_action(cx.listener(Self::on_action_show_search_tab))
             .on_action(cx.listener(Self::on_action_show_strings_tab))
+            .on_action(cx.listener(Self::on_action_show_zlib_tab))
             .on_action(cx.listener(Self::on_action_show_structure_tab))
             .on_action(cx.listener(Self::on_action_show_inspector_tab))
             .on_action(cx.listener(Self::on_action_show_checksum_tab))

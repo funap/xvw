@@ -45,6 +45,8 @@ Engineered to be snappy, intuitive, and versatile for reverse engineering, firmw
   Inspect any byte or selection decoded simultaneously into `i8`–`i64`, `u8`–`u64` (Little/Big Endian), `f32`/`f64`, Unix timestamps, binary bits, and character representations.
 - 📊 **2D Visual Map & Entropy View**  
   Render byte values as a 2D bitmap with grayscale, byte-category, and rainbow color modes to visually identify code segments, compressed sections, and encrypted payloads.
+- 📦 **Embedded Zlib Stream Search & Extraction**  
+  Scan binaries for embedded zlib-compressed streams (with Adler-32 checksum verification) in the Zlib panel, sort results by address, size, or preview, jump straight to each stream, and open the decompressed payload in a new editable document tab.
 - ⚖️ **Synchronized Side-by-Side Diff**  
   Compare two binary files side by side with synchronized scrolling, difference counters, and clear delta highlights.
 - 📝 **Integrated Scratchpad**  
@@ -158,7 +160,7 @@ xvw firmware.bin --ksy specs/firmware.ksy
 xvw --diff original.bin patched.bin
 
 # Open a file directly with a specific sidebar panel
-# (Options: files, strings, structure, inspector, map, checksum, bookmarks)
+# (Options: files, strings, zlib, structure, inspector, map, checksum, bookmarks)
 xvw binary.bin --panel map
 ```
 
