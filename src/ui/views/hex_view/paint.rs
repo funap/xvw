@@ -555,6 +555,7 @@ pub struct RowPaintParams<'a> {
     pub doc: &'a Document,
     pub line_starts: &'a LineMap,
     pub parse_result: Option<&'a ParseResult>,
+    pub is_parsing_structure: bool,
     pub collapsed_structs: &'a HashSet<String>,
     pub encoding: Encoding,
     pub radix: DisplayRadix,
@@ -1026,34 +1027,64 @@ pub fn calculate_description_indent_level(
     }
 }
 
+/// Resolves whether a row should be rendered as a structure header row or a collapsed container row.
+///
+/// While asynchronous structure parsing or index finalization is in progress (or the snapshot is live),
+/// structure header rows and collapsed container banners are suppressed to match `LayoutEngine`'s
+/// fixed-row layout.
+pub fn resolve_structure_row_flags(
+    parse_result: Option<&ParseResult>,
+    is_parsing_structure: bool,
+    raw_containers: &[IndexedField],
+    collapsed_structs: &HashSet<String>,
+    offset: usize,
+    chunk_len: usize,
+    total_size: usize,
+) -> (bool, bool) {
+    let Some(parse_res) = parse_result else {
+        return (false, false);
+    };
+    if is_parsing_structure || parse_res.is_live() {
+        return (false, false);
+    }
+
+    let is_structure_header_row = chunk_len == 0;
+    let is_collapsed_struct_row = chunk_len > 0
+        && raw_containers.iter().any(|c| {
+            !c.is_instance
+                && c.offset == offset
+                && (c.size == chunk_len || chunk_len == c.size.min(total_size.saturating_sub(offset)))
+                && (collapsed_structs.contains(&c.collapse_key) || collapsed_structs.contains(&c.id))
+        });
+    (is_structure_header_row, is_collapsed_struct_row)
+}
+
 pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usize, window: &mut Window) -> CachedRow {
     let chunk_len = next_offset - offset;
     let chunk = params.doc.buffer.get_range(offset, chunk_len);
     let total_size = params.doc.buffer.len();
     let is_struct_mode = params.parse_result.is_some();
+    let is_live_structure_parse = params.is_parsing_structure || params.parse_result.is_some_and(ParseResult::is_live);
     let font = params.font;
 
     let physical_address = params.doc.offset_to_address(offset);
-    let is_structure_header_row = is_struct_mode && chunk_len == 0;
     let query_len = chunk_len.max(1);
 
-    let raw_containers: Cow<'_, [IndexedField]> = if let Some(parse_res) = params.parse_result {
-        if parse_res.is_live() {
-            Cow::Owned(parse_res.find_live_container_structs_starting_at(offset, query_len))
-        } else {
-            Cow::Borrowed(parse_res.find_container_structs_starting_at(offset, query_len))
-        }
+    let raw_containers: Cow<'_, [IndexedField]> = if !is_live_structure_parse && let Some(parse_res) = params.parse_result {
+        Cow::Borrowed(parse_res.find_container_structs_starting_at(offset, query_len))
     } else {
         Cow::Borrowed(&[])
     };
 
-    let is_collapsed_struct_row = is_struct_mode
-        && chunk_len > 0
-        && raw_containers.iter().any(|c| {
-            c.offset == offset
-                && (c.size == chunk_len || chunk_len == c.size.min(total_size.saturating_sub(offset)))
-                && (params.collapsed_structs.contains(&c.collapse_key) || params.collapsed_structs.contains(&c.id))
-        });
+    let (is_structure_header_row, is_collapsed_struct_row) = resolve_structure_row_flags(
+        params.parse_result,
+        params.is_parsing_structure,
+        &raw_containers,
+        params.collapsed_structs,
+        offset,
+        chunk_len,
+        total_size,
+    );
 
     let row_leaves: Cow<'_, [IndexedField]> = if is_structure_header_row || is_collapsed_struct_row {
         Cow::Borrowed(&[])
@@ -1303,6 +1334,8 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
     };
 
     CachedRow {
+        offset,
+        next_offset,
         physical_address,
         shaped_addr,
         hex_source,
@@ -1558,7 +1591,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         return;
     }
 
-    if params.row_cache.get(params.row_idx).is_none() {
+    if params.row_cache.get_for_range(params.row_idx, offset, next_offset).is_none() {
         let cached_row = build_cached_row(&params, offset, next_offset, window);
         params.row_cache.insert(params.row_idx, cached_row);
     }

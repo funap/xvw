@@ -771,18 +771,18 @@ impl Editor {
         self.layout.line_starts(
             &doc,
             self.structure.show_inline_structure_view,
-            self.structure.is_parsing(),
+            self.structure.is_parse_in_progress(),
             &self.structure.collapsed_struct_ids,
         )
     }
 
     pub fn has_custom_layout(&self) -> bool {
         let doc = self.document.read().expect("document read lock");
-        LayoutEngine::has_custom_layout(&doc, self.structure.show_inline_structure_view, self.structure.is_parsing())
+        LayoutEngine::has_custom_layout(&doc, self.structure.show_inline_structure_view, self.structure.is_parse_in_progress())
     }
 
     pub fn has_custom_layout_doc(&self, doc: &Document) -> bool {
-        LayoutEngine::has_custom_layout(doc, self.structure.show_inline_structure_view, self.structure.is_parsing())
+        LayoutEngine::has_custom_layout(doc, self.structure.show_inline_structure_view, self.structure.is_parse_in_progress())
     }
     pub fn parse_result(&self) -> Option<Arc<ParseResult>> {
         self.document.read().expect("document read lock").metadata.parse_result.clone()
@@ -971,9 +971,10 @@ impl Editor {
             Arc::new(std::collections::BTreeMap::new())
         };
         if self.structure.show_inline_structure_view
-            && !self.structure.is_parsing()
+            && !self.structure.is_parse_in_progress()
             && !self.structure.collapsed_struct_ids.is_empty()
             && let Some(parse_res) = self.parse_result()
+            && !parse_res.is_live()
         {
             let mut mut_regions = (*regions).clone();
             parse_res.collect_collapsed_ranges(&self.structure.collapsed_struct_ids, &mut mut_regions);
@@ -995,11 +996,13 @@ impl Editor {
     pub fn auto_unfold_if_needed(&mut self, target_offset: usize) -> bool {
         let mut unfolded = self.unfold_bookmark_at(target_offset);
         if self.structure.show_inline_structure_view
-            && !self.structure.is_parsing()
+            && !self.structure.is_parse_in_progress()
             && !self.structure.collapsed_struct_ids.is_empty()
             && let Some(parse_res) = self.parse_result()
+            && !parse_res.is_live()
             && parse_res.unfold_collapsed_at(target_offset, Arc::make_mut(&mut self.structure.collapsed_struct_ids))
         {
+            self.structure.bump_layout_version();
             self.layout.invalidate();
             unfolded = true;
         }

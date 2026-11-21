@@ -81,6 +81,8 @@ pub struct CachedRowStructureFields {
 /// Complete cached layout and shaped text for a single painted row.
 #[derive(Clone, Debug)]
 pub struct CachedRow {
+    pub offset: usize,
+    pub next_offset: usize,
     pub physical_address: usize,
     pub shaped_addr: Option<ShapedLine>,
     pub hex_source: HexTextSource,
@@ -340,13 +342,38 @@ pub struct RowPaintCaches<'a> {
     pub cursor_addr: &'a mut CursorAddrShapeCache,
 }
 
+/// Validation key determining whether cached row shaping and structure metadata remain valid.
+#[derive(Clone, Copy, Debug)]
+pub struct RowRenderCacheKey<'a> {
+    pub generation: usize,
+    pub layout_version: usize,
+    pub bytes_per_row: usize,
+    pub structure_layout_version: u64,
+    pub is_parsing_structure: bool,
+    pub show_offset: bool,
+    pub show_ascii: bool,
+    pub parse_result_ptr: usize,
+    pub font_size: Pixels,
+    pub font_family: &'a SharedString,
+    pub radix: DisplayRadix,
+    pub group_size: ByteGroupSize,
+    pub is_big_endian: bool,
+    pub hex_case: HexCase,
+    pub encoding: Encoding,
+    pub theme_bg: Hsla,
+    pub theme_fg: Hsla,
+}
+
 /// Frame-to-frame row render cache for HexView to minimize text shaping and layout allocations.
 #[derive(Default)]
 pub struct RowRenderCache {
     generation: usize,
     layout_version: usize,
     bytes_per_row: usize,
-    collapsed_ptr: usize,
+    structure_layout_version: u64,
+    is_parsing_structure: bool,
+    show_offset: bool,
+    show_ascii: bool,
     parse_result_ptr: usize,
     font_size: Pixels,
     font_family: SharedString,
@@ -389,70 +416,72 @@ impl RowRenderCache {
         let cutoff = *nth;
         self.rows.retain(|_, entry| entry.last_used.get() > cutoff);
     }
-    /// Validates the cache against current document, structure, font, and theme properties.
+
+    /// Validates the cache against current document, structure, visibility, font, and theme properties.
     /// Clears cached rows if any configuration has changed.
-    #[allow(clippy::too_many_arguments)]
-    pub fn validate(
-        &mut self,
-        generation: usize,
-        layout_version: usize,
-        bytes_per_row: usize,
-        collapsed_ptr: usize,
-        parse_result_ptr: usize,
-        font_size: Pixels,
-        font_family: &SharedString,
-        radix: DisplayRadix,
-        group_size: ByteGroupSize,
-        is_big_endian: bool,
-        hex_case: HexCase,
-        encoding: Encoding,
-        theme_bg: Hsla,
-        theme_fg: Hsla,
-    ) {
-        if self.font_size != font_size || &self.font_family != font_family {
+    pub fn validate(&mut self, key: RowRenderCacheKey<'_>) {
+        if self.font_size != key.font_size || &self.font_family != key.font_family {
             self.comment_shapes.clear();
             self.special_shapes.clear();
             self.cursor_addr_cache.clear();
         }
-        if self.hex_case != hex_case {
+        if self.hex_case != key.hex_case {
             self.cursor_addr_cache.clear();
         }
-        if self.generation != generation
-            || self.layout_version != layout_version
-            || self.bytes_per_row != bytes_per_row
-            || self.collapsed_ptr != collapsed_ptr
-            || self.parse_result_ptr != parse_result_ptr
-            || self.font_size != font_size
-            || &self.font_family != font_family
-            || self.radix != radix
-            || self.group_size != group_size
-            || self.is_big_endian != is_big_endian
-            || self.hex_case != hex_case
-            || self.encoding != encoding
-            || self.theme_bg != theme_bg
-            || self.theme_fg != theme_fg
+        if self.generation != key.generation
+            || self.layout_version != key.layout_version
+            || self.bytes_per_row != key.bytes_per_row
+            || self.structure_layout_version != key.structure_layout_version
+            || self.is_parsing_structure != key.is_parsing_structure
+            || self.show_offset != key.show_offset
+            || self.show_ascii != key.show_ascii
+            || self.parse_result_ptr != key.parse_result_ptr
+            || self.font_size != key.font_size
+            || &self.font_family != key.font_family
+            || self.radix != key.radix
+            || self.group_size != key.group_size
+            || self.is_big_endian != key.is_big_endian
+            || self.hex_case != key.hex_case
+            || self.encoding != key.encoding
+            || self.theme_bg != key.theme_bg
+            || self.theme_fg != key.theme_fg
         {
-            self.generation = generation;
-            self.layout_version = layout_version;
-            self.bytes_per_row = bytes_per_row;
-            self.collapsed_ptr = collapsed_ptr;
-            self.parse_result_ptr = parse_result_ptr;
-            self.font_size = font_size;
-            self.font_family = font_family.clone();
-            self.radix = radix;
-            self.group_size = group_size;
-            self.is_big_endian = is_big_endian;
-            self.hex_case = hex_case;
-            self.encoding = encoding;
-            self.theme_bg = theme_bg;
-            self.theme_fg = theme_fg;
+            self.generation = key.generation;
+            self.layout_version = key.layout_version;
+            self.bytes_per_row = key.bytes_per_row;
+            self.structure_layout_version = key.structure_layout_version;
+            self.is_parsing_structure = key.is_parsing_structure;
+            self.show_offset = key.show_offset;
+            self.show_ascii = key.show_ascii;
+            self.parse_result_ptr = key.parse_result_ptr;
+            self.font_size = key.font_size;
+            self.font_family = key.font_family.clone();
+            self.radix = key.radix;
+            self.group_size = key.group_size;
+            self.is_big_endian = key.is_big_endian;
+            self.hex_case = key.hex_case;
+            self.encoding = key.encoding;
+            self.theme_bg = key.theme_bg;
+            self.theme_fg = key.theme_fg;
             self.rows.clear();
         }
     }
 
+    #[cfg(test)]
     #[inline]
     pub fn get(&self, row_idx: usize) -> Option<&CachedRow> {
         let entry = self.rows.get(&row_idx)?;
+        entry.last_used.set(self.next_tick());
+        Some(&entry.row)
+    }
+
+    /// Returns the cached row for `row_idx` only when it matches the requested byte range `[offset, next_offset)`.
+    #[inline]
+    pub fn get_for_range(&self, row_idx: usize, offset: usize, next_offset: usize) -> Option<&CachedRow> {
+        let entry = self.rows.get(&row_idx)?;
+        if entry.row.offset != offset || entry.row.next_offset != next_offset {
+            return None;
+        }
         entry.last_used.set(self.next_tick());
         Some(&entry.row)
     }
@@ -655,6 +684,8 @@ mod tests {
 
     fn sample_cached_row(addr: usize) -> CachedRow {
         CachedRow {
+            offset: addr,
+            next_offset: addr + 16,
             physical_address: addr,
             shaped_addr: None,
             hex_source: HexTextSource {

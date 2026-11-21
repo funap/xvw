@@ -174,7 +174,7 @@ impl LayoutEngine {
             || !meta.bookmarks.hidden_colors.is_empty()
             || !meta.bookmarks.hidden_ids.is_empty()
             || meta.bookmarks.hide_unbookmarked
-            || (show_inline_structure_view && !is_parsing_structure && meta.parse_result.is_some())
+            || (show_inline_structure_view && !is_parsing_structure && meta.parse_result.as_ref().is_some_and(|res| !res.is_live()))
             || doc.address_map.has_gaps()
     }
 
@@ -213,6 +213,7 @@ impl LayoutEngine {
             && !meta.bookmarks.hide_unbookmarked
             && !doc.address_map.has_gaps()
             && let Some(parse_res) = &meta.parse_result
+            && !parse_res.is_live()
             && let Some(line_map) = &parse_res.structure_line_map
             && line_map.bytes_per_row() == bytes_per_row
             && line_map.total_size() == total_size
@@ -225,6 +226,7 @@ impl LayoutEngine {
             if show_inline_structure_view
                 && !is_parsing_structure
                 && let Some(parse_res) = &meta.parse_result
+                && !parse_res.is_live()
             {
                 parse_res.collect_collapsed_ranges(collapsed_struct_ids, &mut folded_regions);
             }
@@ -254,6 +256,7 @@ impl LayoutEngine {
                 if show_inline_structure_view
                     && !is_parsing_structure
                     && let Some(parse_res) = &meta.parse_result
+                    && !parse_res.is_live()
                 {
                     parse_res.collect_field_breaks(&mut field_breaks, collapsed_struct_ids);
                     parse_res.collect_structure_header_lines(&mut empty_line_counts, collapsed_struct_ids);

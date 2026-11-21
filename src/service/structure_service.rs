@@ -265,7 +265,7 @@ impl StructureService {
                     if editor.structure.generation != generation {
                         return ParseUpdateDelivery::Stale(batch);
                     }
-                    if !editor.structure.is_parsing() && !batch.is_done {
+                    if !editor.structure.is_parse_in_progress() && !batch.is_done {
                         return ParseUpdateDelivery::Stale(batch);
                     }
                     let is_done = batch.is_done;

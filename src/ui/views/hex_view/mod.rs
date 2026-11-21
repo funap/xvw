@@ -208,6 +208,7 @@ pub struct HexView {
     last_bookmark_version: u64,
     last_layout_version: usize,
     last_structure_generation: usize,
+    last_structure_layout_version: u64,
     cached_desc_palette: CachedDescPalette,
     cached_active_leaf_field: std::rc::Rc<std::cell::RefCell<CachedActiveLeafField>>,
     row_cache: std::rc::Rc<std::cell::RefCell<RowRenderCache>>,
@@ -228,7 +229,7 @@ impl EventEmitter<HexViewEvent> for HexView {}
 #[allow(dead_code)]
 impl HexView {
     pub fn new(editor: Entity<Editor>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (radix, group_size, is_big_endian, encoding, last_bookmark_version, last_layout_version, last_structure_generation) = {
+        let (radix, group_size, is_big_endian, encoding, last_bookmark_version, last_layout_version, last_structure_generation, last_structure_layout_version) = {
             let ed = editor.read(cx);
             (
                 ed.options.radix,
@@ -238,6 +239,7 @@ impl HexView {
                 ed.bookmarks().version(),
                 ed.document.read().ok().map(|d| d.layout_version()).unwrap_or(0),
                 ed.structure.generation,
+                ed.structure.layout_version(),
             )
         };
         let cached_desc_palette = std::rc::Rc::new(std::cell::Cell::new(None));
@@ -290,6 +292,7 @@ impl HexView {
                 current_bm_version,
                 current_layout_version,
                 current_generation,
+                current_structure_layout_version,
                 is_read_only,
                 new_encoding,
                 new_radix,
@@ -308,6 +311,7 @@ impl HexView {
                     ed.bookmarks().version(),
                     ed.document.read().ok().map(|d| d.layout_version()),
                     ed.structure.generation,
+                    ed.structure.layout_version(),
                     ed.is_read_only(),
                     ed.options.encoding,
                     ed.options.radix,
@@ -328,8 +332,9 @@ impl HexView {
                 this.last_layout_version = current_lv;
                 this.cached_comment_content_width.set(None);
             }
-            if this.last_structure_generation != current_generation {
+            if this.last_structure_generation != current_generation || this.last_structure_layout_version != current_structure_layout_version {
                 this.last_structure_generation = current_generation;
+                this.last_structure_layout_version = current_structure_layout_version;
                 this.clear_desc_content_width_cache();
             }
             if is_read_only {
@@ -424,6 +429,7 @@ impl HexView {
             last_bookmark_version,
             last_layout_version,
             last_structure_generation,
+            last_structure_layout_version,
             cached_desc_palette,
             cached_active_leaf_field,
             row_cache,
@@ -580,11 +586,10 @@ impl HexView {
             let next_offset = line_starts.get(row + 1).unwrap_or(total_size);
             let chunk_len = next_offset.saturating_sub(offset);
             if chunk_len == 0 {
-                let containers: Cow<'_, [IndexedField]> = if parse_result.is_live() {
-                    Cow::Owned(parse_result.find_live_container_structs_starting_at(offset, 1))
-                } else {
-                    Cow::Borrowed(parse_result.find_container_structs_starting_at(offset, 1))
-                };
+                if parse_result.is_live() {
+                    continue;
+                }
+                let containers = parse_result.find_container_structs_starting_at(offset, 1);
                 for container in containers.iter().filter(|container| !container.is_instance && container.size > 0) {
                     let text = if collapsed_structs.contains(&container.collapse_key) || collapsed_structs.contains(&container.id) {
                         format!("{} ({} bytes)", container.format_container_label(), container.size)
@@ -597,10 +602,10 @@ impl HexView {
                 continue;
             }
 
-            let container_structs: Cow<'_, [IndexedField]> = if parse_result.is_live() {
-                Cow::Owned(parse_result.find_live_container_structs_starting_at(offset, chunk_len))
+            let container_structs: &[IndexedField] = if parse_result.is_live() {
+                &[]
             } else {
-                Cow::Borrowed(parse_result.find_container_structs_starting_at(offset, chunk_len))
+                parse_result.find_container_structs_starting_at(offset, chunk_len)
             };
             let leaf_fields: Cow<'_, [IndexedField]> = if parse_result.is_live() {
                 Cow::Owned(parse_result.find_live_leaf_fields_starting_at(offset, chunk_len))
@@ -1276,7 +1281,7 @@ impl HexView {
         let line_starts = editor.layout.line_starts(
             &doc,
             editor.structure.show_inline_structure_view,
-            editor.structure.is_parsing(),
+            editor.structure.is_parse_in_progress(),
             &editor.structure.collapsed_struct_ids,
         );
         let (start_byte, end_byte) = Self::byte_range_for_rows(&line_starts, total_size, self.scroll.scroll_offset, self.viewport_visible_rows());
@@ -2723,9 +2728,13 @@ impl HexView {
 
         if is_struct_mode && layout.description.map(|column| world_x >= column.start).unwrap_or(false) {
             if let Some(parse_res) = parse_result {
-                let leaf_fields = parse_res.find_leaf_fields_starting_at(line_offset, chunk_len);
-                if let Some(first) = leaf_fields.first() {
-                    return Some(first.offset);
+                let first_offset = if parse_res.is_live() {
+                    parse_res.find_live_leaf_fields_starting_at(line_offset, chunk_len).first().map(|f| f.offset)
+                } else {
+                    parse_res.find_leaf_fields_starting_at(line_offset, chunk_len).first().map(|f| f.offset)
+                };
+                if let Some(offset) = first_offset {
+                    return Some(offset);
                 }
             }
             return Some(line_offset);
@@ -3581,7 +3590,9 @@ impl Render for HexView {
                             let mut selected_field_range = None;
 
                             if editor.structure.show_inline_structure_view
+                                && !editor.structure.is_parse_in_progress()
                                 && let Some(parse_res) = editor.parse_result()
+                                && !parse_res.is_live()
                                 && let Some(list_bounds) = this.list_bounds.get()
                             {
                                 let rel_y = f32::from(event.position.y - list_bounds.top()).max(0.0);
@@ -3602,12 +3613,12 @@ impl Render for HexView {
                                         let world_x = relative_x + this.scroll.outer_scroll_x;
                                         let in_desc = layout.description.is_some_and(|col| world_x >= col.start);
 
-                                        let is_collapsed_container_row =
-                                            parse_res.find_container_structs_starting_at(line_offset, chunk_len).first().is_some_and(|c| {
-                                                c.offset == line_offset
-                                                    && (c.size == chunk_len || chunk_len == c.size.min(editor.total_size().saturating_sub(line_offset)))
-                                                    && editor.structure.is_struct_collapsed(&c.collapse_key, &c.id)
-                                            });
+                                        let is_collapsed_container_row = parse_res.find_container_structs_starting_at(line_offset, chunk_len).iter().any(|c| {
+                                            !c.is_instance
+                                                && c.offset == line_offset
+                                                && (c.size == chunk_len || chunk_len == c.size.min(editor.total_size().saturating_sub(line_offset)))
+                                                && editor.structure.is_struct_collapsed(&c.collapse_key, &c.id)
+                                        });
 
                                         if chunk_len == 0 {
                                             let containers: Vec<_> = parse_res
@@ -3629,7 +3640,8 @@ impl Render for HexView {
                                         } else if is_collapsed_container_row {
                                             let containers = parse_res.find_container_structs_starting_at(line_offset, chunk_len);
                                             if let Some(c) = containers.iter().find(|c| {
-                                                c.offset == line_offset
+                                                !c.is_instance
+                                                    && c.offset == line_offset
                                                     && (c.size == chunk_len || chunk_len == c.size.min(editor.total_size().saturating_sub(line_offset)))
                                                     && editor.structure.is_struct_collapsed(&c.collapse_key, &c.id)
                                             }) {
@@ -3638,10 +3650,9 @@ impl Render for HexView {
                                             }
                                         } else if in_desc {
                                             let containers = parse_res.find_container_structs_starting_at(line_offset, chunk_len);
-                                            if let Some(c) = containers
-                                                .iter()
-                                                .find(|c| c.offset == line_offset && editor.structure.is_struct_collapsed(&c.collapse_key, &c.id))
-                                            {
+                                            if let Some(c) = containers.iter().find(|c| {
+                                                !c.is_instance && c.offset == line_offset && editor.structure.is_struct_collapsed(&c.collapse_key, &c.id)
+                                            }) {
                                                 is_toggle = true;
                                                 collapse_key = Some(c.collapse_key.clone());
                                             } else if event.click_count >= 2 {
@@ -3948,6 +3959,8 @@ impl Render for HexView {
                         let (
                             parse_result,
                             collapsed_structs,
+                            structure_layout_version,
+                            is_parsing_structure,
                             bookmark_items,
                             bookmark_version,
                             doc_arc,
@@ -3969,6 +3982,8 @@ impl Render for HexView {
                                     None
                                 },
                                 editor.structure.collapsed_struct_ids.clone(),
+                                editor.structure.layout_version(),
+                                editor.structure.is_parse_in_progress(),
                                 editor.bookmarks().snapshot_arc(),
                                 editor.bookmarks().version(),
                                 editor.document.clone(),
@@ -4035,28 +4050,30 @@ impl Render for HexView {
                         let theme = cx.theme();
                         let theme_colors = RowThemeColors::from_theme(theme, is_focused);
                         let row_font = font(font_family.clone());
-                        let collapsed_ptr = Arc::as_ptr(&collapsed_structs) as usize;
                         let parse_result_ptr = parse_result.as_ref().map(|p| Arc::as_ptr(p) as usize).unwrap_or(0);
                         let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
                         let mut cache_borrow = row_cache.borrow_mut();
                         let mut scratch_borrow = paint_row_scratch.borrow_mut();
                         scratch_borrow.fade_runs.clear();
-                        cache_borrow.validate(
-                            doc.history.state_id(),
-                            doc.layout_version(),
-                            line_starts.bytes_per_row(),
-                            collapsed_ptr,
+                        cache_borrow.validate(RowRenderCacheKey {
+                            generation: doc.history.state_id(),
+                            layout_version: doc.layout_version(),
+                            bytes_per_row: line_starts.bytes_per_row(),
+                            structure_layout_version,
+                            is_parsing_structure,
+                            show_offset,
+                            show_ascii,
                             parse_result_ptr,
                             font_size,
-                            &font_family,
+                            font_family: &font_family,
                             radix,
                             group_size,
                             is_big_endian,
                             hex_case,
                             encoding,
-                            theme_colors.bg_color_theme,
-                            theme_colors.fg_color,
-                        );
+                            theme_bg: theme_colors.bg_color_theme,
+                            theme_fg: theme_colors.fg_color,
+                        });
 
                         for (k, row_idx) in (top_row..end_row).enumerate() {
                             let row_y = bounds.top() + px((k + top_overscroll_rows) as f32 * ROW_HEIGHT);
@@ -4084,6 +4101,7 @@ impl Render for HexView {
                                     doc: &doc,
                                     line_starts: &line_starts,
                                     parse_result: parse_result.as_deref(),
+                                    is_parsing_structure,
                                     collapsed_structs: &collapsed_structs,
                                     encoding,
                                     radix,

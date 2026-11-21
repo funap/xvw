@@ -28,6 +28,7 @@ pub struct EditorStructureState {
     pub reparse_requested: bool,
     pub collapsed_struct_ids: Arc<HashSet<String>>,
     pub show_inline_structure_view: bool,
+    layout_version: u64,
 }
 
 impl Default for EditorStructureState {
@@ -44,6 +45,7 @@ impl Default for EditorStructureState {
             reparse_requested: false,
             collapsed_struct_ids: Arc::new(HashSet::new()),
             show_inline_structure_view: true,
+            layout_version: 0,
         }
     }
 }
@@ -53,9 +55,27 @@ impl EditorStructureState {
         Self::default()
     }
 
+    /// Monotonically increasing version bumped whenever structure visibility,
+    /// collapsed container state, or parse lifecycle status changes.
+    #[inline]
+    pub fn layout_version(&self) -> u64 {
+        self.layout_version
+    }
+
+    #[inline]
+    pub(crate) fn bump_layout_version(&mut self) {
+        self.layout_version = self.layout_version.wrapping_add(1);
+    }
+
     #[inline]
     pub fn is_idle(&self) -> bool {
         matches!(self.status, StructureParseStatus::Idle)
+    }
+
+    /// Returns true while asynchronous structure parsing or index finalization is in progress.
+    #[inline]
+    pub fn is_parse_in_progress(&self) -> bool {
+        !self.is_idle()
     }
 
     #[inline]
@@ -70,17 +90,26 @@ impl EditorStructureState {
 
     #[inline]
     pub fn set_idle(&mut self) {
-        self.status = StructureParseStatus::Idle;
+        if self.status != StructureParseStatus::Idle {
+            self.status = StructureParseStatus::Idle;
+            self.bump_layout_version();
+        }
     }
 
     #[inline]
     pub fn set_parsing(&mut self) {
-        self.status = StructureParseStatus::Parsing;
+        if self.status != StructureParseStatus::Parsing {
+            self.status = StructureParseStatus::Parsing;
+            self.bump_layout_version();
+        }
     }
 
     #[inline]
     pub fn set_finalizing(&mut self) {
-        self.status = StructureParseStatus::Finalizing;
+        if self.status != StructureParseStatus::Finalizing {
+            self.status = StructureParseStatus::Finalizing;
+            self.bump_layout_version();
+        }
     }
 
     pub fn cancel(&mut self) {
@@ -90,12 +119,14 @@ impl EditorStructureState {
         self.generation = self.generation.wrapping_add(1);
         self.reparse_requested = false;
         self.status = StructureParseStatus::Idle;
+        self.bump_layout_version();
     }
 
     pub fn reset_progress(&mut self) {
         self.progress_offset = 0;
         self.total_size = 0;
         self.status = StructureParseStatus::Idle;
+        self.bump_layout_version();
     }
 
     pub fn toggle_collapsed(&mut self, struct_id: &str) {
@@ -105,6 +136,7 @@ impl EditorStructureState {
         } else {
             set.insert(struct_id.to_string());
         }
+        self.bump_layout_version();
     }
 
     pub fn is_collapsed(&self, struct_id: &str) -> bool {
@@ -117,6 +149,7 @@ impl EditorStructureState {
 
     pub fn toggle_inline_view(&mut self) {
         self.show_inline_structure_view = !self.show_inline_structure_view;
+        self.bump_layout_version();
     }
 
     pub fn pending_reparse(&self, ksy: Option<&Arc<KsyDefinition>>) -> Option<(Arc<KsyDefinition>, usize)> {
@@ -147,9 +180,11 @@ impl EditorStructureState {
         self.progress_offset = 0;
         self.total_size = total_size;
         self.cancel_token = Some(cancel_token);
+        self.bump_layout_version();
     }
 
     pub fn finish_parse(&mut self) {
         self.status = StructureParseStatus::Idle;
+        self.bump_layout_version();
     }
 }

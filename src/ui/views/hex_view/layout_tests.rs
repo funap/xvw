@@ -745,8 +745,10 @@ fn check_row_render_cache() {
     use super::row_cache::*;
     use super::types::HexTextSource;
 
-    fn dummy_row(addr: usize) -> CachedRow {
+    fn dummy_row(offset: usize, next_offset: usize, addr: usize) -> CachedRow {
         CachedRow {
+            offset,
+            next_offset,
             physical_address: addr,
             shaped_addr: None,
             hex_source: HexTextSource {
@@ -762,196 +764,108 @@ fn check_row_render_cache() {
     }
 
     let mut cache = RowRenderCache::default();
-    cache.insert(0, dummy_row(0x1000));
-    cache.insert(1, dummy_row(0x1010));
+    cache.insert(0, dummy_row(0, 16, 0x1000));
+    cache.insert(1, dummy_row(16, 32, 0x1010));
 
     assert_eq!(cache.get(0).unwrap().physical_address, 0x1000);
     assert_eq!(cache.get(1).unwrap().physical_address, 0x1010);
     assert!(cache.get(2).is_none());
+    assert!(cache.get_for_range(0, 0, 16).is_some());
+    assert!(cache.get_for_range(0, 0, 4).is_none(), "Mismatched next_offset must miss cache");
+    assert!(cache.get_for_range(0, 16, 32).is_none(), "Mismatched offset must miss cache");
 
     let font_fam = gpui_kit::SharedString::from("monospace");
-    cache.validate(
-        1,
-        1,
-        16,
-        0,
-        0,
-        px(13.0),
-        &font_fam,
-        DisplayRadix::Hexadecimal,
-        ByteGroupSize::One,
-        true,
-        HexCase::Lower,
-        Encoding::Ascii,
-        hsla(0.0, 0.0, 0.0, 1.0),
-        hsla(0.0, 0.0, 1.0, 1.0),
-    );
-    cache.insert(0, dummy_row(0x1000));
+    let base_key = RowRenderCacheKey {
+        generation: 1,
+        layout_version: 1,
+        bytes_per_row: 16,
+        structure_layout_version: 0,
+        is_parsing_structure: false,
+        show_offset: true,
+        show_ascii: true,
+        parse_result_ptr: 0,
+        font_size: px(13.0),
+        font_family: &font_fam,
+        radix: DisplayRadix::Hexadecimal,
+        group_size: ByteGroupSize::One,
+        is_big_endian: true,
+        hex_case: HexCase::Lower,
+        encoding: Encoding::Ascii,
+        theme_bg: hsla(0.0, 0.0, 0.0, 1.0),
+        theme_fg: hsla(0.0, 0.0, 1.0, 1.0),
+    };
+    cache.validate(base_key);
+    cache.insert(0, dummy_row(0, 16, 0x1000));
 
     // Same parameters -> cached row retained
-    cache.validate(
-        1,
-        1,
-        16,
-        0,
-        0,
-        px(13.0),
-        &font_fam,
-        DisplayRadix::Hexadecimal,
-        ByteGroupSize::One,
-        true,
-        HexCase::Lower,
-        Encoding::Ascii,
-        hsla(0.0, 0.0, 0.0, 1.0),
-        hsla(0.0, 0.0, 1.0, 1.0),
-    );
+    cache.validate(base_key);
     assert!(cache.get(0).is_some());
 
     // Generation changed -> cached row invalidated
-    cache.validate(
-        2,
-        1,
-        16,
-        0,
-        0,
-        px(13.0),
-        &font_fam,
-        DisplayRadix::Hexadecimal,
-        ByteGroupSize::One,
-        true,
-        HexCase::Lower,
-        Encoding::Ascii,
-        hsla(0.0, 0.0, 0.0, 1.0),
-        hsla(0.0, 0.0, 1.0, 1.0),
-    );
+    let gen2_key = RowRenderCacheKey { generation: 2, ..base_key };
+    cache.validate(gen2_key);
     assert!(cache.get(0).is_none());
 
-    // Collapsed pointer changed -> cached row invalidated
-    cache.validate(
-        2,
-        1,
-        16,
-        100,
-        0,
-        px(13.0),
-        &font_fam,
-        DisplayRadix::Hexadecimal,
-        ByteGroupSize::One,
-        true,
-        HexCase::Lower,
-        Encoding::Ascii,
-        hsla(0.0, 0.0, 0.0, 1.0),
-        hsla(0.0, 0.0, 1.0, 1.0),
-    );
-    cache.insert(0, dummy_row(0x2000));
-    cache.validate(
-        2,
-        1,
-        16,
-        101,
-        0,
-        px(13.0),
-        &font_fam,
-        DisplayRadix::Hexadecimal,
-        ByteGroupSize::One,
-        true,
-        HexCase::Lower,
-        Encoding::Ascii,
-        hsla(0.0, 0.0, 0.0, 1.0),
-        hsla(0.0, 0.0, 1.0, 1.0),
-    );
+    // Structure layout version changed -> cached row invalidated
+    let struct_v1_key = RowRenderCacheKey {
+        structure_layout_version: 1,
+        ..gen2_key
+    };
+    cache.validate(struct_v1_key);
+    cache.insert(0, dummy_row(0, 16, 0x2000));
+    let struct_v2_key = RowRenderCacheKey {
+        structure_layout_version: 2,
+        ..gen2_key
+    };
+    cache.validate(struct_v2_key);
+    assert!(cache.get(0).is_none());
+
+    // Parsing flag changed -> cached row invalidated
+    cache.insert(0, dummy_row(0, 16, 0x2000));
+    let parsing_key = RowRenderCacheKey {
+        is_parsing_structure: true,
+        ..struct_v2_key
+    };
+    cache.validate(parsing_key);
+    assert!(cache.get(0).is_none());
+
+    // Show ASCII / show offset changed -> cached row invalidated
+    cache.insert(0, dummy_row(0, 16, 0x2000));
+    let no_ascii_key = RowRenderCacheKey {
+        show_ascii: false,
+        ..parsing_key
+    };
+    cache.validate(no_ascii_key);
+    assert!(cache.get(0).is_none());
+
+    cache.insert(0, dummy_row(0, 16, 0x2000));
+    let no_offset_key = RowRenderCacheKey {
+        show_offset: false,
+        ..no_ascii_key
+    };
+    cache.validate(no_offset_key);
     assert!(cache.get(0).is_none());
 
     // Bytes per row changed -> cached row invalidated
-    cache.validate(
-        2,
-        1,
-        16,
-        101,
-        0,
-        px(13.0),
-        &font_fam,
-        DisplayRadix::Hexadecimal,
-        ByteGroupSize::One,
-        true,
-        HexCase::Lower,
-        Encoding::Ascii,
-        hsla(0.0, 0.0, 0.0, 1.0),
-        hsla(0.0, 0.0, 1.0, 1.0),
-    );
-    cache.insert(0, dummy_row(0x2000));
+    cache.insert(0, dummy_row(0, 16, 0x2000));
     // Same bytes_per_row -> retained
-    cache.validate(
-        2,
-        1,
-        16,
-        101,
-        0,
-        px(13.0),
-        &font_fam,
-        DisplayRadix::Hexadecimal,
-        ByteGroupSize::One,
-        true,
-        HexCase::Lower,
-        Encoding::Ascii,
-        hsla(0.0, 0.0, 0.0, 1.0),
-        hsla(0.0, 0.0, 1.0, 1.0),
-    );
+    cache.validate(no_offset_key);
     assert!(cache.get(0).is_some());
     // Changed bytes_per_row (e.g. 16 -> 8) -> invalidated
-    cache.validate(
-        2,
-        1,
-        8,
-        101,
-        0,
-        px(13.0),
-        &font_fam,
-        DisplayRadix::Hexadecimal,
-        ByteGroupSize::One,
-        true,
-        HexCase::Lower,
-        Encoding::Ascii,
-        hsla(0.0, 0.0, 0.0, 1.0),
-        hsla(0.0, 0.0, 1.0, 1.0),
-    );
+    let bpr8_key = RowRenderCacheKey {
+        bytes_per_row: 8,
+        ..no_offset_key
+    };
+    cache.validate(bpr8_key);
     assert!(cache.get(0).is_none());
 
     // HexCase changed -> cached row invalidated
-    cache.validate(
-        2,
-        1,
-        8,
-        101,
-        0,
-        px(13.0),
-        &font_fam,
-        DisplayRadix::Hexadecimal,
-        ByteGroupSize::One,
-        true,
-        HexCase::Lower,
-        Encoding::Ascii,
-        hsla(0.0, 0.0, 0.0, 1.0),
-        hsla(0.0, 0.0, 1.0, 1.0),
-    );
-    cache.insert(0, dummy_row(0x2000));
+    cache.insert(0, dummy_row(0, 8, 0x2000));
     assert!(cache.get(0).is_some());
-    cache.validate(
-        2,
-        1,
-        8,
-        101,
-        0,
-        px(13.0),
-        &font_fam,
-        DisplayRadix::Hexadecimal,
-        ByteGroupSize::One,
-        true,
-        HexCase::Upper,
-        Encoding::Ascii,
-        hsla(0.0, 0.0, 0.0, 1.0),
-        hsla(0.0, 0.0, 1.0, 1.0),
-    );
+    cache.validate(RowRenderCacheKey {
+        hex_case: HexCase::Upper,
+        ..bpr8_key
+    });
     assert!(cache.get(0).is_none());
 }
 
@@ -970,25 +884,31 @@ fn check_bytes_per_row_lifecycle() {
 
     let mut cache = RowRenderCache::default();
     let font_fam = gpui_kit::SharedString::from("monospace");
-    cache.validate(
-        1,
-        1,
-        line_starts_16.bytes_per_row(),
-        0,
-        0,
-        px(13.0),
-        &font_fam,
-        DisplayRadix::Hexadecimal,
-        ByteGroupSize::One,
-        true,
-        HexCase::Lower,
-        Encoding::Ascii,
-        hsla(0.0, 0.0, 0.0, 1.0),
-        hsla(0.0, 0.0, 1.0, 1.0),
-    );
+    let make_key = |bpr: usize| RowRenderCacheKey {
+        generation: 1,
+        layout_version: 1,
+        bytes_per_row: bpr,
+        structure_layout_version: 0,
+        is_parsing_structure: false,
+        show_offset: true,
+        show_ascii: true,
+        parse_result_ptr: 0,
+        font_size: px(13.0),
+        font_family: &font_fam,
+        radix: DisplayRadix::Hexadecimal,
+        group_size: ByteGroupSize::One,
+        is_big_endian: true,
+        hex_case: HexCase::Lower,
+        encoding: Encoding::Ascii,
+        theme_bg: hsla(0.0, 0.0, 0.0, 1.0),
+        theme_fg: hsla(0.0, 0.0, 1.0, 1.0),
+    };
+    cache.validate(make_key(line_starts_16.bytes_per_row()));
     cache.insert(
         0,
         CachedRow {
+            offset: 0,
+            next_offset: 16,
             physical_address: 0,
             shaped_addr: None,
             hex_source: HexTextSource {
@@ -1014,28 +934,15 @@ fn check_bytes_per_row_lifecycle() {
     assert_eq!(line_starts_8.get(1), Some(8));
 
     // When cache is validated with new line_starts.bytes_per_row(), cached rows are invalidated
-    cache.validate(
-        1,
-        1,
-        line_starts_8.bytes_per_row(),
-        0,
-        0,
-        px(13.0),
-        &font_fam,
-        DisplayRadix::Hexadecimal,
-        ByteGroupSize::One,
-        true,
-        HexCase::Lower,
-        Encoding::Ascii,
-        hsla(0.0, 0.0, 0.0, 1.0),
-        hsla(0.0, 0.0, 1.0, 1.0),
-    );
+    cache.validate(make_key(line_starts_8.bytes_per_row()));
     assert!(cache.get(0).is_none(), "Changing bytes_per_row from 16 to 8 must invalidate cached rows");
 
     // Insert row for 8 bytes per row
     cache.insert(
         0,
         CachedRow {
+            offset: 0,
+            next_offset: 8,
             physical_address: 0,
             shaped_addr: None,
             hex_source: HexTextSource {
@@ -1060,22 +967,7 @@ fn check_bytes_per_row_lifecycle() {
     assert_eq!(line_starts_32.get(0), Some(0));
     assert_eq!(line_starts_32.get(1), Some(32));
 
-    cache.validate(
-        1,
-        1,
-        line_starts_32.bytes_per_row(),
-        0,
-        0,
-        px(13.0),
-        &font_fam,
-        DisplayRadix::Hexadecimal,
-        ByteGroupSize::One,
-        true,
-        HexCase::Lower,
-        Encoding::Ascii,
-        hsla(0.0, 0.0, 0.0, 1.0),
-        hsla(0.0, 0.0, 1.0, 1.0),
-    );
+    cache.validate(make_key(line_starts_32.bytes_per_row()));
     assert!(cache.get(0).is_none(), "Changing bytes_per_row from 8 to 32 must invalidate cached rows");
 }
 
@@ -1366,4 +1258,221 @@ fn test_cached_active_leaf_field_hits_and_invalidates() {
     let pr2 = Arc::new(ParseResult::new("s2".into(), vec![field_v2], 4, vec![]));
     assert_eq!(cache.resolve(Some(&pr2), 2).map(|f| f.id.as_str()), Some("header_v2"));
     assert!(cache.resolve(None, 2).is_none());
+}
+
+#[test]
+fn test_row_render_cache_invalidates_on_in_place_struct_collapse_toggle() {
+    use super::row_cache::*;
+    use super::types::HexTextSource;
+
+    let doc = Arc::new(RwLock::new(Document::new(PathBuf::from("test.bin"), Buffer::new(vec![0u8; 48]))));
+    let mut editor = Editor::new(doc);
+    let header = ParsedField {
+        id: "header".into(),
+        field_type: "header_t".into(),
+        offset: 0,
+        size: 16,
+        value: FieldValue::Struct,
+        color: crate::core::color::RgbaColor::default(),
+        description: None,
+        children: vec![
+            ParsedField {
+                id: "magic".into(),
+                field_type: "u8".into(),
+                offset: 0,
+                size: 8,
+                value: FieldValue::U64(1),
+                color: crate::core::color::RgbaColor::default(),
+                description: None,
+                children: Vec::new(),
+                enum_label: None,
+                is_instance: false,
+            },
+            ParsedField {
+                id: "flags".into(),
+                field_type: "u8".into(),
+                offset: 8,
+                size: 8,
+                value: FieldValue::U64(2),
+                color: crate::core::color::RgbaColor::default(),
+                description: None,
+                children: Vec::new(),
+                enum_label: None,
+                is_instance: false,
+            },
+        ],
+        enum_label: None,
+        is_instance: false,
+    };
+    editor.set_parse_result(ParseResult::new("test_def".into(), vec![header], 16, Vec::new()));
+
+    let mut cache = RowRenderCache::default();
+    let font_fam = gpui_kit::SharedString::from("monospace");
+    let validate_from_editor = |cache: &mut RowRenderCache, editor: &Editor| {
+        let doc = editor.document.read().expect("doc read");
+        let parse_res = if editor.structure.show_inline_structure_view {
+            doc.metadata.parse_result.as_ref()
+        } else {
+            None
+        };
+        let parse_ptr = parse_res.map(|p| Arc::as_ptr(p) as usize).unwrap_or(0);
+        cache.validate(RowRenderCacheKey {
+            generation: doc.history.state_id(),
+            layout_version: doc.layout_version(),
+            bytes_per_row: editor.line_starts().bytes_per_row(),
+            structure_layout_version: editor.structure.layout_version(),
+            is_parsing_structure: editor.structure.is_parse_in_progress(),
+            show_offset: true,
+            show_ascii: true,
+            parse_result_ptr: parse_ptr,
+            font_size: px(13.0),
+            font_family: &font_fam,
+            radix: DisplayRadix::Hexadecimal,
+            group_size: ByteGroupSize::One,
+            is_big_endian: true,
+            hex_case: HexCase::Lower,
+            encoding: Encoding::Ascii,
+            theme_bg: hsla(0.0, 0.0, 0.0, 1.0),
+            theme_fg: hsla(0.0, 0.0, 1.0, 1.0),
+        });
+    };
+
+    let sample_row = |offset: usize, next_offset: usize| CachedRow {
+        offset,
+        next_offset,
+        physical_address: offset,
+        shaped_addr: None,
+        hex_source: HexTextSource {
+            text: gpui_kit::SharedString::default(),
+            groups: Vec::new(),
+        },
+        hex_glyphs: None,
+        ascii_cells: Vec::new(),
+        ascii_glyphs: None,
+        structure_fields: None,
+        desc: None,
+    };
+
+    validate_from_editor(&mut cache, &editor);
+    cache.insert(0, sample_row(0, 0));
+    assert!(cache.get_for_range(0, 0, 0).is_some());
+
+    // Strong count of `collapsed_struct_ids` is 1 here (just like between render frames),
+    // so `Arc::make_mut` mutates the HashSet in place. The cache must still invalidate.
+    assert_eq!(Arc::strong_count(&editor.structure.collapsed_struct_ids), 1);
+    editor.toggle_struct_collapsed("0:0:header");
+    validate_from_editor(&mut cache, &editor);
+    assert!(cache.get(0).is_none(), "Collapsing a struct must invalidate RowRenderCache");
+
+    // Expanding a collapsed struct via click (`toggle_struct_collapsed`) with strong_count == 1 must also invalidate.
+    cache.insert(0, sample_row(0, 16));
+    assert!(cache.get_for_range(0, 0, 16).is_some());
+    assert_eq!(Arc::strong_count(&editor.structure.collapsed_struct_ids), 1);
+    editor.toggle_struct_collapsed("0:0:header");
+    validate_from_editor(&mut cache, &editor);
+    assert!(cache.get(0).is_none(), "Expanding a struct must invalidate RowRenderCache");
+
+    // Collapse again, then auto-unfold -> must invalidate.
+    editor.toggle_struct_collapsed("0:0:header");
+    validate_from_editor(&mut cache, &editor);
+    cache.insert(0, sample_row(0, 16));
+    assert!(cache.get_for_range(0, 0, 16).is_some());
+    assert!(editor.auto_unfold_if_needed(4));
+    validate_from_editor(&mut cache, &editor);
+    assert!(cache.get(0).is_none(), "Auto-unfolding a struct must invalidate RowRenderCache");
+
+    // Parse lifecycle transitions (Parsing -> Finalizing -> Idle) must invalidate RowRenderCache
+    // even when parse_result_ptr and doc.layout_version() have not changed.
+    cache.insert(0, sample_row(0, 0));
+    editor.structure.set_parsing();
+    validate_from_editor(&mut cache, &editor);
+    assert!(cache.get(0).is_none(), "Entering Parsing must invalidate RowRenderCache");
+
+    cache.insert(0, sample_row(0, 16));
+    editor.structure.set_finalizing();
+    validate_from_editor(&mut cache, &editor);
+    assert!(cache.get(0).is_none(), "Entering Finalizing must invalidate RowRenderCache");
+
+    cache.insert(0, sample_row(0, 16));
+    editor.structure.finish_parse();
+    validate_from_editor(&mut cache, &editor);
+    assert!(cache.get(0).is_none(), "Finishing parse must invalidate RowRenderCache");
+
+    // Toggling inline structure view must also invalidate RowRenderCache.
+    cache.insert(0, sample_row(0, 0));
+    editor.toggle_inline_structure_view();
+    validate_from_editor(&mut cache, &editor);
+    assert!(cache.get(0).is_none(), "Toggling inline structure view must invalidate RowRenderCache");
+}
+
+#[test]
+fn test_resolve_structure_row_flags_suppresses_headers_and_collapse_while_live_or_parsing() {
+    use super::paint::resolve_structure_row_flags;
+    use std::collections::HashSet;
+
+    let container = ParsedField {
+        id: "header".into(),
+        field_type: "header_t".into(),
+        offset: 0,
+        size: 16,
+        value: FieldValue::Struct,
+        color: crate::core::color::RgbaColor::default(),
+        description: None,
+        children: vec![ParsedField {
+            id: "magic".into(),
+            field_type: "u8".into(),
+            offset: 0,
+            size: 16,
+            value: FieldValue::U64(1),
+            color: crate::core::color::RgbaColor::default(),
+            description: None,
+            children: Vec::new(),
+            enum_label: None,
+            is_instance: false,
+        }],
+        enum_label: None,
+        is_instance: false,
+    };
+
+    let live_res = ParseResult::empty("live".into()).append_fields_without_index(vec![container.clone()], 16);
+    let final_res = ParseResult::new("final".into(), vec![container], 16, Vec::new());
+    let live_containers = live_res.find_live_container_structs_starting_at(0, 16);
+    let final_containers = final_res.find_container_structs_starting_at(0, 16);
+
+    let mut collapsed = HashSet::new();
+    collapsed.insert("0:0:header".to_string());
+
+    // Live snapshot suppresses collapsed banner and header rows even when container matches 16-byte row.
+    assert_eq!(
+        resolve_structure_row_flags(Some(&live_res), false, &live_containers, &collapsed, 0, 16, 48),
+        (false, false)
+    );
+    assert_eq!(
+        resolve_structure_row_flags(Some(&live_res), true, &live_containers, &collapsed, 0, 0, 48),
+        (false, false)
+    );
+
+    // Final snapshot while `is_parsing_structure == true` still suppresses collapse/header flags.
+    assert_eq!(
+        resolve_structure_row_flags(Some(&final_res), true, final_containers, &collapsed, 0, 16, 48),
+        (false, false)
+    );
+
+    // Once parsing finishes with a finalized snapshot, collapsed container row and header row are enabled.
+    assert_eq!(
+        resolve_structure_row_flags(Some(&final_res), false, final_containers, &collapsed, 0, 16, 48),
+        (false, true)
+    );
+    assert_eq!(
+        resolve_structure_row_flags(Some(&final_res), false, final_containers, &HashSet::new(), 0, 0, 48),
+        (true, false)
+    );
+
+    // Instance containers must never trigger a collapsed physical row banner.
+    let mut instance_container = final_containers[0].clone();
+    instance_container.is_instance = true;
+    assert_eq!(
+        resolve_structure_row_flags(Some(&final_res), false, &[instance_container], &collapsed, 0, 16, 48),
+        (false, false)
+    );
 }

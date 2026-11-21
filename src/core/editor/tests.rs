@@ -2665,3 +2665,75 @@ fn test_go_to_offset_unfolds_overlapping_bookmark_gap_and_struct_folds() {
     assert!(editor.structure.is_collapsed("64:0:tail_struct"));
     assert_eq!(editor.line_starts(), vec![0, 16, 16, 24, 24, 40, 48, 64]);
 }
+
+#[test]
+fn test_finalizing_live_parse_keeps_standard_layout_and_unfolded_state() {
+    use crate::core::buffer::Buffer;
+    use crate::core::color::RgbaColor;
+    use crate::core::structure::{FieldValue, ParseResult, ParsedField};
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
+
+    let mut editor = Editor::new(Arc::new(RwLock::new(Document::new(PathBuf::from("test.bin"), Buffer::new(vec![0u8; 48])))));
+
+    let header = ParsedField {
+        id: "header".into(),
+        field_type: "header_t".into(),
+        offset: 0,
+        size: 32,
+        value: FieldValue::Struct,
+        color: RgbaColor::default(),
+        description: None,
+        children: vec![
+            ParsedField {
+                id: "magic".into(),
+                field_type: "u8".into(),
+                offset: 0,
+                size: 8,
+                value: FieldValue::U64(1),
+                color: RgbaColor::default(),
+                description: None,
+                children: Vec::new(),
+                enum_label: None,
+                is_instance: false,
+            },
+            ParsedField {
+                id: "flags".into(),
+                field_type: "bytes".into(),
+                offset: 8,
+                size: 24,
+                value: FieldValue::Bytes(vec![0; 24]),
+                color: RgbaColor::default(),
+                description: None,
+                children: Vec::new(),
+                enum_label: None,
+                is_instance: false,
+            },
+        ],
+        enum_label: None,
+        is_instance: false,
+    };
+
+    // Simulate a previously collapsed container followed by an async reparse.
+    editor.toggle_struct_collapsed("0:0:header");
+    editor.structure.start_async_parse(48, Arc::new(AtomicBool::new(false)));
+    editor.begin_partial_parse_result("test_def".into());
+    editor.append_parse_fields("test_def".into(), vec![header.clone()], 32, 48);
+
+    // During Parsing, layout stays fixed 16-byte rows and structures are not folded.
+    assert_eq!(editor.line_starts(), vec![0, 16, 32]);
+    assert!(!editor.is_folded(0));
+
+    // Entering Finalizing while parse_result is still live must also keep standard layout and unfolded state.
+    editor.structure.set_finalizing();
+    assert_eq!(editor.line_starts(), vec![0, 16, 32]);
+    assert!(!editor.is_folded(0));
+    assert!(!editor.has_custom_layout());
+
+    // Once the final indexed ParseResult arrives and parsing finishes, collapsed structure layout takes effect.
+    let final_res = Arc::new(ParseResult::new("test_def".into(), vec![header], 32, Vec::new()).with_structure_line_map(48));
+    editor.set_parse_result_arc(final_res);
+    editor.structure.finish_parse();
+    assert!(editor.is_folded(0));
+    assert_eq!(editor.line_starts(), vec![0, 32]);
+}
