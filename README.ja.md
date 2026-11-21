@@ -1,4 +1,5 @@
 <div align="center">
+<img src="assets/icons/xvw.svg" alt="xvw" width="200"/>
 
 # xvw
 
