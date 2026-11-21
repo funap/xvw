@@ -6,6 +6,7 @@ use gpui_kit::{Action, Context, Menu, MenuItem, SharedString, Window};
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct MenuEditorState {
     pub has_doc: bool,
+    pub has_diff: bool,
     pub is_read_only: bool,
     pub can_undo: bool,
     pub can_redo: bool,
@@ -506,7 +507,7 @@ fn build_view_menu() -> MenuDef {
         encoding_items.push(MenuItemDef::action_with_condition(
             encoding.label(),
             crate::actions::SetEncoding { encoding: *encoding },
-            |s| s.has_doc,
+            |s| s.has_doc || s.has_diff,
         ));
     }
 
@@ -517,7 +518,7 @@ fn build_view_menu() -> MenuDef {
         let cat_items = encodings
             .iter()
             .copied()
-            .map(|encoding| MenuItemDef::action_with_condition(encoding.label(), crate::actions::SetEncoding { encoding }, |s| s.has_doc))
+            .map(|encoding| MenuItemDef::action_with_condition(encoding.label(), crate::actions::SetEncoding { encoding }, |s| s.has_doc || s.has_diff))
             .collect();
         encoding_items.push(MenuItemDef::submenu(category.label(), cat_items));
     }
@@ -851,6 +852,65 @@ mod tests {
             category_labels,
             vec!["Japanese", "Chinese & Korean", "ISO-8859", "Windows Code Pages", "Legacy / DOS / Mac"]
         );
+    }
+
+    #[test]
+    fn test_view_encoding_enabled_for_doc_or_diff() {
+        let menus = application_menus();
+        let view_menu = menus.iter().find(|m| m.name == "View").expect("View menu found");
+        let encoding_submenu = view_menu
+            .items
+            .iter()
+            .find_map(|item| match item {
+                MenuItemDef::Submenu { label, items } if label.as_ref() == "Encoding" => Some(items),
+                _ => None,
+            })
+            .expect("Encoding submenu found");
+
+        let doc_only = MenuEditorState {
+            has_doc: true,
+            ..Default::default()
+        };
+        let diff_only = MenuEditorState {
+            has_diff: true,
+            ..Default::default()
+        };
+        let neither = MenuEditorState::default();
+
+        for item in &encoding_submenu[..4] {
+            let MenuItemDef::Action { is_enabled: Some(cond), .. } = item else {
+                panic!("Expected conditional primary encoding action");
+            };
+            assert!(cond(&doc_only));
+            assert!(cond(&diff_only));
+            assert!(!cond(&neither));
+        }
+
+        for category in &encoding_submenu[5..] {
+            let MenuItemDef::Submenu { items, .. } = category else {
+                panic!("Expected encoding category submenu");
+            };
+            assert!(!items.is_empty());
+            for item in items {
+                let MenuItemDef::Action { is_enabled: Some(cond), .. } = item else {
+                    panic!("Expected conditional secondary encoding action");
+                };
+                assert!(cond(&doc_only));
+                assert!(cond(&diff_only));
+                assert!(!cond(&neither));
+            }
+        }
+
+        let commands = super::collect_palette_commands(&menus);
+        let utf8_cmd = commands.iter().find(|c| c.title == "View: Encoding > UTF-8").expect("UTF-8 command in palette");
+        let sjis_cmd = commands
+            .iter()
+            .find(|c| c.title == "View: Encoding > Japanese > Shift-JIS")
+            .expect("Shift-JIS command in palette");
+        assert!(utf8_cmd.is_executable(&diff_only));
+        assert!(sjis_cmd.is_executable(&diff_only));
+        assert!(!utf8_cmd.is_executable(&neither));
+        assert!(!sjis_cmd.is_executable(&neither));
     }
 
     #[test]

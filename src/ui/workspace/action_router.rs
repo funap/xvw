@@ -494,10 +494,15 @@ impl Workspace {
                 editor.set_encoding(action.encoding);
                 cx.notify();
             });
-        }
-        if let Some(panel) = self.active_editor_view(cx) {
-            panel.update(cx, |panel, cx| {
-                panel.focus_hex_view(&FocusHexView, window, cx);
+            if let Some(panel) = self.active_editor_view(cx) {
+                panel.update(cx, |panel, cx| {
+                    panel.focus_hex_view(&FocusHexView, window, cx);
+                });
+            }
+        } else if let Some(diff_view) = self.active_diff_view(cx) {
+            diff_view.update(cx, |diff_view, cx| {
+                diff_view.set_encoding(action.encoding, cx);
+                diff_view.focus_active_side(window, cx);
             });
         }
         cx.notify();

@@ -7,6 +7,7 @@ use crate::ui::components::EventInterceptionExt;
 use crate::ui::pane::{PaneTree, PaneTreeEvent, TabContent};
 use crate::ui::panels::file_tree_view::{FileTreeView, FileTreeViewEvent};
 use crate::ui::panels::left_panel::{LeftPanel, LeftPanelTab};
+use crate::ui::views::diff_view::DiffView;
 use crate::ui::views::editor_view::EditorView;
 
 use crate::app_state::{AppState, InsertModeState};
@@ -16,7 +17,7 @@ use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
 use gpui_kit::component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_kit::component::{ActiveTheme, Root, WindowExt};
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 mod action_router;
@@ -88,6 +89,7 @@ pub struct Workspace {
     pub(crate) force_close: bool,
     focus_handle: FocusHandle,
     last_active_editor_id: Cell<Option<EntityId>>,
+    last_active_diff_id: Cell<Option<EntityId>>,
     last_active_editor: RefCell<Option<WeakEntity<Editor>>>,
     last_active_editor_view: RefCell<Option<WeakEntity<EditorView>>>,
 }
@@ -617,6 +619,7 @@ impl Workspace {
             force_close: false,
             focus_handle: cx.focus_handle(),
             last_active_editor_id: Cell::new(None),
+            last_active_diff_id: Cell::new(None),
             last_active_editor: RefCell::new(None),
             last_active_editor_view: RefCell::new(None),
         };
@@ -637,11 +640,65 @@ impl Workspace {
         self.pane_tree.read(cx).active_tab_as::<Entity<EditorView>>(cx)
     }
 
+    /// Returns the currently active `DiffView` tab in the active pane group, if any.
+    pub fn active_diff_view(&self, cx: &App) -> Option<Entity<DiffView>> {
+        self.pane_tree.read(cx).active_tab_as::<Entity<DiffView>>(cx)
+    }
+
+    /// Resolves the initial encoding for a newly opened diff tab, preferring any open editor
+    /// for either compared file before falling back to the global default encoding.
+    pub(crate) fn initial_diff_encoding(
+        &self,
+        left_document: &Arc<RwLock<crate::core::document::Document>>,
+        right_document: &Arc<RwLock<crate::core::document::Document>>,
+        cx: &App,
+    ) -> Encoding {
+        let normalize = |path: &Path| -> PathBuf {
+            if path.as_os_str().is_empty() {
+                PathBuf::new()
+            } else {
+                path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+            }
+        };
+
+        let left_path = left_document.read().map(|d| normalize(d.path())).unwrap_or_default();
+        let right_path = right_document.read().map(|d| normalize(d.path())).unwrap_or_default();
+        let default_encoding = *cx.global::<Encoding>();
+
+        let active_entry = self.active_editor(cx).and_then(|ed| {
+            let editor = ed.read(cx);
+            let path = editor.document.read().ok().map(|d| normalize(d.path()))?;
+            Some((path, editor.options.encoding))
+        });
+
+        let mut open_entries: Vec<(PathBuf, Encoding)> = Vec::new();
+        for group in self.pane_tree.read(cx).all_groups() {
+            for tab in &group.read(cx).tabs {
+                if let Some(ed) = tab.content.editor(cx) {
+                    let editor = ed.read(cx);
+                    if let Ok(doc) = editor.document.read() {
+                        open_entries.push((normalize(doc.path()), editor.options.encoding));
+                    }
+                }
+            }
+        }
+
+        let open_refs: Vec<(&Path, Encoding)> = open_entries.iter().map(|(p, enc)| (p.as_path(), *enc)).collect();
+        resolve_initial_diff_encoding(
+            default_encoding,
+            &left_path,
+            &right_path,
+            active_entry.as_ref().map(|(p, enc)| (p.as_path(), *enc)),
+            &open_refs,
+        )
+    }
+
     /// Evaluates the current editor state for menu and command enablement.
     pub fn menu_editor_state(&self, cx: &App) -> crate::ui::menus::MenuEditorState {
         use crate::ui::menus::MenuEditorState;
 
         let has_scratch = self.active_scratchpad(cx).is_some();
+        let has_diff = self.active_diff_view(cx).is_some();
         if let Some(editor) = self.active_editor(cx) {
             let ed = editor.read(cx);
             let is_ro = ed.is_read_only();
@@ -665,6 +722,7 @@ impl Workspace {
             };
             MenuEditorState {
                 has_doc: true,
+                has_diff,
                 is_read_only: is_ro,
                 can_undo: can_u,
                 can_redo: can_r,
@@ -677,6 +735,7 @@ impl Workspace {
             }
         } else {
             MenuEditorState {
+                has_diff,
                 is_read_only: true,
                 has_scratch,
                 ..Default::default()
@@ -957,6 +1016,34 @@ impl Workspace {
     }
 }
 
+/// Resolves the initial text encoding for a newly opened diff view.
+///
+/// Prefers the active editor's encoding if it matches either compared file,
+/// then any open editor matching the left file, then the right file, and
+/// finally falls back to the workspace default encoding.
+pub fn resolve_initial_diff_encoding(
+    default_encoding: Encoding,
+    left_path: &Path,
+    right_path: &Path,
+    active_editor: Option<(&Path, Encoding)>,
+    open_editors: &[(&Path, Encoding)],
+) -> Encoding {
+    let matches_non_empty = |candidate: &Path, target: &Path| !candidate.as_os_str().is_empty() && candidate == target;
+
+    if let Some((path, enc)) = active_editor
+        && (matches_non_empty(path, left_path) || matches_non_empty(path, right_path))
+    {
+        return enc;
+    }
+    if let Some((_, enc)) = open_editors.iter().find(|(path, _)| matches_non_empty(path, left_path)) {
+        return *enc;
+    }
+    if let Some((_, enc)) = open_editors.iter().find(|(path, _)| matches_non_empty(path, right_path)) {
+        return *enc;
+    }
+    default_encoding
+}
+
 /// Resolves the effective target item (e.g. Editor or EditorView) for panel inspection and navigation.
 ///
 /// If `current_active` is present, it takes priority.
@@ -1014,27 +1101,39 @@ impl Workspace {
         }
 
         let effective_editor = self.effective_editor(cx);
+        let active_diff_view = self.active_diff_view(cx);
         let pane_tree_is_empty = self.pane_tree.read(cx).is_empty();
 
         // A split can emit several state events while its new group is being
-        // assembled. Only the active editor entity affects these subscribers,
+        // assembled. Only the active editor/diff entity affects these subscribers,
         // so avoid rebuilding every side-panel subscription for duplicate
         // notifications.
         let effective_editor_id = effective_editor.as_ref().map(Entity::entity_id);
-        if self.last_active_editor_id.get() == effective_editor_id {
+        let active_diff_id = active_diff_view.as_ref().map(Entity::entity_id);
+        let editor_changed = self.last_active_editor_id.get() != effective_editor_id;
+        let diff_changed = self.last_active_diff_id.get() != active_diff_id;
+        if !editor_changed && !diff_changed {
             if pane_tree_is_empty {
                 self.focus_handle.focus(window, cx);
             }
             return;
         }
         self.last_active_editor_id.set(effective_editor_id);
+        self.last_active_diff_id.set(active_diff_id);
 
         self.status_bar.update(cx, |status_bar, cx| {
-            status_bar.set_active_editor(effective_editor.clone(), cx);
+            if editor_changed {
+                status_bar.set_active_editor(effective_editor.clone(), cx);
+            }
+            if diff_changed {
+                status_bar.set_active_diff_view(active_diff_view, cx);
+            }
         });
-        self.left_panel.update(cx, |panel, cx| {
-            panel.set_editor(effective_editor, cx);
-        });
+        if editor_changed {
+            self.left_panel.update(cx, |panel, cx| {
+                panel.set_editor(effective_editor, cx);
+            });
+        }
         self.on_focus_changed(cx);
 
         if pane_tree_is_empty {
@@ -1282,6 +1381,9 @@ impl Workspace {
             editor_view.update(cx, |view, cx| {
                 view.hex_view().read(cx).focus_handle(cx).focus(window, cx);
             });
+        } else if let Some(diff_view) = self.active_diff_view(cx) {
+            let handle = diff_view.read(cx).active_side_focus_handle(cx);
+            handle.focus(window, cx);
         } else if let Some(scratchpad) = self
             .pane_tree
             .read(cx)

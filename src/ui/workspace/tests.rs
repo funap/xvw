@@ -477,3 +477,59 @@ fn test_decompressed_document_starts_editable_and_clean() {
     assert!(!doc.is_dirty());
     assert!(!doc.is_read_only());
 }
+
+#[test]
+fn test_resolve_initial_diff_encoding_prefers_matching_active_editor() {
+    use super::resolve_initial_diff_encoding;
+    use crate::core::encoding::Encoding;
+    use std::path::Path;
+
+    let left = Path::new("/tmp/left.bin");
+    let right = Path::new("/tmp/right.bin");
+    let open = [(left, Encoding::Utf8), (right, Encoding::Utf16Le)];
+
+    assert_eq!(
+        resolve_initial_diff_encoding(Encoding::Ascii, left, right, Some((right, Encoding::ShiftJis)), &open),
+        Encoding::ShiftJis
+    );
+    assert_eq!(
+        resolve_initial_diff_encoding(Encoding::Ascii, left, right, Some((left, Encoding::EucJp)), &open),
+        Encoding::EucJp
+    );
+}
+
+#[test]
+fn test_resolve_initial_diff_encoding_ignores_unrelated_active_editor_and_falls_back() {
+    use super::resolve_initial_diff_encoding;
+    use crate::core::encoding::Encoding;
+    use std::path::Path;
+
+    let left = Path::new("/tmp/left.bin");
+    let right = Path::new("/tmp/right.bin");
+    let other = Path::new("/tmp/other.bin");
+
+    // Unrelated active editor is ignored; falls back to open left, then open right, then default
+    assert_eq!(
+        resolve_initial_diff_encoding(
+            Encoding::Ascii,
+            left,
+            right,
+            Some((other, Encoding::ShiftJis)),
+            &[(left, Encoding::Utf8), (right, Encoding::Utf16Be)],
+        ),
+        Encoding::Utf8
+    );
+    assert_eq!(
+        resolve_initial_diff_encoding(Encoding::Ascii, left, right, Some((other, Encoding::ShiftJis)), &[(right, Encoding::Utf16Le)]),
+        Encoding::Utf16Le
+    );
+    assert_eq!(
+        resolve_initial_diff_encoding(Encoding::Utf8, left, right, Some((other, Encoding::ShiftJis)), &[]),
+        Encoding::Utf8
+    );
+    // Empty/untitled paths never match
+    assert_eq!(
+        resolve_initial_diff_encoding(Encoding::Ascii, Path::new(""), Path::new(""), Some((Path::new(""), Encoding::Utf8)), &[]),
+        Encoding::Ascii
+    );
+}

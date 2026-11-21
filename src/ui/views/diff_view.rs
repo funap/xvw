@@ -4,6 +4,7 @@ use crate::ui::icon::IconName;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{Panel, PanelEvent};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use std::sync::{Arc, RwLock};
@@ -32,8 +33,12 @@ pub fn init(cx: &mut App) {
 pub struct DiffView {
     pub left_document: Arc<RwLock<Document>>,
     pub right_document: Arc<RwLock<Document>>,
+    left_editor: Entity<Editor>,
+    right_editor: Entity<Editor>,
     left_view: Entity<HexView>,
     right_view: Entity<HexView>,
+    encoding: Encoding,
+    last_focused_view_id: EntityId,
     diff_result: Option<DiffResult>,
     current_diff_index: usize,
     focus_handle: FocusHandle,
@@ -82,18 +87,26 @@ impl DiffView {
         let focus_handle = cx.focus_handle();
 
         let left_focus_handle = left_view.read(cx).focus_handle(cx);
-        cx.on_focus_in(&focus_handle, window, {
-            let left_focus_handle = left_focus_handle.clone();
-            let focus_handle = focus_handle.clone();
-            move |_, window, cx| {
-                if window.focused(cx).as_ref() == Some(&focus_handle) {
-                    left_focus_handle.focus(window, cx);
-                }
-            }
-        })
-        .detach();
+        let right_focus_handle = right_view.read(cx).focus_handle(cx);
+        let left_view_id = left_view.entity_id();
+        let right_view_id = right_view.entity_id();
 
         let mut subscriptions = Vec::new();
+
+        subscriptions.push(cx.on_focus_in(&left_focus_handle, window, move |this, _, _| {
+            this.last_focused_view_id = left_view_id;
+        }));
+        subscriptions.push(cx.on_focus_in(&right_focus_handle, window, move |this, _, _| {
+            this.last_focused_view_id = right_view_id;
+        }));
+        subscriptions.push(cx.on_focus_in(&focus_handle, window, {
+            let focus_handle = focus_handle.clone();
+            move |this, window, cx| {
+                if window.focused(cx).as_ref() == Some(&focus_handle) {
+                    this.focus_active_side(window, cx);
+                }
+            }
+        }));
 
         subscriptions.push(cx.subscribe_in(&left_view, window, |this, _left_view, event, _window, cx| {
             if this.sync_scroll && !this.is_syncing {
@@ -153,17 +166,15 @@ impl DiffView {
             });
         }));
 
-        let left_editor_clone = left_editor.clone();
-        let right_editor_clone = right_editor.clone();
         subscriptions.push(cx.observe_global::<crate::core::layout::BytesPerRow>(move |this, cx| {
             let bytes_per_row = cx.global::<crate::core::layout::BytesPerRow>().0;
-            left_editor_clone.update(cx, |editor, cx| {
+            this.left_editor.update(cx, |editor, cx| {
                 if editor.bytes_per_row() != bytes_per_row {
                     editor.set_bytes_per_row(bytes_per_row);
                     cx.notify();
                 }
             });
-            right_editor_clone.update(cx, |editor, cx| {
+            this.right_editor.update(cx, |editor, cx| {
                 if editor.bytes_per_row() != bytes_per_row {
                     editor.set_bytes_per_row(bytes_per_row);
                     cx.notify();
@@ -178,8 +189,12 @@ impl DiffView {
         Self {
             left_document,
             right_document,
+            left_editor,
+            right_editor,
             left_view,
             right_view,
+            encoding: default_encoding,
+            last_focused_view_id: left_view_id,
             diff_result: None,
             current_diff_index: 0,
             focus_handle,
@@ -187,6 +202,50 @@ impl DiffView {
             is_syncing: false,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Returns the current text encoding used by both diff panes.
+    pub fn encoding(&self) -> Encoding {
+        self.encoding
+    }
+
+    /// Updates the text encoding for both diff panes.
+    pub fn set_encoding(&mut self, encoding: Encoding, cx: &mut Context<Self>) {
+        if self.encoding == encoding {
+            return;
+        }
+        self.encoding = encoding;
+        self.left_editor.update(cx, |editor, cx| {
+            editor.set_encoding(encoding);
+            cx.notify();
+        });
+        self.right_editor.update(cx, |editor, cx| {
+            editor.set_encoding(encoding);
+            cx.notify();
+        });
+        self.left_view.update(cx, |view, cx| {
+            view.set_encoding(encoding, cx);
+        });
+        self.right_view.update(cx, |view, cx| {
+            view.set_encoding(encoding, cx);
+        });
+        cx.notify();
+    }
+
+    /// Returns the focus handle of whichever diff pane (`left_view` or `right_view`) was most recently focused.
+    pub fn active_side_focus_handle(&self, cx: &App) -> FocusHandle {
+        let target = if self.right_view.entity_id() == self.last_focused_view_id {
+            &self.right_view
+        } else {
+            &self.left_view
+        };
+        target.read(cx).focus_handle(cx)
+    }
+
+    /// Focuses whichever diff pane (`left_view` or `right_view`) was most recently focused.
+    pub fn focus_active_side(&self, window: &mut Window, cx: &mut App) {
+        let handle = self.active_side_focus_handle(cx);
+        handle.focus(window, cx);
     }
 
     pub fn set_diff_result(&mut self, result: DiffResult, cx: &mut Context<Self>) {
@@ -250,6 +309,7 @@ impl DiffView {
 
     pub fn swap_documents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         std::mem::swap(&mut self.left_document, &mut self.right_document);
+        std::mem::swap(&mut self.left_editor, &mut self.right_editor);
         std::mem::swap(&mut self.left_view, &mut self.right_view);
         self.refresh_diff(window, cx);
         cx.notify();
@@ -405,6 +465,8 @@ impl Render for DiffView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let sync_scroll = self.sync_scroll;
+        let current_encoding = self.encoding;
+        let diff_view_weak = cx.entity().downgrade();
         let diff_count = self
             .diff_result
             .as_ref()
@@ -465,6 +527,50 @@ impl Render for DiffView {
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.refresh_diff(window, cx);
                             })),
+                    )
+                    .child(div().w_px().h_4().bg(theme.border))
+                    .child(
+                        Button::new("diff-encoding")
+                            .ghost()
+                            .label(current_encoding.label())
+                            .dropdown_caret(true)
+                            .tooltip("Click to change Text Encoding")
+                            .dropdown_menu(move |menu, window, cx| {
+                                let menu = Encoding::primary_encodings().iter().copied().fold(menu, |menu, encoding| {
+                                    let view = diff_view_weak.clone();
+                                    menu.item(
+                                        PopupMenuItem::new(encoding.label())
+                                            .checked(encoding == current_encoding)
+                                            .on_click(move |_, window, cx| {
+                                                if let Some(view) = view.upgrade() {
+                                                    view.update(cx, |this, cx| {
+                                                        this.set_encoding(encoding, cx);
+                                                        this.focus_active_side(window, cx);
+                                                    });
+                                                }
+                                            }),
+                                    )
+                                });
+                                let menu = menu.separator();
+                                Encoding::secondary_categories().iter().fold(menu, |menu, (cat, encs)| {
+                                    let view = diff_view_weak.clone();
+                                    menu.submenu(cat.label(), window, cx, move |menu, _window, _cx| {
+                                        encs.iter().copied().fold(menu, |menu, encoding| {
+                                            let view = view.clone();
+                                            menu.item(PopupMenuItem::new(encoding.label()).checked(encoding == current_encoding).on_click(
+                                                move |_, window, cx| {
+                                                    if let Some(view) = view.upgrade() {
+                                                        view.update(cx, |this, cx| {
+                                                            this.set_encoding(encoding, cx);
+                                                            this.focus_active_side(window, cx);
+                                                        });
+                                                    }
+                                                },
+                                            ))
+                                        })
+                                    })
+                                })
+                            }),
                     )
                     .child(div().flex_1())
                     .child(
@@ -550,11 +656,25 @@ impl crate::ui::pane::WorkspaceTab for Entity<DiffView> {
     }
 
     fn create_split(&self, window: &mut Window, cx: &mut App) -> Option<crate::ui::pane::TabContent> {
-        let (left_doc, right_doc) = {
+        let (left_doc, right_doc, encoding, sync_scroll, diff_result) = {
             let dp = self.read(cx);
-            (dp.left_document.clone(), dp.right_document.clone())
+            (
+                dp.left_document.clone(),
+                dp.right_document.clone(),
+                dp.encoding(),
+                dp.sync_scroll,
+                dp.diff_result.clone(),
+            )
         };
-        let new_diff = cx.new(|cx| DiffView::new(left_doc, right_doc, window, cx));
+        let new_diff = cx.new(|cx| {
+            let mut view = DiffView::new(left_doc, right_doc, window, cx);
+            view.set_encoding(encoding, cx);
+            view.sync_scroll = sync_scroll;
+            if let Some(result) = diff_result {
+                view.set_diff_result(result, cx);
+            }
+            view
+        });
         Some(crate::ui::pane::TabContent::new(new_diff))
     }
 }

@@ -154,8 +154,10 @@ impl Workspace {
 
                                 let _ = workspace.update_in(window, |workspace_view, window, cx| {
                                     use crate::ui::views::diff_view::DiffView;
+                                    let initial_encoding = workspace_view.initial_diff_encoding(&left_document, &right_document, cx);
                                     let diff_view = cx.new(|cx| {
                                         let mut view = DiffView::new(left_document.clone(), right_document.clone(), window, cx);
+                                        view.set_encoding(initial_encoding, cx);
                                         view.set_diff_result(diff_result.clone(), cx);
                                         view
                                     });
