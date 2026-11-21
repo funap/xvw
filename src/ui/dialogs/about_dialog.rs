@@ -4,7 +4,7 @@ use gpui_kit::component::dialog::DialogFooter;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme as _, Icon, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
-use gpui_kit::{App, FontWeight, MouseButton, Window, div, px};
+use gpui_kit::{App, FontWeight, MouseButton, ObjectFit, Window, div, img, px};
 
 use crate::ui::icon::IconName;
 
@@ -13,6 +13,7 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const APP_DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
 pub const APP_REPOSITORY: &str = "https://github.com/funap/xvw";
 pub const APP_LICENSE: &str = "MIT";
+pub const APP_ICON_PATH: &str = "icons/xvw.svg";
 
 /// Returns current platform and architecture target (e.g., "macos-aarch64").
 pub fn app_target() -> String {
@@ -51,7 +52,7 @@ pub fn open_about_dialog(window: &mut Window, cx: &mut App) {
                 h_flex()
                     .items_center()
                     .gap_2()
-                    .child(Icon::new(IconName::Binary).size(px(20.0)).text_color(theme.primary))
+                    .child(Icon::new(IconName::Info).size(px(20.0)).text_color(theme.primary))
                     .child(
                         div()
                             .text_base()
@@ -67,47 +68,32 @@ pub fn open_about_dialog(window: &mut Window, cx: &mut App) {
                         .gap_4()
                         .py_2()
                         .child(
-                            h_flex()
-                                .items_center()
-                                .gap_3()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .size(px(48.0))
-                                        .rounded_lg()
-                                        .bg(theme.secondary)
-                                        .border_1()
-                                        .border_color(theme.border)
-                                        .child(Icon::new(IconName::Binary).size(px(28.0)).text_color(theme.primary)),
-                                )
-                                .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .gap_1()
-                                        .child(
-                                            h_flex()
-                                                .items_baseline()
-                                                .gap_2()
-                                                .child(div().text_xl().font_weight(FontWeight::BOLD).text_color(theme.foreground).child(APP_NAME))
-                                                .child(
-                                                    div()
-                                                        .px_1p5()
-                                                        .py_0p5()
-                                                        .rounded_md()
-                                                        .bg(theme.secondary)
-                                                        .border_1()
-                                                        .border_color(theme.border)
-                                                        .text_xs()
-                                                        .font_weight(FontWeight::MEDIUM)
-                                                        .text_color(theme.muted_foreground)
-                                                        .child(format!("v{APP_VERSION}")),
-                                                ),
-                                        )
-                                        .child(div().text_xs().text_color(theme.muted_foreground).child(APP_DESCRIPTION)),
-                                ),
+                            h_flex().items_center().gap_3().child(render_app_icon(theme)).child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap_1()
+                                    .child(
+                                        h_flex()
+                                            .items_baseline()
+                                            .gap_2()
+                                            .child(div().text_xl().font_weight(FontWeight::BOLD).text_color(theme.foreground).child(APP_NAME))
+                                            .child(
+                                                div()
+                                                    .px_1p5()
+                                                    .py_0p5()
+                                                    .rounded_md()
+                                                    .bg(theme.secondary)
+                                                    .border_1()
+                                                    .border_color(theme.border)
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(theme.muted_foreground)
+                                                    .child(format!("v{APP_VERSION}")),
+                                            ),
+                                    )
+                                    .child(div().text_xs().text_color(theme.muted_foreground).child(APP_DESCRIPTION)),
+                            ),
                         )
                         .child(
                             v_flex()
@@ -159,6 +145,30 @@ pub fn open_about_dialog(window: &mut Window, cx: &mut App) {
     });
 }
 
+fn render_app_icon(theme: &gpui_kit::component::Theme) -> impl IntoElement {
+    let fallback_primary = theme.primary;
+    let fallback_secondary = theme.secondary;
+    let fallback_border = theme.border;
+
+    img(APP_ICON_PATH)
+        .size(px(64.0))
+        .flex_shrink_0()
+        .object_fit(ObjectFit::Contain)
+        .with_fallback(move || {
+            div()
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(64.0))
+                .rounded_lg()
+                .bg(fallback_secondary)
+                .border_1()
+                .border_color(fallback_border)
+                .child(Icon::new(IconName::Binary).size(px(32.0)).text_color(fallback_primary))
+                .into_any_element()
+        })
+}
+
 fn render_info_row(label: &'static str, value: &str, theme: &gpui_kit::component::Theme) -> impl IntoElement {
     h_flex()
         .justify_between()
@@ -188,5 +198,29 @@ mod tests {
         let target = app_target();
         assert!(target.contains('-'));
         assert_eq!(target, format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH));
+    }
+
+    #[test]
+    fn test_app_icon_asset_loads_and_renders() {
+        use crate::assets::Assets;
+        use gpui_kit::{AssetSource as _, SvgRenderer};
+        use std::sync::Arc;
+
+        assert_eq!(APP_ICON_PATH, "icons/xvw.svg");
+
+        let bytes = Assets.load(APP_ICON_PATH).expect("load app icon asset").expect("app icon asset exists");
+        let svg_text = std::str::from_utf8(&bytes).expect("app icon SVG is valid UTF-8");
+        assert!(svg_text.contains("<svg"));
+
+        let renderer = SvgRenderer::new(Arc::new(Assets));
+        let rendered = renderer.render_single_frame(&bytes, 0.25).expect("render app icon SVG");
+        assert_eq!(rendered.frame_count(), 1);
+        let size = rendered.size(0);
+        assert!(i32::from(size.width) > 0 && size.width == size.height);
+        let bgra = rendered.as_bytes(0).expect("rendered frame bytes");
+        assert!(
+            bgra.as_chunks::<4>().0.iter().any(|px| px[3] > 0),
+            "rendered icon should contain visible pixels"
+        );
     }
 }
