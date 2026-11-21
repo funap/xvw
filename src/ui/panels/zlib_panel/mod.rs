@@ -5,9 +5,7 @@ mod tests;
 
 pub use table::ZlibTableDelegate;
 
-use self::model::{
-    CachedZlibState, MAX_CACHED_EDITORS, ScanSignature, ZlibResultRow, ZlibStateCache, build_zlib_rows, is_at_vertical_boundary, sort_zlib_indices,
-};
+use self::model::{CachedZlibState, MAX_CACHED_EDITORS, ScanSignature, ZlibResultRow, ZlibStateCache, build_zlib_rows, sort_zlib_indices};
 use self::table::{CopyAddress, CopyPreview, DecompressEntry};
 use crate::app_state::AppState;
 use crate::core::buffer::Buffer;
@@ -15,7 +13,7 @@ use crate::core::dealloc::discard_in_background;
 use crate::core::editor::Editor;
 use crate::core::zlib::ZlibError;
 use crate::ui::icon::IconName;
-use gpui_kit::base::actions::{Cancel, SelectDown, SelectPageDown, SelectPageUp, SelectUp};
+use gpui_kit::base::actions::Cancel;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::table::{ColumnSort, DataTable, TableEvent, TableState};
@@ -448,12 +446,6 @@ impl ZlibPanel {
         cx.notify();
     }
 
-    fn is_at_vertical_boundary(&self, moving_down: bool, cx: &App) -> bool {
-        let table = self.table_state.read(cx);
-        let rows_count = table.delegate().visible_indices().len();
-        is_at_vertical_boundary(moving_down, table.selected_row(), rows_count)
-    }
-
     fn sorted_indices(&self) -> Vec<usize> {
         let mut indices: Vec<usize> = (0..self.rows.len()).collect();
         if self.sort_column.is_some_and(|(_, sort)| sort != ColumnSort::Default) {
@@ -667,29 +659,6 @@ impl Render for ZlibPanel {
                 .flex_1()
                 .overflow_hidden()
                 .child(DataTable::new(&self.table_state).bordered(false))
-                // Stop vertical selection actions at the first/last row before `DataTable`
-                // handles them so selection neither wraps nor triggers `set_selected_row`
-                // scrolling at the boundary.
-                .capture_action(cx.listener(|this, _: &SelectUp, _window, cx| {
-                    if this.is_at_vertical_boundary(false, cx) {
-                        cx.stop_propagation();
-                    }
-                }))
-                .capture_action(cx.listener(|this, _: &SelectDown, _window, cx| {
-                    if this.is_at_vertical_boundary(true, cx) {
-                        cx.stop_propagation();
-                    }
-                }))
-                .capture_action(cx.listener(|this, _: &SelectPageUp, _window, cx| {
-                    if this.is_at_vertical_boundary(false, cx) {
-                        cx.stop_propagation();
-                    }
-                }))
-                .capture_action(cx.listener(|this, _: &SelectPageDown, _window, cx| {
-                    if this.is_at_vertical_boundary(true, cx) {
-                        cx.stop_propagation();
-                    }
-                }))
                 .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                     if event.keystroke.key == "escape" {
                         this.dismiss_table(&DismissTable, window, cx);

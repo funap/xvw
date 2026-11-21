@@ -136,20 +136,6 @@ impl AddressLabelCache {
     }
 }
 
-/// Returns `true` when vertical keyboard navigation in `moving_down` direction is already at the table edge
-/// and must stop without wrapping or triggering redundant scrolling.
-#[inline]
-pub(super) const fn is_at_vertical_boundary(moving_down: bool, selected_row: Option<usize>, rows_count: usize) -> bool {
-    if rows_count == 0 {
-        return true;
-    }
-    match selected_row {
-        Some(0) if !moving_down => true,
-        Some(row) if moving_down && row + 1 >= rows_count => true,
-        _ => false,
-    }
-}
-
 /// Sorts row indices in place according to the active column sort order.
 pub(super) fn sort_zlib_indices(rows: &[ZlibResultRow], indices: &mut [usize], sort_column: Option<(usize, ColumnSort)>) {
     let Some((col_ix, sort)) = sort_column else {

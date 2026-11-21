@@ -394,6 +394,7 @@ impl StringsPanel {
                 .col_selectable(false)
                 .col_resizable(true)
                 .col_movable(false)
+                .loop_selection(false)
         });
 
         let table_subscription = cx.subscribe_in(&table_state, window, |this, _, event: &TableEvent, window, cx| match event {

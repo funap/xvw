@@ -1,8 +1,5 @@
 use super::ZlibPanelEvent;
-use super::model::{
-    AddressLabelCache, CachedZlibState, ScanSignature, ZlibResultRow, ZlibStateCache, build_zlib_rows, is_at_vertical_boundary, sort_zlib_indices,
-    zlib_cell_colors,
-};
+use super::model::{AddressLabelCache, CachedZlibState, ScanSignature, ZlibResultRow, ZlibStateCache, build_zlib_rows, sort_zlib_indices, zlib_cell_colors};
 use crate::core::address_map::{AddressMap, MemorySegment};
 use crate::core::format::HexCase;
 use crate::core::zlib::ZlibMatch;
@@ -92,29 +89,6 @@ fn test_sort_zlib_indices_all_columns() {
 
     sort_zlib_indices(&rows, &mut indices, Some((3, ColumnSort::Default)));
     assert_eq!(indices, vec![0, 1, 2]);
-}
-
-#[test]
-fn test_is_at_vertical_boundary_stops_at_ends_without_wrapping() {
-    // Empty table always blocks vertical navigation
-    assert!(is_at_vertical_boundary(false, None, 0));
-    assert!(is_at_vertical_boundary(true, None, 0));
-
-    // Single row blocks both Up and Down when selected
-    assert!(is_at_vertical_boundary(false, Some(0), 1));
-    assert!(is_at_vertical_boundary(true, Some(0), 1));
-
-    // Multi-row table: stops at top on Up and bottom on Down, allows interior navigation
-    assert!(is_at_vertical_boundary(false, Some(0), 5));
-    assert!(!is_at_vertical_boundary(true, Some(0), 5));
-    assert!(!is_at_vertical_boundary(false, Some(2), 5));
-    assert!(!is_at_vertical_boundary(true, Some(2), 5));
-    assert!(!is_at_vertical_boundary(false, Some(4), 5));
-    assert!(is_at_vertical_boundary(true, Some(4), 5));
-
-    // No selection yet allows table to select the initial row
-    assert!(!is_at_vertical_boundary(false, None, 5));
-    assert!(!is_at_vertical_boundary(true, None, 5));
 }
 
 #[test]

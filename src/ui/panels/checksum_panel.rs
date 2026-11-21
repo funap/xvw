@@ -110,6 +110,17 @@ fn selected_range_for_checksum(editor: &Editor) -> Option<Range<usize>> {
     if editor.has_selection() { editor.selected_range_or_cursor() } else { None }
 }
 
+fn step_algorithm_selection(current: Option<ChecksumAlgorithm>, moving_down: bool) -> Option<ChecksumAlgorithm> {
+    let algos = ChecksumAlgorithm::ALL;
+    let last_idx = algos.len().checked_sub(1)?;
+    let next_idx = match current.and_then(|a| algos.iter().position(|&x| x == a)) {
+        Some(idx) if moving_down => (idx + 1).min(last_idx),
+        Some(idx) => idx.saturating_sub(1),
+        None => 0,
+    };
+    algos.get(next_idx).copied()
+}
+
 const CONTEXT: &str = "ChecksumPanel";
 
 actions!(checksum_panel, [Dismiss, FocusPanel, CopySelected, SelectPrevRow, SelectNextRow, ClearResults]);
@@ -347,26 +358,22 @@ impl ChecksumPanel {
         if self.results.is_none() {
             return;
         }
-        let algos = ChecksumAlgorithm::ALL;
-        let next_idx = match self.selected_algorithm.and_then(|a| algos.iter().position(|&x| x == a)) {
-            Some(0) | None => algos.len().saturating_sub(1),
-            Some(idx) => idx - 1,
-        };
-        self.selected_algorithm = algos.get(next_idx).copied();
-        cx.notify();
+        let next = step_algorithm_selection(self.selected_algorithm, false);
+        if next != self.selected_algorithm {
+            self.selected_algorithm = next;
+            cx.notify();
+        }
     }
 
     fn select_next_row(&mut self, _: &SelectNextRow, _: &mut Window, cx: &mut Context<Self>) {
         if self.results.is_none() {
             return;
         }
-        let algos = ChecksumAlgorithm::ALL;
-        let next_idx = match self.selected_algorithm.and_then(|a| algos.iter().position(|&x| x == a)) {
-            Some(idx) if idx + 1 < algos.len() => idx + 1,
-            _ => 0,
-        };
-        self.selected_algorithm = algos.get(next_idx).copied();
-        cx.notify();
+        let next = step_algorithm_selection(self.selected_algorithm, true);
+        if next != self.selected_algorithm {
+            self.selected_algorithm = next;
+            cx.notify();
+        }
     }
 
     fn copy_selected(&mut self, _: &CopySelected, window: &mut Window, cx: &mut Context<Self>) {
@@ -1465,7 +1472,9 @@ impl Focusable for ChecksumPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::{CalculationRange, format_byte_size, resolve_target_range, split_hex_chunks, truncate_menu_preview};
+    use super::{
+        CalculationRange, ChecksumAlgorithm, format_byte_size, resolve_target_range, split_hex_chunks, step_algorithm_selection, truncate_menu_preview,
+    };
 
     #[test]
     fn test_format_byte_size() {
@@ -1502,5 +1511,22 @@ mod tests {
         let truncated = truncate_menu_preview(sha, 20);
         assert_eq!(truncated, "d7a8fbb3...f37c9e592");
         assert!(truncated.len() <= 20);
+    }
+
+    #[test]
+    fn test_step_algorithm_selection_stops_at_boundaries() {
+        let algos = ChecksumAlgorithm::ALL;
+        let first = algos[0];
+        let second = algos[1];
+        let last = algos[algos.len() - 1];
+        let prev_last = algos[algos.len() - 2];
+
+        assert_eq!(step_algorithm_selection(None, false), Some(first));
+        assert_eq!(step_algorithm_selection(None, true), Some(first));
+        assert_eq!(step_algorithm_selection(Some(first), false), Some(first));
+        assert_eq!(step_algorithm_selection(Some(first), true), Some(second));
+        assert_eq!(step_algorithm_selection(Some(second), false), Some(first));
+        assert_eq!(step_algorithm_selection(Some(last), true), Some(last));
+        assert_eq!(step_algorithm_selection(Some(last), false), Some(prev_last));
     }
 }
