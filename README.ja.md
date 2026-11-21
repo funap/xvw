@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ xvw
+# xvw
 
 ### **ZedのGPUIフレームワークで構築された、モダンで高速なクロスプラットフォーム・バイナリエディタ**
 
@@ -106,14 +106,14 @@
   1. `xvw-<version>-aarch64-apple-darwin.dmg` のダウンロード。
   2. ディスクイメージを開き、**`xvw.app`** を **Applications**（アプリケーション）フォルダへドラッグ＆ドロップ。
   
-  > [!TIP]
-  > **macOS: 「“xvw”は壊れているため開けません」と警告される場合**  
-  > macOS Gatekeeperによる起動ブロック。オープンソース版のためApple開発者プログラムによる公証（Notarization）未取得によるものであり、バイナリ自体は安全かつ正常。  
-  > 実行許可の手順（ターミナルでのコマンド実行）:  
-  > ```bash
-  > xattr -cr /Applications/xvw.app
-  > ```
-  > *(または Finder 上で `xvw.app` を **Controlキーを押しながらクリック**（右クリック）→「**開く**」を選択し、確認ダイアログで「**開く**」を実行)*
+> [!TIP]
+> **macOS: 「“xvw”は壊れているため開けません」と警告される場合**  
+> macOS Gatekeeperによる起動ブロック。オープンソース版のためApple開発者プログラムによる公証（Notarization）未取得によるものであり、バイナリ自体は安全かつ正常。  
+> 実行許可の手順（ターミナルでのコマンド実行）:  
+> ```bash
+> xattr -cr /Applications/xvw.app
+> ```
+> *(または Finder 上で `xvw.app` を **Controlキーを押しながらクリック**（右クリック）→「**開く**」を選択し、確認ダイアログで「**開く**」を実行)*
 
 - **Linux** (`.deb` / `.rpm`):
   - **Debian / Ubuntu**: `sudo dpkg -i xvw_<version>_linux_amd64.deb`

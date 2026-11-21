@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ xvw
+# xvw
 
 ### **The modern, cross-platform hex editor powered by Zed's GPUI.**
 
@@ -106,14 +106,14 @@ Download the latest release for your operating system from the [Releases](https:
   1. Download `xvw-<version>-aarch64-apple-darwin.dmg`.
   2. Open the disk image and drag **`xvw.app`** into your **Applications** folder.
   
-  > [!TIP]
-  > **macOS: "“xvw” is damaged and can’t be opened"**  
-  > If macOS Gatekeeper blocks the app with a "damaged" warning, it is because open-source releases are not notarized through Apple's paid developer program. The binary is completely safe and intact.  
-  > To allow `xvw` to run, open **Terminal** and run:
-  > ```bash
-  > xattr -cr /Applications/xvw.app
-  > ```
-  > *(Alternatively, **Control-click** (right-click) `xvw.app` in Finder, select **Open**, and click **Open** in the confirmation dialog).*
+> [!TIP]
+> **macOS: "“xvw” is damaged and can’t be opened"**  
+> If macOS Gatekeeper blocks the app with a "damaged" warning, it is because open-source releases are not notarized through Apple's paid developer program. The binary is completely safe and intact.  
+> To allow `xvw` to run, open **Terminal** and run:
+> ```bash
+> xattr -cr /Applications/xvw.app
+> ```
+> *(Alternatively, **Control-click** (right-click) `xvw.app` in Finder, select **Open**, and click **Open** in the confirmation dialog).*
 
 - **Linux** (`.deb` / `.rpm`):
   - **Debian / Ubuntu**: `sudo dpkg -i xvw_<version>_linux_amd64.deb`
