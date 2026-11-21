@@ -5,7 +5,6 @@ use crate::core::zlib::ZlibMatch;
 use gpui_kit::component::table::ColumnSort;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::{EntityId, Hsla, SharedString};
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 /// Maximum number of per-editor scan states retained in [`ZlibStateCache`].
@@ -137,60 +136,18 @@ impl AddressLabelCache {
     }
 }
 
+/// Returns `true` when vertical keyboard navigation in `moving_down` direction is already at the table edge
+/// and must stop without wrapping or triggering redundant scrolling.
 #[inline]
-fn contains_ignore_case(haystack: &str, lowercase_needle: &str) -> bool {
-    if lowercase_needle.is_empty() {
+pub(super) const fn is_at_vertical_boundary(moving_down: bool, selected_row: Option<usize>, rows_count: usize) -> bool {
+    if rows_count == 0 {
         return true;
     }
-    if haystack.is_ascii() && lowercase_needle.is_ascii() {
-        let h = haystack.as_bytes();
-        let n = lowercase_needle.as_bytes();
-        return h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n));
+    match selected_row {
+        Some(0) if !moving_down => true,
+        Some(row) if moving_down && row + 1 >= rows_count => true,
+        _ => false,
     }
-    haystack.to_lowercase().contains(lowercase_needle)
-}
-
-/// Returns `true` if `lowercase_filter` consists solely of characters that can appear in `0x<hex>`.
-#[inline]
-pub(super) fn can_match_hex_address(lowercase_filter: &str) -> bool {
-    !lowercase_filter.is_empty() && lowercase_filter.bytes().all(|b| b.is_ascii_hexdigit() || b == b'x')
-}
-
-/// Filters `rows` by case-insensitive substring match on preview or formatted physical address.
-///
-/// Reuses a single stack/scratch buffer for address matching (zero per-row heap allocations)
-/// and skips address mapping altogether when `lowercase_filter` cannot match a hex address.
-pub(super) fn filter_zlib_indices(rows: &[ZlibResultRow], address_map: Option<&AddressMap>, lowercase_filter: &str) -> Vec<usize> {
-    if lowercase_filter.is_empty() {
-        return (0..rows.len()).collect();
-    }
-
-    let check_address = can_match_hex_address(lowercase_filter);
-    let mut addr_buf = if check_address { String::with_capacity(24) } else { String::new() };
-    let mut matched = Vec::new();
-
-    for (index, item) in rows.iter().enumerate() {
-        if contains_ignore_case(item.preview.as_ref(), lowercase_filter) {
-            matched.push(index);
-            continue;
-        }
-        if check_address {
-            let address = address_map.map_or(item.offset, |map| map.offset_to_address(item.offset));
-            addr_buf.clear();
-            let _ = write!(&mut addr_buf, "0x{address:08x}");
-            if addr_buf.contains(lowercase_filter) {
-                matched.push(index);
-                continue;
-            }
-            addr_buf.clear();
-            let _ = write!(&mut addr_buf, "0x{address:x}");
-            if addr_buf.contains(lowercase_filter) {
-                matched.push(index);
-            }
-        }
-    }
-
-    matched
 }
 
 /// Sorts row indices in place according to the active column sort order.

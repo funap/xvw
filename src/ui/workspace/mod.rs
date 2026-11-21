@@ -390,7 +390,6 @@ impl Workspace {
                     left_read.search_panel.read(cx).focus_handle(cx),
                     left_read.strings_panel.read(cx).focus_handle(cx),
                     left_read.zlib_panel.read(cx).focus_handle(cx),
-                    left_read.zlib_panel.read(cx).filter_input_focus_handle(cx),
                     left_read.struct_tree.read(cx).focus_handle(cx),
                     left_read.data_inspector.read(cx).focus_handle(cx),
                     left_read.visual_map.read(cx).focus_handle(cx),

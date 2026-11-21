@@ -1,7 +1,7 @@
 use super::ZlibPanelEvent;
 use super::model::{
-    AddressLabelCache, CachedZlibState, ScanSignature, ZlibResultRow, ZlibStateCache, build_zlib_rows, can_match_hex_address, filter_zlib_indices,
-    sort_zlib_indices, zlib_cell_colors,
+    AddressLabelCache, CachedZlibState, ScanSignature, ZlibResultRow, ZlibStateCache, build_zlib_rows, is_at_vertical_boundary, sort_zlib_indices,
+    zlib_cell_colors,
 };
 use crate::core::address_map::{AddressMap, MemorySegment};
 use crate::core::format::HexCase;
@@ -95,24 +95,26 @@ fn test_sort_zlib_indices_all_columns() {
 }
 
 #[test]
-fn test_filter_zlib_indices_by_preview_and_address() {
-    let rows = vec![make_row(0x10, 24, 40, "PNG image chunk"), make_row(0x40, 18, 20, "89 50 4E 47")];
-    let map = AddressMap::from_segments(vec![MemorySegment {
-        buffer_offset: 0,
-        address: 0x1000,
-        length: 0x100,
-    }]);
+fn test_is_at_vertical_boundary_stops_at_ends_without_wrapping() {
+    // Empty table always blocks vertical navigation
+    assert!(is_at_vertical_boundary(false, None, 0));
+    assert!(is_at_vertical_boundary(true, None, 0));
 
-    assert!(!can_match_hex_address("chunk"));
-    assert!(!can_match_hex_address("png"));
-    assert!(can_match_hex_address("0x1040"));
-    assert!(can_match_hex_address("00001010"));
+    // Single row blocks both Up and Down when selected
+    assert!(is_at_vertical_boundary(false, Some(0), 1));
+    assert!(is_at_vertical_boundary(true, Some(0), 1));
 
-    assert_eq!(filter_zlib_indices(&rows, Some(&map), ""), vec![0, 1]);
-    assert_eq!(filter_zlib_indices(&rows, Some(&map), "chunk"), vec![0]);
-    assert_eq!(filter_zlib_indices(&rows, None, "png"), vec![0]);
-    assert_eq!(filter_zlib_indices(&rows, Some(&map), "0x1040"), vec![1]);
-    assert_eq!(filter_zlib_indices(&rows, Some(&map), "00001010"), vec![0]);
+    // Multi-row table: stops at top on Up and bottom on Down, allows interior navigation
+    assert!(is_at_vertical_boundary(false, Some(0), 5));
+    assert!(!is_at_vertical_boundary(true, Some(0), 5));
+    assert!(!is_at_vertical_boundary(false, Some(2), 5));
+    assert!(!is_at_vertical_boundary(true, Some(2), 5));
+    assert!(!is_at_vertical_boundary(false, Some(4), 5));
+    assert!(is_at_vertical_boundary(true, Some(4), 5));
+
+    // No selection yet allows table to select the initial row
+    assert!(!is_at_vertical_boundary(false, None, 5));
+    assert!(!is_at_vertical_boundary(true, None, 5));
 }
 
 #[test]

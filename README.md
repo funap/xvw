@@ -46,7 +46,7 @@ Engineered to be snappy, intuitive, and versatile for reverse engineering, firmw
 - 📊 **2D Visual Map & Entropy View**  
   Render byte values as a 2D bitmap with grayscale, byte-category, and rainbow color modes to visually identify code segments, compressed sections, and encrypted payloads.
 - 📦 **Embedded Zlib Stream Search & Extraction**  
-  Scan binaries for embedded zlib-compressed streams (with Adler-32 checksum verification) in the Zlib panel, filter and sort results by address, size, or preview, jump straight to each stream, and open the decompressed payload in a new editable document tab.
+  Scan binaries for embedded zlib-compressed streams (with Adler-32 checksum verification) in the Zlib panel, sort results by address, size, or preview, jump straight to each stream, and open the decompressed payload in a new editable document tab.
 - ⚖️ **Synchronized Side-by-Side Diff**  
   Compare two binary files side by side with synchronized scrolling, difference counters, and clear delta highlights.
 - 📝 **Integrated Scratchpad**  

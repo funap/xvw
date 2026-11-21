@@ -6,8 +6,7 @@ mod tests;
 pub use table::ZlibTableDelegate;
 
 use self::model::{
-    CachedZlibState, MAX_CACHED_EDITORS, ScanSignature, ZlibResultRow, ZlibStateCache, build_zlib_rows, can_match_hex_address, filter_zlib_indices,
-    sort_zlib_indices,
+    CachedZlibState, MAX_CACHED_EDITORS, ScanSignature, ZlibResultRow, ZlibStateCache, build_zlib_rows, is_at_vertical_boundary, sort_zlib_indices,
 };
 use self::table::{CopyAddress, CopyPreview, DecompressEntry};
 use crate::app_state::AppState;
@@ -16,8 +15,8 @@ use crate::core::dealloc::discard_in_background;
 use crate::core::editor::Editor;
 use crate::core::zlib::ZlibError;
 use crate::ui::icon::IconName;
+use gpui_kit::base::actions::{Cancel, SelectDown, SelectPageDown, SelectPageUp, SelectUp};
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::{self, Input, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::table::{ColumnSort, DataTable, TableEvent, TableState};
 use gpui_kit::component::{ActiveTheme as _, Disableable, Sizable, Size, WindowExt as _, h_flex};
@@ -28,7 +27,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-actions!(zlib_panel, [FocusTable, ClearResults, ConfirmSelect, DismissTable]);
+actions!(zlib_panel, [ClearResults, ConfirmSelect, DismissTable]);
 
 const CONTEXT: &str = "ZlibPanel";
 
@@ -41,7 +40,6 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("escape", DismissTable, Some("ZlibPanel")),
         KeyBinding::new("escape", DismissTable, Some("ZlibPanel > DataTable")),
         KeyBinding::new("enter", ConfirmSelect, Some("ZlibPanel > DataTable")),
-        KeyBinding::new("down", FocusTable, Some("ZlibPanel > Input")),
     ]);
 }
 
@@ -73,7 +71,6 @@ pub struct ZlibPanel {
     editor: Option<Entity<Editor>>,
     focus_handle: FocusHandle,
     table_state: Entity<TableState<ZlibTableDelegate>>,
-    filter_input: Entity<InputState>,
     is_scanning: bool,
     is_decompressing: bool,
     rows: Arc<[ZlibResultRow]>,
@@ -92,7 +89,6 @@ pub struct ZlibPanel {
     scan_signature: Option<ScanSignature>,
     cached_states: ZlibStateCache,
     _table_subscription: Option<Subscription>,
-    _filter_subscription: Option<Subscription>,
     _editor_subscription: Option<Subscription>,
 }
 
@@ -120,6 +116,7 @@ impl ZlibPanel {
                 .col_selectable(false)
                 .col_resizable(true)
                 .col_movable(false)
+                .loop_selection(false)
         });
 
         let table_subscription = cx.subscribe_in(&table_state, window, |this, _, event: &TableEvent, window, cx| match event {
@@ -140,20 +137,10 @@ impl ZlibPanel {
             _ => {}
         });
 
-        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter by address or preview..."));
-
-        let filter_subscription = cx.subscribe_in(&filter_input, window, |this, _, event: &input::InputEvent, _window, cx| {
-            if let input::InputEvent::Change = event {
-                this.sync_selection_to_filter(cx);
-                cx.notify();
-            }
-        });
-
         let mut this = Self {
             editor: None,
             focus_handle,
             table_state,
-            filter_input,
             is_scanning: false,
             is_decompressing: false,
             rows: Arc::default(),
@@ -172,17 +159,11 @@ impl ZlibPanel {
             scan_signature: None,
             cached_states: ZlibStateCache::new(MAX_CACHED_EDITORS),
             _table_subscription: Some(table_subscription),
-            _filter_subscription: Some(filter_subscription),
             _editor_subscription: None,
         };
 
         this.set_editor(editor, cx);
         this
-    }
-
-    /// Returns the focus handle for the panel's filter text input.
-    pub fn filter_input_focus_handle(&self, cx: &App) -> FocusHandle {
-        self.filter_input.read(cx).focus_handle(cx)
     }
 
     /// Rebinds the panel to `editor`, caching previous scanned results per editor instance.
@@ -208,7 +189,7 @@ impl ZlibPanel {
 
         let restored = next_editor_id.is_some_and(|editor_id| self.restore_cached_state(editor_id, cx));
         if !restored {
-            self.sync_selection_to_filter(cx);
+            self.sync_table_state(cx);
         }
         cx.notify();
     }
@@ -254,7 +235,7 @@ impl ZlibPanel {
         self.is_truncated = cached.is_truncated;
         self.selected_index = cached.selected_index;
         self.has_scanned = true;
-        self.sync_selection_to_filter(cx);
+        self.sync_table_state(cx);
         true
     }
 
@@ -274,7 +255,7 @@ impl ZlibPanel {
         }
         self.invalidate_scan();
         self.scan_signature = signature;
-        self.sync_selection_to_filter(cx);
+        self.sync_table_state(cx);
         cx.notify();
     }
 
@@ -305,14 +286,14 @@ impl ZlibPanel {
 
     fn reset_results(&mut self, cx: &mut Context<Self>) {
         self.invalidate_scan();
-        self.sync_selection_to_filter(cx);
+        self.sync_table_state(cx);
         cx.notify();
     }
 
     /// Scans the active document on a background thread via [`crate::service::ZlibService`].
     pub fn trigger_scan(&mut self, cx: &mut Context<Self>) {
         self.invalidate_scan();
-        self.sync_selection_to_filter(cx);
+        self.sync_table_state(cx);
         let generation = self.scan_generation;
         self.scan_signature = self.current_signature(cx);
 
@@ -370,7 +351,7 @@ impl ZlibPanel {
                     this.results_id = this.alloc_results_id();
                     this.rows = rows;
                     this.has_scanned = true;
-                    this.sync_selection_to_filter(cx);
+                    this.sync_table_state(cx);
                     cx.notify();
                 });
             } else {
@@ -467,34 +448,14 @@ impl ZlibPanel {
         cx.notify();
     }
 
-    fn has_filter(&self, cx: &App) -> bool {
-        !self.filter_input.read(cx).value().trim().is_empty()
+    fn is_at_vertical_boundary(&self, moving_down: bool, cx: &App) -> bool {
+        let table = self.table_state.read(cx);
+        let rows_count = table.delegate().visible_indices().len();
+        is_at_vertical_boundary(moving_down, table.selected_row(), rows_count)
     }
 
-    fn filter_query(&self, cx: &App) -> String {
-        self.filter_input.read(cx).value().trim().to_lowercase()
-    }
-
-    fn filtered_indices(&self, cx: &App) -> Vec<usize> {
-        let filter = self.filter_query(cx);
-        if filter.is_empty() {
-            return (0..self.rows.len()).collect();
-        }
-
-        if !can_match_hex_address(&filter) {
-            return filter_zlib_indices(&self.rows, None, &filter);
-        }
-
-        if let Some(ed) = &self.editor
-            && let Ok(doc) = ed.read(cx).document.read()
-        {
-            return filter_zlib_indices(&self.rows, Some(&doc.address_map), &filter);
-        }
-        filter_zlib_indices(&self.rows, None, &filter)
-    }
-
-    fn sorted_indices(&self, cx: &App) -> Vec<usize> {
-        let mut indices = self.filtered_indices(cx);
+    fn sorted_indices(&self) -> Vec<usize> {
+        let mut indices: Vec<usize> = (0..self.rows.len()).collect();
         if self.sort_column.is_some_and(|(_, sort)| sort != ColumnSort::Default) {
             sort_zlib_indices(&self.rows, &mut indices, self.sort_column);
         }
@@ -505,29 +466,20 @@ impl ZlibPanel {
         self.table_state.read(cx).delegate().visible_indices().get(row_ix).copied()
     }
 
-    fn result_summary(&self, has_filter: bool, cx: &App) -> String {
+    fn result_summary(&self) -> String {
         if self.is_scanning {
-            return "Searching...".to_string();
-        }
-        let total = self.rows.len();
-        let visible = self.table_state.read(cx).delegate().visible_indices().len();
-
-        if has_filter {
-            if self.is_truncated {
-                format!("{visible} / {MAX_ZLIB_RESULTS}+ streams")
-            } else {
-                format!("{visible} / {total} streams")
-            }
+            "Searching...".to_string()
         } else if self.is_truncated {
             format!("{MAX_ZLIB_RESULTS}+ streams found (showing first {MAX_ZLIB_RESULTS} streams)")
         } else {
+            let total = self.rows.len();
             let label = if total == 1 { "stream" } else { "streams" };
             format!("{total} {label} found")
         }
     }
 
-    fn sync_selection_to_filter(&mut self, cx: &mut Context<Self>) {
-        let visible_indices = self.sorted_indices(cx);
+    fn sync_table_state(&mut self, cx: &mut Context<Self>) {
+        let visible_indices = self.sorted_indices();
         if let Some(index) = self.selected_index {
             if !visible_indices.contains(&index) {
                 self.selected_index = visible_indices.first().copied();
@@ -622,14 +574,6 @@ impl ZlibPanel {
         self.decompress_index(action.index, window, cx);
     }
 
-    fn focus_table(&mut self, _: &FocusTable, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.table_state.read(cx).delegate().visible_indices().is_empty() {
-            let focus_handle = self.table_state.read(cx).focus_handle(cx);
-            focus_handle.focus(window, cx);
-            cx.notify();
-        }
-    }
-
     fn confirm_select(&mut self, _: &ConfirmSelect, window: &mut Window, cx: &mut Context<Self>) {
         let target = {
             let table = self.table_state.read(cx);
@@ -658,9 +602,8 @@ impl ZlibPanel {
 impl Render for ZlibPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let is_input_focused = self.filter_input.read(cx).focus_handle(cx).is_focused(window);
         let is_table_focused = self.table_state.read(cx).focus_handle(cx).is_focused(window);
-        let is_focused = self.focus_handle.is_focused(window) || is_input_focused || is_table_focused;
+        let is_focused = self.focus_handle.is_focused(window) || is_table_focused;
         let has_editor = self.editor.is_some();
         let can_decompress_selected = has_editor && self.selected_index.is_some() && !self.is_scanning && !self.is_decompressing;
 
@@ -690,9 +633,7 @@ impl Render for ZlibPanel {
             ),
         );
 
-        let show_results_bar = self.has_scanned || self.is_scanning;
-        let has_filter = show_results_bar && self.has_filter(cx);
-        let result_summary_text = show_results_bar.then(|| self.result_summary(has_filter, cx));
+        let result_summary_text = (self.has_scanned || self.is_scanning).then(|| self.result_summary());
 
         let body = if self.is_scanning {
             div()
@@ -726,6 +667,29 @@ impl Render for ZlibPanel {
                 .flex_1()
                 .overflow_hidden()
                 .child(DataTable::new(&self.table_state).bordered(false))
+                // Stop vertical selection actions at the first/last row before `DataTable`
+                // handles them so selection neither wraps nor triggers `set_selected_row`
+                // scrolling at the boundary.
+                .capture_action(cx.listener(|this, _: &SelectUp, _window, cx| {
+                    if this.is_at_vertical_boundary(false, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .capture_action(cx.listener(|this, _: &SelectDown, _window, cx| {
+                    if this.is_at_vertical_boundary(true, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .capture_action(cx.listener(|this, _: &SelectPageUp, _window, cx| {
+                    if this.is_at_vertical_boundary(false, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .capture_action(cx.listener(|this, _: &SelectPageDown, _window, cx| {
+                    if this.is_at_vertical_boundary(true, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
                 .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                     if event.keystroke.key == "escape" {
                         this.dismiss_table(&DismissTable, window, cx);
@@ -740,10 +704,9 @@ impl Render for ZlibPanel {
         crate::ui::panels::panel_container(is_focused, theme)
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(Self::focus_table))
             .on_action(cx.listener(Self::confirm_select))
             .on_action(cx.listener(Self::dismiss_table))
-            .on_action(cx.listener(|this, _: &gpui_kit::base::actions::Cancel, window, cx| {
+            .on_action(cx.listener(|this, _: &Cancel, window, cx| {
                 this.dismiss_table(&DismissTable, window, cx);
             }))
             .on_action(cx.listener(Self::copy_address))
@@ -753,38 +716,17 @@ impl Render for ZlibPanel {
             .child(header)
             .child(scan_controls)
             .when_some(result_summary_text, |this, summary| {
-                let result_summary = div()
-                    .px_2()
-                    .py_1()
-                    .bg(theme.secondary)
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(summary);
-                let filter_controls = h_flex()
-                    .p_2()
-                    .gap_1p5()
-                    .items_center()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .child(div().flex_1().child(Input::new(&self.filter_input)))
-                    .child(
-                        Button::new("clear-zlib-filter")
-                            .ghost()
-                            .icon(IconName::Close)
-                            .with_size(Size::XSmall)
-                            .tooltip("Clear filter")
-                            .disabled(!has_filter)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.filter_input.update(cx, |input, cx| {
-                                    input.set_value(String::new(), window, cx);
-                                });
-                                this.sync_selection_to_filter(cx);
-                                cx.notify();
-                            })),
-                    );
-                this.child(result_summary).child(filter_controls)
+                this.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .bg(theme.secondary)
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(summary),
+                )
             })
             .child(body)
             .when(show_footer, |this| {
