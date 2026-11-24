@@ -27,9 +27,9 @@ Engineered to be snappy, intuitive, and versatile for reverse engineering, firmw
 
 ---
 
-> [!WARNING]
-> **Alpha Software Notice & Disclaimer**  
-> `xvw` is currently in early alpha stage and has not been fully evaluated or hardened. Please **make reliable backups** of your files before editing. Use at your own risk.  
+> [!NOTE]
+> **Alpha Software Notice**  
+> `xvw` is currently in alpha and under active development. Features, specifications, UI, keybindings, and settings are subject to change without prior notice.  
 > We actively welcome feedback, bug reports, and contributions! Feel free to [open an issue](https://github.com/funap/xvw/issues) or submit a pull request.
 
 ---
