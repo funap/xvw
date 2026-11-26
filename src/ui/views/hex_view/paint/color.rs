@@ -136,8 +136,6 @@ pub fn ascii_item_text_color(
     })
 }
 
-/// Precomputes centered per-cell Hex glyph coordinates from a batched shaped line.
-
 #[inline]
 fn channel_to_linear(c: f32) -> f32 {
     if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }

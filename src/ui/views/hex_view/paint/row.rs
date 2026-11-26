@@ -26,6 +26,8 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ops::Range;
 
+/// Returns the byte range `[offset, next_offset)` covered by `row_idx`, including any trailing EOF cursor row.
+#[inline]
 pub fn row_byte_range(line_starts: &LineMap, row_idx: usize, total_size: usize) -> Option<(usize, usize)> {
     if row_idx < line_starts.len() {
         let offset = line_starts.get(row_idx)?;

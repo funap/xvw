@@ -209,9 +209,7 @@ pub(super) fn hex_insert_cursor_end_geometry(group: HexGroupInfo, origin_x: Pixe
     )
 }
 
-/// Returns the byte range `[offset, next_offset)` covered by `row_idx`, including any trailing EOF cursor row.
-#[inline]
-
+/// Precomputes centered per-cell Hex glyph coordinates from a batched shaped line.
 pub fn build_cached_hex_glyphs(shaped: &ShapedLine, groups: &[HexGroupInfo], cell_width: Pixels) -> CachedHexGlyphs {
     let natural_width = shaped.width;
     let cell_width_f = f32::from(cell_width);
