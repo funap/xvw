@@ -14,3 +14,14 @@ pub use scratch_service::{ScratchEntry, ScratchService};
 pub use search_service::SearchService;
 pub use structure_service::StructureService;
 pub use zlib_service::ZlibService;
+
+/// Registers Tokio's blocking pool as the background deallocation dispatcher for `core::dealloc`.
+pub fn init_background_dealloc() {
+    crate::core::dealloc::register_background_dispatcher(|task| {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn_blocking(task);
+        } else {
+            task();
+        }
+    });
+}

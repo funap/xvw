@@ -71,6 +71,7 @@ impl AppState {
 
     /// Initializes core application services and registers settings-driven globals.
     pub fn init_with_settings(cx: &mut App, settings: &crate::settings::Settings) {
+        crate::service::init_background_dealloc();
         let state = Self {
             document_service: DocumentService::new(),
             structure_service: StructureService::new(),
