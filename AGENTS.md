@@ -26,7 +26,7 @@ cargo run -- [path]          # optional flags: --ksy, --diff, --folder, --panel,
 
 ## Architecture & layer boundaries
 
-- **`src/core/` (pure engine)**: Deterministic domain logic — `Buffer`/`memmap2`, `Document`, undo `History`, `Command`s, `Editor`, layout/search/structure state, `AddressMap`, format codecs, and Kaitai `.ksy` parsing. Keep GPUI windows, UI widgets, and Tokio/filesystem I/O out of `core/` (prefer putting `gpui_kit::Global` impls in `src/ui/mod.rs` or `src/app_state.rs`; `ByteColoring`/`ByteCategoryColors` in `src/core/radix.rs` are existing exceptions).
+- **`src/core/` (pure engine)**: Deterministic domain logic — `Buffer`/`memmap2`, `Document`, undo `History`, `Command`s, `Editor`, layout/search/structure state, `AddressMap`, format codecs, and Kaitai `.ksy` parsing. Keep GPUI windows, UI widgets, and Tokio/filesystem I/O out of `core/` (put `gpui_kit::Global` impls in `src/ui/mod.rs`, `src/app_state.rs`, or `src/settings.rs`).
 - **`src/service/` (orchestration & async)**: `DocumentService`, `StructureService`, `SearchService`, `DiffService`, `BookmarkService`, and `ScratchService`. Bridges `core/` with `gpui_kit` (`App`, `Entity`, `Task`, `BackgroundExecutor`) and Tokio (`spawn_blocking`, `Notify`).
 - **`src/ui/` (GPUI presentation)**: `gpui_kit` views, panels, dialogs, pane tree, menus, and `Workspace`. Observes/subscribes to entities and globals; delegates business logic to `core/` and async I/O or parsing to `service/`.
 - **`gpui_kit` vs `gpui`**: Build UI and globals against `gpui_kit` (`gpui_kit::*`, `gpui_kit::prelude::*`, `gpui_kit::component::*`), not raw `gpui::` directly (only low-level graphics/color helpers such as `TransformationMatrix`, `Font`, and `transparent_black` use `gpui::`).
