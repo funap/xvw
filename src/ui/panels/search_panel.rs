@@ -446,6 +446,7 @@ impl SearchPanel {
                     table.delegate_mut().selected_index = Some(index);
                     if table.selected_row() != Some(index) {
                         table.set_selected_row(index, cx);
+                        table.scroll_to_row(index, cx);
                     }
                 });
             });
@@ -523,6 +524,7 @@ impl SearchPanel {
             table.refresh(cx);
             if let Some(idx) = selected_index {
                 table.set_selected_row(idx, cx);
+                table.scroll_to_row(idx, cx);
             } else {
                 table.clear_selection(cx);
             }
@@ -566,6 +568,7 @@ impl SearchPanel {
             if let Some(idx) = found_index {
                 if table.selected_row() != Some(idx) {
                     table.set_selected_row(idx, cx);
+                    table.scroll_to_row(idx, cx);
                 }
             } else {
                 table.clear_selection(cx);

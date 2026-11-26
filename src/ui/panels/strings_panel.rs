@@ -709,6 +709,7 @@ impl StringsPanel {
             table.refresh(cx);
             if let Some(row_ix) = row_ix {
                 table.set_selected_row(row_ix, cx);
+                table.scroll_to_row(row_ix, cx);
             } else {
                 table.clear_selection(cx);
             }
@@ -735,6 +736,7 @@ impl StringsPanel {
                         && table.selected_row() != Some(row_ix)
                     {
                         table.set_selected_row(row_ix, cx);
+                        table.scroll_to_row(row_ix, cx);
                     }
                 }
             });

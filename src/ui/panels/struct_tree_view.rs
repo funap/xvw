@@ -918,6 +918,7 @@ impl StructTreeView {
                     table.delegate_mut().selected_index = Some(idx);
                     if table.selected_row() != Some(idx) {
                         table.set_selected_row(idx, cx);
+                        table.scroll_to_row(idx, cx);
                     }
                 });
             });
@@ -1228,6 +1229,7 @@ impl StructTreeView {
                 table.delegate_mut().selected_index = Some(idx);
                 if table.selected_row() != Some(idx) {
                     table.set_selected_row(idx, cx);
+                    table.scroll_to_row(idx, cx);
                 }
             });
         });
@@ -1525,6 +1527,7 @@ impl StructTreeView {
                 if let Some(idx) = selected_index {
                     if table.selected_row() != Some(idx) {
                         table.set_selected_row(idx, cx);
+                        table.scroll_to_row(idx, cx);
                     }
                 } else {
                     table.clear_selection(cx);

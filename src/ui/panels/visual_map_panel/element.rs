@@ -296,11 +296,3 @@ impl Element for VisualMapElement {
         }
     }
 }
-
-impl IntoElement for VisualMapElement {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
