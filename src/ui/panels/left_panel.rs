@@ -3,7 +3,7 @@ use gpui_kit::*;
 use crate::core::editor::Editor;
 use crate::ui::panels::bookmark_panel::BookmarkPanel;
 use crate::ui::panels::checksum_panel::{ChecksumPanel, ChecksumPanelEvent};
-use crate::ui::panels::data_inspector::DataInspector;
+use crate::ui::panels::data_inspector_panel::DataInspector;
 use crate::ui::panels::file_tree_panel::{FileTreeView, FileTreeViewEvent};
 use crate::ui::panels::search_panel::{SearchPanel, SearchPanelEvent};
 use crate::ui::panels::strings_panel::{StringsPanel, StringsPanelEvent};
