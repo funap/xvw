@@ -572,7 +572,7 @@ impl Workspace {
         self.export_active_document_with_format(
             "Motorola S-Record",
             "mot",
-            |data, map| crate::core::hex_import::export_motorola_srec(data, map).into_bytes(),
+            |data, map| crate::core::format::export_motorola_srec(data, map).into_bytes(),
             window,
             cx,
         );
@@ -582,7 +582,7 @@ impl Workspace {
         self.export_active_document_with_format(
             "Intel HEX",
             "hex",
-            |data, map| crate::core::hex_import::export_intel_hex(data, map).into_bytes(),
+            |data, map| crate::core::format::export_intel_hex(data, map).into_bytes(),
             window,
             cx,
         );
@@ -592,7 +592,7 @@ impl Workspace {
         self.export_active_document_with_format(
             "Raw Binary",
             "bin",
-            |data, map| crate::core::hex_import::export_raw_binary(data, map, 0x00),
+            |data, map| crate::core::format::export_raw_binary(data, map, 0x00),
             window,
             cx,
         );

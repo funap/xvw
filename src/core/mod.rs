@@ -15,7 +15,6 @@ pub mod fill;
 pub mod format;
 pub mod fuzzy_matcher;
 pub mod goto;
-pub mod hex_import;
 pub mod history;
 pub mod inspector;
 pub mod layout;

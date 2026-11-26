@@ -204,9 +204,9 @@ impl DocumentService {
                     Ok((doc, FileFormat::Base64, "Base64", 0))
                 } else {
                     let parse_result = match format_hint {
-                        Some(FileFormat::IntelHex) => crate::core::hex_import::parse_intel_hex(&content),
-                        Some(FileFormat::MotorolaSrec) => crate::core::hex_import::parse_motorola_srec(&content),
-                        _ => crate::core::hex_import::parse_hex_or_mot(&content),
+                        Some(FileFormat::IntelHex) => crate::core::format::parse_intel_hex(&content),
+                        Some(FileFormat::MotorolaSrec) => crate::core::format::parse_motorola_srec(&content),
+                        _ => crate::core::format::parse_hex_or_mot(&content),
                     }
                     .map_err(|e| anyhow::anyhow!("Failed to parse hex/mot file: {e}"))?;
 
