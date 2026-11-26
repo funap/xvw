@@ -74,27 +74,7 @@ pub fn default_content_for(file_name: Option<&str>) -> String {
     }
 }
 
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ScratchpadMode {
-    #[default]
-    Edit,
-    Split,
-    Preview,
-}
-
-impl ScratchpadMode {
-    /// Cycles to the next scratchpad mode (Edit -> Split -> Preview -> Edit).
-    pub fn next(self) -> Self {
-        match self {
-            Self::Edit => Self::Split,
-            Self::Split => Self::Preview,
-            Self::Preview => Self::Edit,
-        }
-    }
-}
+pub use crate::core::scratch::ScratchpadMode;
 
 /// Pure helper calculating line count, word count, and character count for a text buffer.
 pub fn calculate_text_stats(text: &str) -> (usize, usize, usize) {
@@ -908,7 +888,7 @@ impl crate::ui::pane::WorkspaceTab for Entity<ScratchpadView> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_SCRATCHPAD_CONTENT, ScratchpadMode};
+    use super::DEFAULT_SCRATCHPAD_CONTENT;
 
     #[test]
     fn test_default_scratchpad_content() {
@@ -1001,32 +981,6 @@ mod tests {
             styles.iter().any(|(range, style)| { range.contains(&hash_range) && style.color.is_some() }),
             "Heading marker '#' should have a highlight style color"
         );
-    }
-
-    #[test]
-    fn test_scratchpad_mode_default_and_variants() {
-        assert_eq!(ScratchpadMode::default(), ScratchpadMode::Edit);
-        assert_ne!(ScratchpadMode::Split, ScratchpadMode::Edit);
-        assert_ne!(ScratchpadMode::Split, ScratchpadMode::Preview);
-        assert_ne!(ScratchpadMode::Edit, ScratchpadMode::Preview);
-    }
-
-    #[test]
-    fn test_scratchpad_mode_cycle() {
-        assert_eq!(ScratchpadMode::Edit.next(), ScratchpadMode::Split);
-        assert_eq!(ScratchpadMode::Split.next(), ScratchpadMode::Preview);
-        assert_eq!(ScratchpadMode::Preview.next(), ScratchpadMode::Edit);
-    }
-
-    #[test]
-    fn test_scratchpad_mode_serde() {
-        assert_eq!(serde_json::to_string(&ScratchpadMode::Edit).unwrap(), "\"edit\"");
-        assert_eq!(serde_json::to_string(&ScratchpadMode::Split).unwrap(), "\"split\"");
-        assert_eq!(serde_json::to_string(&ScratchpadMode::Preview).unwrap(), "\"preview\"");
-
-        assert_eq!(serde_json::from_str::<ScratchpadMode>("\"edit\"").unwrap(), ScratchpadMode::Edit);
-        assert_eq!(serde_json::from_str::<ScratchpadMode>("\"split\"").unwrap(), ScratchpadMode::Split);
-        assert_eq!(serde_json::from_str::<ScratchpadMode>("\"preview\"").unwrap(), ScratchpadMode::Preview);
     }
 
     #[test]
