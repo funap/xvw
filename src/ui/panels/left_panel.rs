@@ -143,7 +143,7 @@ impl LeftPanel {
     }
 
     /// Updates the recent binary file entries shown by the Files panel.
-    pub fn set_file_history(&mut self, entries: &[crate::core::structure::RecentFileEntry], cx: &mut Context<Self>) {
+    pub fn set_file_history(&mut self, entries: &[crate::core::recent_history::RecentFileEntry], cx: &mut Context<Self>) {
         self.file_tree.update(cx, |panel, cx| {
             panel.set_recent_file_history(entries, cx);
         });

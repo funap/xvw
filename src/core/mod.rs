@@ -21,6 +21,7 @@ pub mod layout;
 pub mod new_file;
 pub mod offset_link;
 pub mod radix;
+pub mod recent_history;
 pub mod scratch;
 pub mod search;
 pub mod selection;

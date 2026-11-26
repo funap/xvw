@@ -1,6 +1,6 @@
 use crate::actions::{LoadChildren, OpenDiff, OpenFile, Rename, SelectForCompare, SelectItem};
 use crate::core::format::FileFormat;
-use crate::core::structure::RecentFileEntry;
+use crate::core::recent_history::RecentFileEntry;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -871,7 +871,7 @@ impl FileTreeViewState {
 mod tests {
     use super::RecentDisplayHistory;
     use crate::core::format::FileFormat;
-    use crate::core::structure::RecentFileEntry;
+    use crate::core::recent_history::RecentFileEntry;
     use std::path::PathBuf;
 
     #[test]

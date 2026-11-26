@@ -77,7 +77,7 @@ pub struct Workspace {
     pub left_panel: Entity<LeftPanel>,
     pub activity_bar: Entity<ActivityBar>,
     pub recent_definition_history: crate::core::structure::DefinitionHistory,
-    pub recent_file_history: crate::core::structure::FileHistory,
+    pub recent_file_history: crate::core::recent_history::FileHistory,
     pub is_left_panel_visible: bool,
     pub left_panel_width: f32,
     pub left_panel_resizable_state: Entity<ResizableState>,

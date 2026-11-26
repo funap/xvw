@@ -136,6 +136,27 @@ fn normalize_path(path: &Path) -> PathBuf {
     }
 }
 
+/// Display mode for the Markdown scratchpad editor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScratchpadMode {
+    #[default]
+    Edit,
+    Split,
+    Preview,
+}
+
+impl ScratchpadMode {
+    /// Cycles to the next scratchpad mode (Edit -> Split -> Preview -> Edit).
+    pub fn next(self) -> Self {
+        match self {
+            Self::Edit => Self::Split,
+            Self::Split => Self::Preview,
+            Self::Preview => Self::Edit,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +171,31 @@ mod tests {
         assert!(!is_same_target_file(Path::new("."), Path::new("/foo/bar/firmware.bin")));
         assert!(!is_same_target_file(Path::new("a/.."), Path::new("/foo/bar/firmware.bin")));
         assert!(!is_same_target_file(Path::new(""), Path::new("/foo/bar/firmware.bin")));
+    }
+
+    #[test]
+    fn test_scratchpad_mode_default_and_variants() {
+        assert_eq!(ScratchpadMode::default(), ScratchpadMode::Edit);
+        assert_ne!(ScratchpadMode::Split, ScratchpadMode::Edit);
+        assert_ne!(ScratchpadMode::Split, ScratchpadMode::Preview);
+        assert_ne!(ScratchpadMode::Edit, ScratchpadMode::Preview);
+    }
+
+    #[test]
+    fn test_scratchpad_mode_cycle() {
+        assert_eq!(ScratchpadMode::Edit.next(), ScratchpadMode::Split);
+        assert_eq!(ScratchpadMode::Split.next(), ScratchpadMode::Preview);
+        assert_eq!(ScratchpadMode::Preview.next(), ScratchpadMode::Edit);
+    }
+
+    #[test]
+    fn test_scratchpad_mode_serde() {
+        assert_eq!(serde_json::to_string(&ScratchpadMode::Edit).unwrap(), "\"edit\"");
+        assert_eq!(serde_json::to_string(&ScratchpadMode::Split).unwrap(), "\"split\"");
+        assert_eq!(serde_json::to_string(&ScratchpadMode::Preview).unwrap(), "\"preview\"");
+
+        assert_eq!(serde_json::from_str::<ScratchpadMode>("\"edit\"").unwrap(), ScratchpadMode::Edit);
+        assert_eq!(serde_json::from_str::<ScratchpadMode>("\"split\"").unwrap(), ScratchpadMode::Split);
+        assert_eq!(serde_json::from_str::<ScratchpadMode>("\"preview\"").unwrap(), ScratchpadMode::Preview);
     }
 }
