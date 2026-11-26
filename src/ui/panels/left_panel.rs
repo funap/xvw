@@ -7,7 +7,7 @@ use crate::ui::panels::data_inspector_panel::DataInspector;
 use crate::ui::panels::file_tree_panel::{FileTreeView, FileTreeViewEvent};
 use crate::ui::panels::search_panel::{SearchPanel, SearchPanelEvent};
 use crate::ui::panels::strings_panel::{StringsPanel, StringsPanelEvent};
-use crate::ui::panels::struct_tree_view::StructTreeView;
+use crate::ui::panels::struct_tree_panel::StructTreeView;
 use crate::ui::panels::visual_map_panel::{VisualMapPanel, VisualMapPanelEvent};
 use crate::ui::panels::zlib_panel::{ZlibPanel, ZlibPanelEvent};
 use std::path::PathBuf;

@@ -32,7 +32,7 @@ pub fn init(cx: &mut gpui_kit::App) {
     panels::search_panel::init(cx);
     panels::strings_panel::init(cx);
     panels::zlib_panel::init(cx);
-    panels::struct_tree_view::init(cx);
+    panels::struct_tree_panel::init(cx);
     panels::bookmark_panel::init(cx);
     panels::data_inspector_panel::init(cx);
     panels::checksum_panel::init(cx);
