@@ -1,3 +1,8 @@
+mod model;
+
+#[cfg(test)]
+mod tests;
+
 use crate::core::appearance::Appearance;
 use crate::core::checksum::{ChecksumAlgorithm, ChecksumCategory, ChecksumCompareStatus, ChecksumResults};
 use crate::core::editor::Editor;
@@ -15,111 +20,13 @@ use gpui_kit::*;
 use std::collections::HashMap;
 use std::ops::Range;
 
-/// Maximum byte length automatically computed without manual confirmation.
-pub const AUTO_CALC_MAX_BYTES: usize = 1_000_000;
-
-/// Maximum byte length computed synchronously on the foreground thread to avoid async 1-frame flicker.
-pub const SYNC_CALC_MAX_BYTES: usize = 32 * 1024;
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum CalculationRange {
-    Selection,
-    EntireFile,
-}
-
-/// Identifies the exact byte slice and document state for a checksum calculation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CalculationSignature {
-    pub editor_id: EntityId,
-    pub content_state: usize,
-    pub total_len: usize,
-    pub range_mode: CalculationRange,
-    pub byte_range: Range<usize>,
-}
-
-struct CachedChecksumState {
-    calculation_range: CalculationRange,
-    auto_calculate: bool,
-    results: Option<ChecksumResults>,
-    computed_signature: Option<CalculationSignature>,
-    last_observed_signature: Option<CalculationSignature>,
-    selected_algorithm: Option<ChecksumAlgorithm>,
-}
-
-/// Events emitted by the checksum panel for workspace navigation and focus coordination.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ChecksumPanelEvent {
-    NavigateTo { offset: usize, len: usize },
-    FocusEditor,
-}
+pub use model::ChecksumPanelEvent;
+use model::{
+    AUTO_CALC_MAX_BYTES, CachedChecksumState, CalculationRange, CalculationSignature, SYNC_CALC_MAX_BYTES, format_byte_size, resolve_target_range,
+    selected_range_for_checksum, split_hex_chunks, step_algorithm_selection, truncate_menu_preview,
+};
 
 impl EventEmitter<ChecksumPanelEvent> for ChecksumPanel {}
-
-pub(crate) fn format_byte_size(bytes: usize) -> String {
-    if bytes < 1024 {
-        format!("{} B", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.2} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
-}
-
-/// Resolves the effective byte range to hash for the given range mode, selection, and total file length.
-/// Empty ranges are normalized to `0..0` so cursor movements without a selection do not change the range identity.
-pub(crate) fn resolve_target_range(range_mode: CalculationRange, selected_range: Option<Range<usize>>, total_len: usize) -> Range<usize> {
-    match range_mode {
-        CalculationRange::Selection => {
-            let range = selected_range.unwrap_or(0..0);
-            let start = range.start.min(total_len);
-            let end = range.end.min(total_len).max(start);
-            if start == end { 0..0 } else { start..end }
-        }
-        CalculationRange::EntireFile => 0..total_len,
-    }
-}
-
-/// Splits a hex string into fixed-size chunks for responsive multi-line wrapping without ellipsis truncation.
-pub(crate) fn split_hex_chunks(hex: &str, chunk_size: usize) -> Vec<&str> {
-    if hex.is_empty() || chunk_size == 0 {
-        return Vec::new();
-    }
-    let mut chunks = Vec::with_capacity(hex.len().div_ceil(chunk_size));
-    let mut start = 0;
-    while start < hex.len() {
-        let end = (start + chunk_size).min(hex.len());
-        chunks.push(&hex[start..end]);
-        start = end;
-    }
-    chunks
-}
-
-/// Truncates a long checksum value for compact context menu labels while preserving start and end digits.
-pub(crate) fn truncate_menu_preview(value: &str, max_len: usize) -> String {
-    if value.len() <= max_len || max_len < 8 {
-        return value.to_string();
-    }
-    let head = (max_len - 3) / 2;
-    let tail = max_len - 3 - head;
-    format!("{}...{}", &value[..head], &value[value.len() - tail..])
-}
-
-fn selected_range_for_checksum(editor: &Editor) -> Option<Range<usize>> {
-    if editor.has_selection() { editor.selected_range_or_cursor() } else { None }
-}
-
-fn step_algorithm_selection(current: Option<ChecksumAlgorithm>, moving_down: bool) -> Option<ChecksumAlgorithm> {
-    let algos = ChecksumAlgorithm::ALL;
-    let last_idx = algos.len().checked_sub(1)?;
-    let next_idx = match current.and_then(|a| algos.iter().position(|&x| x == a)) {
-        Some(idx) if moving_down => (idx + 1).min(last_idx),
-        Some(idx) => idx.saturating_sub(1),
-        None => 0,
-    };
-    algos.get(next_idx).copied()
-}
 
 const CONTEXT: &str = "ChecksumPanel";
 
@@ -1467,66 +1374,5 @@ impl Render for ChecksumPanel {
 impl Focusable for ChecksumPanel {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        CalculationRange, ChecksumAlgorithm, format_byte_size, resolve_target_range, split_hex_chunks, step_algorithm_selection, truncate_menu_preview,
-    };
-
-    #[test]
-    fn test_format_byte_size() {
-        assert_eq!(format_byte_size(0), "0 B");
-        assert_eq!(format_byte_size(512), "512 B");
-        assert_eq!(format_byte_size(1024), "1.0 KB");
-        assert_eq!(format_byte_size(1536), "1.5 KB");
-        assert_eq!(format_byte_size(1024 * 1024), "1.00 MB");
-        assert_eq!(format_byte_size(5 * 1024 * 1024), "5.00 MB");
-        assert_eq!(format_byte_size(1024 * 1024 * 1024), "1.00 GB");
-    }
-
-    #[test]
-    fn test_resolve_target_range_normalizes_empty_selection() {
-        assert_eq!(resolve_target_range(CalculationRange::Selection, None, 100), 0..0);
-        assert_eq!(resolve_target_range(CalculationRange::Selection, Some(42..42), 100), 0..0);
-        assert_eq!(resolve_target_range(CalculationRange::Selection, Some(10..20), 100), 10..20);
-        assert_eq!(resolve_target_range(CalculationRange::Selection, Some(90..150), 100), 90..100);
-        assert_eq!(resolve_target_range(CalculationRange::EntireFile, None, 100), 0..100);
-        assert_eq!(resolve_target_range(CalculationRange::EntireFile, Some(10..20), 0), 0..0);
-    }
-
-    #[test]
-    fn test_split_hex_chunks() {
-        let sha256_hex = "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592";
-        let chunks = split_hex_chunks(sha256_hex, 16);
-        assert_eq!(chunks, vec!["d7a8fbb307d78094", "69ca9abcb0082e4f", "8d5651e46d3cdb76", "2d02d0bf37c9e592"]);
-    }
-
-    #[test]
-    fn test_truncate_menu_preview() {
-        assert_eq!(truncate_menu_preview("0x12345678", 20), "0x12345678");
-        let sha = "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592";
-        let truncated = truncate_menu_preview(sha, 20);
-        assert_eq!(truncated, "d7a8fbb3...f37c9e592");
-        assert!(truncated.len() <= 20);
-    }
-
-    #[test]
-    fn test_step_algorithm_selection_stops_at_boundaries() {
-        let algos = ChecksumAlgorithm::ALL;
-        let first = algos[0];
-        let second = algos[1];
-        let last = algos[algos.len() - 1];
-        let prev_last = algos[algos.len() - 2];
-
-        assert_eq!(step_algorithm_selection(None, false), Some(first));
-        assert_eq!(step_algorithm_selection(None, true), Some(first));
-        assert_eq!(step_algorithm_selection(Some(first), false), Some(first));
-        assert_eq!(step_algorithm_selection(Some(first), true), Some(second));
-        assert_eq!(step_algorithm_selection(Some(second), false), Some(first));
-        assert_eq!(step_algorithm_selection(Some(last), true), Some(last));
-        assert_eq!(step_algorithm_selection(Some(last), false), Some(prev_last));
     }
 }
