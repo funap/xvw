@@ -3,16 +3,9 @@ use std::fs;
 use std::path::Path;
 
 /// Service for bookmark persistence and file I/O operations.
-#[derive(Debug, Clone, Default)]
 pub struct BookmarkService;
 
 impl BookmarkService {
-    /// Creates a new `BookmarkService` instance.
-    #[allow(dead_code)]
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Saves bookmarks to a YAML file on disk.
     pub fn export_to_file(path: &Path, bookmarks: &[BookmarkItem], doc_path: Option<&Path>) -> anyhow::Result<()> {
         let yaml = BookmarkFile::to_yaml(bookmarks, doc_path)?;
@@ -69,13 +62,5 @@ mod tests {
         assert_eq!(loaded[0].size, 4);
         assert_eq!(loaded[0].comment, "Header");
         assert_eq!(loaded[1].offset, 100);
-    }
-
-    #[test]
-    fn test_bookmark_service_new() {
-        let service = BookmarkService::new();
-        let cloned = service.clone();
-        assert_eq!(format!("{service:?}"), "BookmarkService");
-        let _ = cloned;
     }
 }
