@@ -21,16 +21,24 @@ use crate::actions::{
 use crate::app_state::{AppState, InsertModeState};
 use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
-use crate::core::encoding::Encoding;
-use crate::core::search::{PatternByte, SearchMode};
+use crate::core::search::SearchMode;
 use crate::service::DocumentService;
 use crate::ui::icon::IconName;
 use crate::ui::views::hex_view::{self, HexView};
+#[cfg(not(test))]
+use highlights::compose_search_highlights;
+#[cfg(test)]
+pub use highlights::compose_search_highlights;
+use highlights::{CachedSearchPattern, HighlightSyncState, scan_viewport_matches, viewport_match_slice};
 use std::ops::Range;
 use std::path::PathBuf;
 
 pub mod goto_offset_bar;
-pub mod search_bar;
+pub mod highlights;
+mod search_bar;
+
+#[cfg(test)]
+mod tests;
 
 pub use goto_offset_bar::{GotoBarEvent, GotoOffsetBar};
 pub use search_bar::{SearchBar, SearchBarEvent};
@@ -54,92 +62,6 @@ pub fn init(cx: &mut App) {
     hex_view::init(cx);
     goto_offset_bar::init(cx);
     search_bar::init(cx);
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct HighlightSyncState {
-    cursor_offset: Option<usize>,
-    search_generation: usize,
-    search_current_result: Option<usize>,
-    search_results_len: usize,
-    find_generation: usize,
-    has_search: bool,
-    scroll_top_row: Option<usize>,
-}
-
-impl HighlightSyncState {
-    fn from_snapshot(ed: &Editor, has_search: bool, scroll_top_row: Option<usize>) -> Self {
-        Self {
-            cursor_offset: Some(ed.cursor.offset),
-            search_generation: ed.search_state.generation,
-            search_current_result: ed.search_state.current_result(),
-            search_results_len: ed.search_state.results.len(),
-            find_generation: ed.find_state.generation,
-            has_search,
-            scroll_top_row,
-        }
-    }
-
-    fn needs_editor_refresh(self, last: Self) -> bool {
-        let search_changed = self.search_generation != last.search_generation
-            || self.search_current_result != last.search_current_result
-            || self.search_results_len != last.search_results_len;
-        let find_changed = self.find_generation != last.find_generation;
-        let cursor_changed_with_search = self.has_search && self.cursor_offset != last.cursor_offset;
-        let search_visibility_changed = self.has_search != last.has_search;
-        cursor_changed_with_search || search_changed || find_changed || search_visibility_changed
-    }
-
-    fn needs_scroll_refresh(self, last: Self) -> bool {
-        self.has_search && self != last
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-struct CachedSearchPattern {
-    query: String,
-    mode: SearchMode,
-    encoding: Encoding,
-    pattern: Option<Vec<PatternByte>>,
-}
-
-impl CachedSearchPattern {
-    fn resolve(&mut self, query: &str, mode: SearchMode, encoding: Encoding) -> Option<&[PatternByte]> {
-        let encoding_relevant = mode == SearchMode::Text;
-        if self.query != query || self.mode != mode || (encoding_relevant && self.encoding != encoding) {
-            self.query.clear();
-            self.query.push_str(query);
-            self.mode = mode;
-            self.encoding = encoding;
-            self.pattern = if query.is_empty() {
-                None
-            } else {
-                match mode {
-                    SearchMode::Text => crate::core::search::parse_text_pattern(query, encoding),
-                    SearchMode::Hex => crate::core::search::parse_hex_pattern(query),
-                }
-            };
-        }
-        self.pattern.as_deref().filter(|p| !p.is_empty())
-    }
-}
-
-/// Returns the subslice of sorted match offsets whose intervals `[m, m + pattern_len)` intersect `viewport`.
-#[inline]
-fn viewport_match_slice(results: &[usize], pattern_len: usize, viewport: Range<usize>) -> &[usize] {
-    if results.is_empty() || pattern_len == 0 || viewport.is_empty() {
-        return &[];
-    }
-    let lo = results.partition_point(|&m| m.saturating_add(pattern_len) <= viewport.start);
-    let hi = results.partition_point(|&m| m < viewport.end);
-    if lo >= hi { &[] } else { &results[lo..hi] }
-}
-
-fn scan_viewport_matches(data: &[u8], pattern: &[PatternByte], segments: &[Range<usize>], start: usize, end: usize) -> Vec<usize> {
-    let pattern_len = pattern.len();
-    let scan_start = start.saturating_sub(pattern_len);
-    let scan_end = end.saturating_add(pattern_len);
-    crate::core::search::find_occurrences_segmented(data, pattern, crate::core::search::SearchLimit::Unlimited, segments, Some(scan_start..scan_end))
 }
 
 pub struct EditorView {
@@ -1250,239 +1172,5 @@ impl crate::ui::pane::WorkspaceTab for Entity<EditorView> {
     fn create_split(&self, window: &mut Window, cx: &mut App) -> Option<crate::ui::pane::TabContent> {
         let new_editor_view = self.update(cx, |ep, cx| ep.create_split_clone(window, cx));
         Some(crate::ui::pane::TabContent::new(new_editor_view))
-    }
-}
-
-/// Composes search panel highlights and find widget highlights, giving precedence
-/// to find widget highlights where they overlap.
-pub fn compose_search_highlights(search_panel_highlights: Vec<(Range<usize>, Hsla)>, find_highlights: Vec<(Range<usize>, Hsla)>) -> Vec<(Range<usize>, Hsla)> {
-    if find_highlights.is_empty() {
-        return search_panel_highlights;
-    }
-    if search_panel_highlights.is_empty() {
-        return find_highlights;
-    }
-    let find_mask: Vec<Range<usize>> = find_highlights.iter().map(|(r, _)| r.clone()).collect();
-    let effective_search_highlights = subtract_ranges(search_panel_highlights, &find_mask);
-    let mut combined = effective_search_highlights;
-    combined.extend(find_highlights);
-    combined
-}
-
-/// Subtracts a slice of mask ranges from a vector of highlighted ranges, preserving
-/// non-overlapping portions with their original colors.
-pub fn subtract_ranges(source_ranges: Vec<(Range<usize>, Hsla)>, mask_ranges: &[Range<usize>]) -> Vec<(Range<usize>, Hsla)> {
-    if mask_ranges.is_empty() {
-        return source_ranges;
-    }
-
-    let mut result = Vec::new();
-
-    for (range, color) in source_ranges {
-        if range.start >= range.end {
-            continue;
-        }
-        let mut current_pieces = vec![range];
-
-        for mask in mask_ranges {
-            if mask.start >= mask.end {
-                continue;
-            }
-            let mut next_pieces = Vec::new();
-            for piece in current_pieces {
-                if piece.start >= mask.end || piece.end <= mask.start {
-                    // No overlap
-                    next_pieces.push(piece);
-                } else {
-                    // Overlap exists
-                    if piece.start < mask.start {
-                        next_pieces.push(piece.start..mask.start);
-                    }
-                    if piece.end > mask.end {
-                        next_pieces.push(mask.end..piece.end);
-                    }
-                }
-            }
-            current_pieces = next_pieces;
-            if current_pieces.is_empty() {
-                break;
-            }
-        }
-
-        for piece in current_pieces {
-            if piece.start < piece.end {
-                result.push((piece, color));
-            }
-        }
-    }
-
-    result
-}
-
-#[cfg(test)]
-#[allow(clippy::single_range_in_vec_init)]
-mod tests {
-    use super::*;
-    use gpui_kit::Hsla;
-
-    #[test]
-    fn test_subtract_ranges_no_overlap() {
-        let color = Hsla {
-            h: 0.0,
-            s: 0.0,
-            l: 0.5,
-            a: 1.0,
-        };
-        let source = vec![(0..10, color), (20..30, color)];
-        let result = subtract_ranges(source.clone(), &[12..18]);
-        assert_eq!(result, source);
-    }
-
-    #[test]
-    fn test_subtract_ranges_exact_match() {
-        let color = Hsla {
-            h: 0.0,
-            s: 0.0,
-            l: 0.5,
-            a: 1.0,
-        };
-        let source = vec![(10..20, color)];
-        let result = subtract_ranges(source, &[10..20]);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_subtract_ranges_interior_split() {
-        let color = Hsla {
-            h: 0.0,
-            s: 0.0,
-            l: 0.5,
-            a: 1.0,
-        };
-        let source = vec![(10..20, color)];
-        let result = subtract_ranges(source, &[12..15]);
-        assert_eq!(result, vec![(10..12, color), (15..20, color)]);
-    }
-
-    #[test]
-    fn test_subtract_ranges_overlap_left_and_right() {
-        let color = Hsla {
-            h: 0.0,
-            s: 0.0,
-            l: 0.5,
-            a: 1.0,
-        };
-        let source = vec![(10..20, color), (30..40, color)];
-        let result = subtract_ranges(source, &[5..15, 35..45]);
-        assert_eq!(result, vec![(15..20, color), (30..35, color)]);
-    }
-
-    #[test]
-    fn test_subtract_ranges_multiple_masks() {
-        let color = Hsla {
-            h: 0.0,
-            s: 0.0,
-            l: 0.5,
-            a: 1.0,
-        };
-        let source = vec![(0..50, color)];
-        let result = subtract_ranges(source, &[10..20, 30..40]);
-        assert_eq!(result, vec![(0..10, color), (20..30, color), (40..50, color)]);
-    }
-
-    #[test]
-    fn test_subtract_ranges_overlapping_masks() {
-        let color = Hsla {
-            h: 0.0,
-            s: 0.0,
-            l: 0.5,
-            a: 1.0,
-        };
-        let source = vec![(0..50, color)];
-        let result = subtract_ranges(source, &[10..25, 20..35]);
-        assert_eq!(result, vec![(0..10, color), (35..50, color)]);
-    }
-
-    #[test]
-    fn test_subtract_ranges_encompassing_mask() {
-        let color = Hsla {
-            h: 0.0,
-            s: 0.0,
-            l: 0.5,
-            a: 1.0,
-        };
-        let source = vec![(10..20, color)];
-        let result = subtract_ranges(source, &[5..25]);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_compose_search_highlights_precedence() {
-        let search_color = Hsla {
-            h: 0.1,
-            s: 0.5,
-            l: 0.5,
-            a: 0.5,
-        };
-        let find_color = Hsla {
-            h: 0.2,
-            s: 0.8,
-            l: 0.5,
-            a: 1.0,
-        };
-        let search = vec![(10..30, search_color)];
-        let find = vec![(15..25, find_color)];
-        let composed = compose_search_highlights(search, find.clone());
-        assert_eq!(composed, vec![(10..15, search_color), (25..30, search_color), (15..25, find_color)]);
-    }
-
-    #[test]
-    fn test_highlight_sync_state_skips_redundant_scroll_after_editor_refresh() {
-        let last = super::HighlightSyncState {
-            cursor_offset: Some(0x2000),
-            search_generation: 5,
-            search_current_result: Some(0x2000),
-            search_results_len: 12,
-            find_generation: 1,
-            has_search: true,
-            scroll_top_row: Some(128),
-        };
-
-        // Scrolled event arriving for the same scroll row and editor snapshot should not rescan.
-        assert!(!last.needs_scroll_refresh(last));
-        assert!(!last.needs_editor_refresh(last));
-
-        // Scrolling to a new row with active search triggers a refresh.
-        let mut moved_scroll = last;
-        moved_scroll.scroll_top_row = Some(140);
-        assert!(moved_scroll.needs_scroll_refresh(last));
-
-        // Moving cursor without active search only tracks cursor unless search changed.
-        let mut no_search = last;
-        no_search.has_search = false;
-        let mut cursor_moved = no_search;
-        cursor_moved.cursor_offset = Some(0x2010);
-        assert!(!cursor_moved.needs_editor_refresh(no_search));
-        assert!(!cursor_moved.needs_scroll_refresh(no_search));
-    }
-
-    #[test]
-    fn test_viewport_match_slice_and_cached_search_pattern() {
-        let results = [0, 8, 12, 16, 28, 64];
-        assert_eq!(super::viewport_match_slice(&results, 4, 10..20), &[8, 12, 16]);
-        assert_eq!(super::viewport_match_slice(&results, 4, 12..16), &[12]);
-        assert_eq!(super::viewport_match_slice(&results, 4, 20..28), &[] as &[usize]);
-        assert_eq!(super::viewport_match_slice(&results, 4, 16..16), &[] as &[usize]);
-
-        let mut cache = super::CachedSearchPattern::default();
-        let hex_a = cache.resolve("41 42", super::SearchMode::Hex, super::Encoding::Ascii).unwrap().to_vec();
-        assert_eq!(hex_a.len(), 2);
-        // Hex mode reuses cached pattern even if display encoding changes.
-        assert_eq!(cache.resolve("41 42", super::SearchMode::Hex, super::Encoding::Utf8).map(|p| p.len()), Some(2));
-        // Text mode re-parses when encoding or query changes.
-        let text_ascii = cache.resolve("AB", super::SearchMode::Text, super::Encoding::Ascii).unwrap().to_vec();
-        assert_eq!(text_ascii.len(), 2);
-        let text_utf16 = cache.resolve("AB", super::SearchMode::Text, super::Encoding::Utf16Le).unwrap().to_vec();
-        assert_eq!(text_utf16.len(), 4);
     }
 }
