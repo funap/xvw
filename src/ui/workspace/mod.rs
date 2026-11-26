@@ -5,7 +5,7 @@ use crate::actions::*;
 
 use crate::ui::components::EventInterceptionExt;
 use crate::ui::pane::{PaneTree, PaneTreeEvent, TabContent};
-use crate::ui::panels::file_tree_view::{FileTreeView, FileTreeViewEvent};
+use crate::ui::panels::file_tree_panel::{FileTreeView, FileTreeViewEvent};
 use crate::ui::panels::left_panel::{LeftPanel, LeftPanelTab};
 use crate::ui::views::diff_view::DiffView;
 use crate::ui::views::editor_view::EditorView;
