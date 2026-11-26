@@ -11,10 +11,10 @@ use std::sync::{Arc, RwLock};
 
 use crate::actions::{NextDifference, PrevDifference, RefreshDiff, SwapDiffFiles, ToggleSyncScroll};
 use crate::app_state::AppState;
+use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
-use crate::ui::appearance::Appearance;
 use crate::ui::views::hex_view::{HexView, HexViewEvent, HorizontalScrollTarget, ScrollColumn};
 
 const CONTEXT: &str = "DiffView";

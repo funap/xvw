@@ -1,7 +1,7 @@
+use crate::core::appearance::Appearance;
 use crate::core::checksum::{ChecksumAlgorithm, ChecksumCategory, ChecksumCompareStatus, ChecksumResults};
 use crate::core::editor::Editor;
 use crate::core::format::HexCase;
-use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::input::{self, Input, InputState};

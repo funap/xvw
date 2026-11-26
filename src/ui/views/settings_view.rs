@@ -1,8 +1,8 @@
+use crate::core::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
 use crate::core::radix::{ByteCategoryColors, ByteColoring, ByteGroupSize, ByteOrder, CategoryColor, DisplayRadix, HexByteCategory, HexCase};
 use crate::core::structure::{StructureYamlIncludeOffsets, StructureYamlShaThreshold};
-use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::ui::icon::IconName;
 use crate::ui::views::hex_view::resolve_category_color;
 use gpui_kit::component::{

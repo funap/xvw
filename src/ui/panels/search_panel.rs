@@ -1,7 +1,7 @@
+use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::search::{SearchMode, parse_hex_pattern, parse_text_pattern};
-use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{self, Input, InputState};

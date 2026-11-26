@@ -1,8 +1,8 @@
 use super::ZlibPanel;
 use super::model::{AddressLabelCache, ZlibResultRow, sort_zlib_indices, zlib_cell_colors};
+use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::format::HexCase;
-use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::menu::PopupMenu;

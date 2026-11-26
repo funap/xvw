@@ -1,9 +1,9 @@
 use crate::core::address_map::AddressMap;
+use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::format::HexCase;
 use crate::core::strings::{DEFAULT_MIN_STRING_LENGTH, StringMatch, find_strings_segmented_limited};
-use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{self, Input, InputState, NumberInput};

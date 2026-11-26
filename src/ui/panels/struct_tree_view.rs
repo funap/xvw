@@ -1,3 +1,4 @@
+use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::format::{format_size_friendly, format_with_commas};
 use crate::core::radix::{DisplayRadix, HexCase};
@@ -5,7 +6,6 @@ use crate::core::structure::{
     FieldValue, ParseResult, ParsedField, StructureYamlIncludeOffsets, StructureYamlShaThreshold, YamlExportOptions, format_parse_result_as_text,
     format_parse_result_as_yaml_with_options,
 };
-use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 use crate::ui::views::hex_view::paint::DescriptionPalette;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu};

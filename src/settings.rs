@@ -1,3 +1,4 @@
+use crate::core::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
 use crate::core::radix::{ByteCategoryColors, ByteColoring, ByteGroupSize, ByteOrder, DisplayRadix, HexCase};
@@ -5,7 +6,6 @@ use crate::core::recent_history::{FileHistory, RecentFileEntry};
 pub use crate::core::scratch::ScratchpadMode;
 use crate::core::structure::DefinitionHistory;
 pub use crate::core::structure::{DEFAULT_STRUCTURE_YAML_INCLUDE_OFFSETS, DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD, MAX_STRUCTURE_YAML_SHA_THRESHOLD};
-use crate::ui::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
 use gpui_kit::App;
 use gpui_kit::component::theme::{Theme, ThemeMode};
 use serde::{Deserialize, Serialize};

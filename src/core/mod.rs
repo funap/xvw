@@ -1,4 +1,5 @@
 pub mod address_map;
+pub mod appearance;
 pub mod bookmark;
 pub mod buffer;
 pub mod checksum;
