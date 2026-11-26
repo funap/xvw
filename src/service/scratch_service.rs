@@ -41,19 +41,6 @@ impl ScratchService {
         crate::core::scratch::extract_id_from_filename(filename)
     }
 
-    /// Splits markdown content into YAML frontmatter and document body if a frontmatter
-    /// block is present at the beginning of `content`.
-    #[allow(dead_code)]
-    pub fn split_frontmatter_and_body(content: &str) -> Option<(&str, &str)> {
-        crate::core::scratch::split_frontmatter_and_body(content)
-    }
-
-    /// Extracts the raw YAML string within markdown frontmatter delimiters, if present.
-    #[allow(dead_code)]
-    pub fn extract_frontmatter_yaml(content: &str) -> Option<&str> {
-        crate::core::scratch::extract_frontmatter_yaml(content)
-    }
-
     /// Extracts the linked `target_file` path from YAML frontmatter in markdown content.
     pub fn extract_target_file(content: &str) -> Option<PathBuf> {
         crate::core::scratch::extract_target_file(content)
@@ -297,35 +284,6 @@ mod tests {
         assert!(next_id >= 3);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
-    }
-
-    #[test]
-    fn test_split_frontmatter_and_body() {
-        let content = "---\ntarget_file: /path/to/firmware.bin\n---\n# Firmware Bootloader Notes\n\nNotes here.";
-        let (yaml, body) = ScratchService::split_frontmatter_and_body(content).expect("must split frontmatter");
-        assert_eq!(yaml, "target_file: /path/to/firmware.bin\n");
-        assert_eq!(body, "# Firmware Bootloader Notes\n\nNotes here.");
-
-        // CRLF
-        let crlf = "---\r\ntarget_file: C:\\firmware.bin\r\n---\r\n# Notes\r\n";
-        let (yaml_crlf, body_crlf) = ScratchService::split_frontmatter_and_body(crlf).expect("must split CRLF frontmatter");
-        assert_eq!(yaml_crlf, "target_file: C:\\firmware.bin\r\n");
-        assert_eq!(body_crlf, "# Notes\r\n");
-
-        // Horizontal rules in body after frontmatter
-        let hr = "---\ntarget_file: a.bin\n---\n# Heading\n---\nMore notes";
-        let (yaml_hr, body_hr) = ScratchService::split_frontmatter_and_body(hr).expect("must split with HR");
-        assert_eq!(yaml_hr, "target_file: a.bin\n");
-        assert_eq!(body_hr, "# Heading\n---\nMore notes");
-
-        // No frontmatter
-        assert_eq!(ScratchService::split_frontmatter_and_body("# Plain markdown"), None);
-        assert_eq!(ScratchService::split_frontmatter_and_body("---\nUnclosed frontmatter"), None);
-        assert_eq!(ScratchService::split_frontmatter_and_body(""), None);
-
-        // Indented delimiters should not be treated as frontmatter
-        assert_eq!(ScratchService::split_frontmatter_and_body("   ---\ntarget_file: a.bin\n---\n# Notes"), None);
-        assert_eq!(ScratchService::split_frontmatter_and_body("---\ntarget_file: a.bin\n   ---\n# Notes"), None);
     }
 
     #[test]
