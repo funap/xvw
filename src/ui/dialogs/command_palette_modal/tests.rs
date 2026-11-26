@@ -1,4 +1,4 @@
-use crate::ui::dialogs::command_palette_modal::filter_commands;
+use super::filter_commands;
 use crate::ui::menus::{MenuDef, MenuEditorState, MenuItemDef, PaletteCommand};
 
 fn make_test_commands() -> Vec<PaletteCommand> {
