@@ -37,12 +37,12 @@ cargo run -- [path]          # optional flags: --ksy, --diff, --folder, --panel,
 | --- | --- |
 | Entry, Tokio runtime, CLI flags, assets | `src/main.rs`, `src/launch_args.rs`, `src/assets.rs` |
 | App services & globals | `src/app_state.rs` (`AppState`, `InsertModeState`, `PendingCompareState`), `src/ui/mod.rs` |
-| Settings & themes | `src/settings.rs` (TOML persistence), `src/theme.rs`, `assets/themes/*.json` |
-| Actions & keybindings | `src/actions.rs`, `src/keybindings.rs` (global), `src/ui/workspace/mod.rs`, `src/ui/views/hex_view/actions.rs` |
-| Workspace routing, modals, menus | `src/ui/workspace/action_router.rs`, `src/ui/workspace/dialog_flow.rs`, `src/ui/menus.rs`, `src/ui/dialogs/` |
-| Hex view & testable layout math | `src/ui/views/hex_view/` (`layout.rs`, `paint.rs`, `row_cache.rs`, `input_controller.rs`, `scroll_controller.rs`) |
-| Import/export & copy formats | `src/core/format.rs`, `src/core/format/` (Raw, Intel HEX, Motorola S-Record, Base64, copy codecs) |
-| Kaitai `.ksy` structure parsing | `src/core/structure/`, `src/service/structure_service.rs`, `docs/structure-definition-spec.md`, `testdata/structure/` |
+| Settings & themes | `src/settings.rs` (TOML persistence), `src/core/appearance.rs`, `src/theme.rs`, `assets/themes/*.json` |
+| Actions & keybindings | `src/actions.rs`, `src/keybindings.rs` (global), `src/ui/workspace/window.rs`, `src/ui/views/hex_view/actions.rs` |
+| Workspace routing, modals, menus | `src/ui/workspace/` (`mod.rs`, `window.rs`, `render.rs`, `action_router.rs`, `dialog_flow.rs`), `src/ui/menus.rs`, `src/ui/dialogs/` |
+| Hex view & testable layout math | `src/ui/views/hex_view/` (`mod.rs`, `handlers.rs`, `hit_test.rs`, `render.rs`, `layout.rs`, `paint/`, `row_cache.rs`, `input_controller.rs`, `scroll_controller.rs`) |
+| Import/export & copy formats | `src/core/format/` (Raw, Intel HEX, Motorola S-Record, Base64, copy codecs, hex import) |
+| Kaitai `.ksy` structure parsing | `src/core/structure/` (`expression/`, `interpreter/`, etc.), `src/service/structure_service.rs`, `docs/structure-definition-spec.md`, `testdata/structure/` |
 
 Runtime structure loading uses `LoadStructureDefinition` (`cmd-shift-s` on macOS, `ctrl-shift-s` elsewhere). Supported `.ksy` syntax is documented in `docs/structure-definition-spec.md`.
 
