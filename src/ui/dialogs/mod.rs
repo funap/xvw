@@ -1,4 +1,4 @@
-pub mod about_dialog;
+pub mod about_modal;
 pub mod command_palette_modal;
 pub mod common;
 pub mod fill_selection_modal;
