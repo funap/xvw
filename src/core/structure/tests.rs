@@ -481,7 +481,7 @@ seq:
 
 #[test]
 fn test_parse_zip_ksy() {
-    let zip_ksy_content = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/structure/simple_zip.ksy"));
+    let zip_ksy_content = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/structure/zip.ksy"));
 
     let ksy: KsyDefinition = serde_yaml::from_str(zip_ksy_content).expect("zip.ksy YAML deserialization failed");
 
