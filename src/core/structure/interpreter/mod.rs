@@ -19,25 +19,25 @@ use scope::ContextUndoLog;
 pub use scope::TypeScope;
 
 pub struct KaitaiInterpreter {
-    pub(super) ksy: std::sync::Arc<KsyDefinition>,
-    pub(super) stream_size: usize,
-    pub(super) context: HashMap<String, i64>,
-    pub(super) string_context: HashMap<String, String>,
-    pub(super) byte_arrays: HashMap<String, Vec<u8>>,
-    pub(super) id_stack: Vec<String>,
-    pub(super) active_io_prefixes: Vec<String>,
-    pub(super) color_index: usize,
-    pub(super) errors: std::cell::RefCell<Vec<ParseError>>,
-    pub(super) global_endian: String,
-    pub(super) global_bit_endian: String,
-    pub(super) global_encoding: Option<String>,
-    pub(super) field_count: usize,
-    pub(super) recursion_depth: usize,
-    pub(super) all_enums: HashMap<String, HashMap<String, String>>,
+    ksy: std::sync::Arc<KsyDefinition>,
+    stream_size: usize,
+    context: HashMap<String, i64>,
+    string_context: HashMap<String, String>,
+    byte_arrays: HashMap<String, Vec<u8>>,
+    id_stack: Vec<String>,
+    active_io_prefixes: Vec<String>,
+    color_index: usize,
+    errors: std::cell::RefCell<Vec<ParseError>>,
+    global_endian: String,
+    global_bit_endian: String,
+    global_encoding: Option<String>,
+    field_count: usize,
+    recursion_depth: usize,
+    all_enums: HashMap<String, HashMap<String, String>>,
 }
 
-pub(super) const MAX_RECURSION: usize = 24;
-pub(super) const MAX_PROGRESS_FIELDS: usize = 512;
+const MAX_RECURSION: usize = 24;
+const MAX_PROGRESS_FIELDS: usize = 512;
 
 enum AttrOnceOutcome {
     Parsed(ParsedField),
@@ -51,7 +51,7 @@ struct AttrRepeatedOutcome {
 }
 
 /// Helper: extract a simple type string from serde_yaml::Value
-pub(super) fn type_as_str(val: &serde_yaml::Value) -> Option<String> {
+fn type_as_str(val: &serde_yaml::Value) -> Option<String> {
     match val {
         serde_yaml::Value::String(s) => Some(s.clone()),
         serde_yaml::Value::Number(n) => Some(n.to_string()),
@@ -60,7 +60,7 @@ pub(super) fn type_as_str(val: &serde_yaml::Value) -> Option<String> {
 }
 
 /// Helper: parse parameterized type string, e.g. "utf8_codepoint(_io.pos)" -> ("utf8_codepoint", ["_io.pos"])
-pub(super) fn parse_type_with_args(type_str: &str) -> (String, Vec<String>) {
+fn parse_type_with_args(type_str: &str) -> (String, Vec<String>) {
     let s = type_str.trim();
     if let Some(paren_open) = s.find('(')
         && s.ends_with(')')
@@ -104,13 +104,13 @@ pub(super) fn parse_type_with_args(type_str: &str) -> (String, Vec<String>) {
 }
 
 /// Helper: check if type value is a switch-on/cases
-pub(super) fn type_as_switch(val: &serde_yaml::Value) -> Option<(String, HashMap<String, String>)> {
+fn type_as_switch(val: &serde_yaml::Value) -> Option<(String, HashMap<String, String>)> {
     parse_switch_map(val)
 }
 
 /// Normalize enum definitions: support both simple string values and {id: ...} map values,
 /// as well as hex/negative integer keys.
-pub(super) fn normalize_enum(raw: &HashMap<String, serde_yaml::Value>) -> HashMap<String, String> {
+fn normalize_enum(raw: &HashMap<String, serde_yaml::Value>) -> HashMap<String, String> {
     let mut result = HashMap::new();
     for (key, val) in raw {
         let label_opt = match val {
