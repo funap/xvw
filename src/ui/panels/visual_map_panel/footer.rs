@@ -117,7 +117,7 @@ pub fn render_footer(
                         .py_0p5()
                         .rounded_sm()
                         .bg(theme.secondary)
-                        .text_color(theme.accent)
+                        .text_color(theme.secondary_foreground)
                         .font_medium()
                         .child(mode_name),
                 )
@@ -191,7 +191,7 @@ pub fn render_footer(
                         .py_0p5()
                         .rounded_sm()
                         .bg(theme.secondary)
-                        .text_color(theme.accent)
+                        .text_color(theme.secondary_foreground)
                         .font_medium()
                         .child("4BPP Planar"),
                 )
@@ -273,7 +273,7 @@ pub fn render_footer(
                         .py_0p5()
                         .rounded_sm()
                         .bg(theme.secondary)
-                        .text_color(theme.accent)
+                        .text_color(theme.secondary_foreground)
                         .font_medium()
                         .child(mode_name),
                 )
@@ -340,7 +340,7 @@ pub fn render_footer(
                         .py_0p5()
                         .rounded_sm()
                         .bg(theme.secondary)
-                        .text_color(theme.accent)
+                        .text_color(theme.secondary_foreground)
                         .font_medium()
                         .child(mode_name),
                 )
@@ -409,7 +409,7 @@ pub fn render_footer(
                         .py_0p5()
                         .rounded_sm()
                         .bg(theme.secondary)
-                        .text_color(theme.accent)
+                        .text_color(theme.secondary_foreground)
                         .font_medium()
                         .child(mode_name),
                 )
@@ -474,7 +474,7 @@ pub fn render_footer(
                             .py_0p5()
                             .rounded_sm()
                             .bg(theme.secondary)
-                            .text_color(theme.accent)
+                            .text_color(theme.secondary_foreground)
                             .font_medium()
                             .child("8BPP VGA"),
                     )

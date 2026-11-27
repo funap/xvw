@@ -1134,8 +1134,8 @@ impl Render for StructTreePanel {
 
         let export_feedback = match &self.export_status {
             StructureExportStatus::Idle => None,
-            StructureExportStatus::Copying => Some((IconName::LoaderCircle, "Preparing structure text...".to_string(), theme.accent)),
-            StructureExportStatus::Exporting => Some((IconName::LoaderCircle, "Preparing YAML export...".to_string(), theme.accent)),
+            StructureExportStatus::Copying => Some((IconName::LoaderCircle, "Preparing structure text...".to_string(), theme.secondary_foreground)),
+            StructureExportStatus::Exporting => Some((IconName::LoaderCircle, "Preparing YAML export...".to_string(), theme.secondary_foreground)),
             StructureExportStatus::Success(message) => Some((IconName::Check, message.clone(), theme.success)),
             StructureExportStatus::Error(message) => Some((IconName::TriangleAlert, message.clone(), theme.danger)),
         };
@@ -1202,12 +1202,12 @@ impl Render for StructTreePanel {
                         .h(px(3.0))
                         .w_full()
                         .overflow_hidden()
-                        .bg(theme.progress_bar)
+                        .bg(theme.secondary)
                         .child(
                             div()
                                 .h_full()
                                 .w(relative(progress))
-                                .bg(if is_finalizing { theme.warning } else { theme.accent }),
+                                .bg(if is_finalizing { theme.warning } else { theme.progress_bar }),
                         ),
                 )
                 .child(

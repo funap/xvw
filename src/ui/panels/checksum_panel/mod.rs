@@ -1023,7 +1023,7 @@ impl ChecksumPanel {
                     .items_center()
                     .gap_1p5()
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.accent))
+                    .hover(|s| s.bg(theme.secondary_hover))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.navigate_to_range(res_range.clone(), true, cx);
                     }))
@@ -1044,7 +1044,7 @@ impl ChecksumPanel {
                                 res_size
                             )),
                     )
-                    .child(div().flex_shrink_0().text_xs().font_medium().text_color(theme.accent).child("Jump")),
+                    .child(div().flex_shrink_0().text_xs().font_medium().text_color(theme.link).child("Jump")),
             );
         }
 

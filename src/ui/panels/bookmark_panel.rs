@@ -791,7 +791,7 @@ impl BookmarkPanel {
             .w_full()
             .rounded_md()
             .border_1()
-            .border_color(if is_selected { theme.accent } else { theme.border })
+            .border_color(if is_selected { theme.list_active_border } else { theme.border })
             .bg(bg_color)
             .p_2()
             .gap_1p5();

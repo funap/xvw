@@ -16,7 +16,7 @@ impl VisualMapByteCategoryExt for VisualMapByteCategory {
             VisualMapByteCategory::Control => theme.red,
             VisualMapByteCategory::Space => theme.blue,
             VisualMapByteCategory::Ascii => theme.green,
-            VisualMapByteCategory::Extended => theme.accent,
+            VisualMapByteCategory::Extended => theme.magenta,
         }
     }
 }
@@ -181,4 +181,38 @@ pub fn render_legend(color_mode: ColorMode, theme: &gpui_kit::component::Theme) 
     }
 
     Some(row.into_any_element())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VisualMapByteCategoryExt;
+    use crate::assets::Assets;
+    use crate::core::visual_map::VisualMapByteCategory;
+    use crate::settings::{DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME};
+    use crate::theme::load_themes_from_assets;
+    use crate::ui::panels::visual_map_panel::element::category_palette_from_theme;
+
+    #[test]
+    fn test_extended_byte_category_uses_magenta_and_matches_element_palette() {
+        let registry = load_themes_from_assets(&Assets);
+        for name in [DEFAULT_LIGHT_THEME, DEFAULT_DARK_THEME] {
+            let config = registry.themes().get(name).expect("default theme should exist");
+            let mut theme = gpui_kit::component::Theme::default();
+            theme.apply_config(config);
+
+            let extended = VisualMapByteCategory::Extended.color(&theme);
+            assert_eq!(extended, theme.magenta);
+            assert_ne!(extended, theme.accent);
+
+            let palette = category_palette_from_theme(&theme);
+            let rgb = extended.to_rgb();
+            let expected_bgra = [
+                (rgb.b * 255.0).clamp(0.0, 255.0) as u8,
+                (rgb.g * 255.0).clamp(0.0, 255.0) as u8,
+                (rgb.r * 255.0).clamp(0.0, 255.0) as u8,
+                (rgb.a * 255.0).clamp(0.0, 255.0) as u8,
+            ];
+            assert_eq!(palette.extended, expected_bgra);
+        }
+    }
 }
