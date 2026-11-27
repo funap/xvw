@@ -3,7 +3,7 @@ use gpui_kit::*;
 use crate::core::editor::Editor;
 use crate::ui::panels::bookmark_panel::BookmarkPanel;
 use crate::ui::panels::checksum_panel::{ChecksumPanel, ChecksumPanelEvent};
-use crate::ui::panels::data_inspector_panel::DataInspector;
+use crate::ui::panels::data_inspector_panel::DataInspectorPanel;
 use crate::ui::panels::file_tree_panel::{FileTreePanel, FileTreePanelEvent};
 use crate::ui::panels::search_panel::{SearchPanel, SearchPanelEvent};
 use crate::ui::panels::strings_panel::{StringsPanel, StringsPanelEvent};
@@ -31,7 +31,7 @@ pub struct LeftPanel {
     pub strings_panel: Entity<StringsPanel>,
     pub zlib_panel: Entity<ZlibPanel>,
     pub struct_tree: Entity<StructTreePanel>,
-    pub data_inspector: Entity<DataInspector>,
+    pub data_inspector: Entity<DataInspectorPanel>,
     pub visual_map: Entity<VisualMapPanel>,
     pub checksum_panel: Entity<ChecksumPanel>,
     pub bookmark_panel: Entity<BookmarkPanel>,
@@ -52,7 +52,7 @@ impl LeftPanel {
         let strings_panel = cx.new(|cx| StringsPanel::new(None, window, cx));
         let zlib_panel = cx.new(|cx| ZlibPanel::new(None, window, cx));
         let struct_tree = cx.new(|cx| StructTreePanel::new(None, None, window, cx));
-        let data_inspector = cx.new(|cx| DataInspector::new(None, window, cx));
+        let data_inspector = cx.new(|cx| DataInspectorPanel::new(None, window, cx));
         let visual_map = cx.new(|cx| VisualMapPanel::new(None, cx));
         let checksum_panel = cx.new(|cx| ChecksumPanel::new(None, window, cx));
         let bookmark_panel = cx.new(|cx| BookmarkPanel::new(None, window, cx));

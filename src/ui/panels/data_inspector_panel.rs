@@ -9,14 +9,14 @@ use gpui_kit::component::{ActiveTheme as _, Disableable as _, Selectable as _, S
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-pub const CONTEXT: &str = "DataInspector";
+pub const CONTEXT: &str = "DataInspectorPanel";
 pub const EDIT_CONTEXT: &str = "InspectorEdit";
 
-actions!(data_inspector, [CommitInspectorEdit, CancelInspectorEdit, Dismiss]);
+actions!(data_inspector_panel, [CommitInspectorEdit, CancelInspectorEdit, Dismiss]);
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("escape", Dismiss, Some("DataInspector && !InspectorEdit && !Input")),
+        KeyBinding::new("escape", Dismiss, Some("DataInspectorPanel && !InspectorEdit && !Input")),
         KeyBinding::new("enter", CommitInspectorEdit, Some(EDIT_CONTEXT)),
         KeyBinding::new("escape", CancelInspectorEdit, Some(EDIT_CONTEXT)),
     ]);
@@ -24,7 +24,7 @@ pub fn init(cx: &mut App) {
 
 pub use crate::core::inspector::{InspectorField, format_hex_values};
 
-pub struct DataInspector {
+pub struct DataInspectorPanel {
     pub editor: Option<Entity<Editor>>,
     pub focus_handle: FocusHandle,
     pub is_big_endian: bool,
@@ -39,7 +39,7 @@ pub struct DataInspector {
     _input_subscription: Option<Subscription>,
 }
 
-impl DataInspector {
+impl DataInspectorPanel {
     pub fn new(editor: Option<Entity<Editor>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         let _editor_subscription = editor.as_ref().map(|ed| Self::subscribe_editor(ed, cx));
@@ -486,7 +486,7 @@ impl DataInspector {
     }
 }
 
-impl Render for DataInspector {
+impl Render for DataInspectorPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let active_editor = self.editor.as_ref();
@@ -854,7 +854,7 @@ impl Render for DataInspector {
     }
 }
 
-impl Focusable for DataInspector {
+impl Focusable for DataInspectorPanel {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
