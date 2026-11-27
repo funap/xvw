@@ -331,14 +331,20 @@ impl Workspace {
                 }
 
                 window
-                    .update(|_, cx| {
+                    .update(|window, cx| {
                         view.update(cx, |this, cx| {
                             if let Some(editor) = this.active_editor(cx) {
                                 let ed = editor.read(cx);
                                 let items = ed.bookmarks().snapshot();
                                 let doc_path = ed.document.read().ok().map(|d| d.path().to_path_buf());
-                                if let Err(e) = crate::service::BookmarkService::export_to_file(&path, &items, doc_path.as_deref()) {
-                                    eprintln!("Failed to export bookmarks: {}", e);
+                                match crate::service::BookmarkService::export_to_file(&path, &items, doc_path.as_deref()) {
+                                    Ok(()) => {
+                                        window.push_notification(notification::info(format!("Exported {} bookmark(s)", items.len())), cx);
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to export bookmarks: {}", e);
+                                        window.push_notification(notification::error(format!("Failed to export bookmarks: {e}")), cx);
+                                    }
                                 }
                             }
                         });
@@ -361,19 +367,22 @@ impl Workspace {
         cx.spawn_in(window, async move |_, window| {
             if let Some(path) = prompt_path.await.ok().and_then(|r| r.ok()).flatten().and_then(|mut v| v.pop()) {
                 window
-                    .update(|_, cx| {
+                    .update(|window, cx| {
                         view.update(cx, |this, cx| {
                             if let Some(editor) = this.active_editor(cx) {
                                 let doc_path = editor.read(cx).document.read().ok().map(|d| d.path().to_path_buf());
                                 match crate::service::BookmarkService::import_from_file(&path) {
                                     Ok(items) => {
+                                        let count = items.len();
                                         editor.update(cx, |ed, cx| {
                                             ed.bookmarks_mut().import_items(items);
                                             cx.notify();
                                         });
+                                        window.push_notification(notification::info(format!("Imported {count} bookmark(s)")), cx);
                                     }
                                     Err(e) => {
                                         eprintln!("Failed to import bookmarks: {}", e);
+                                        window.push_notification(notification::error(format!("Failed to import bookmarks: {e}")), cx);
                                     }
                                 }
                                 if let Some(ref p) = doc_path {
@@ -825,16 +834,17 @@ impl Workspace {
         let Some(editor) = self.active_editor(cx) else {
             return;
         };
-        let (document, is_read_only, is_dirty, state_id) = {
+        let (document, is_read_only, is_dirty, title) = {
             let editor_read = editor.read(cx);
             let document = editor_read.document.clone();
             let document_read = document.read().expect("document read lock");
-            (
-                document.clone(),
-                document_read.is_read_only(),
-                document_read.is_dirty(),
-                document_read.history.state_id(),
-            )
+            let title = document_read
+                .path()
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "document".to_string());
+            (document.clone(), document_read.is_read_only(), document_read.is_dirty(), title)
         };
 
         if is_read_only {
@@ -865,19 +875,18 @@ impl Workspace {
                 return;
             }
 
-            let Some(save_task) = window.update(|_, cx| service.save_document(document.clone(), cx)).ok() else {
+            if save_single_dirty_document(&mut *window, &service, document.clone(), &title).await.is_err() {
                 return;
-            };
-            let result = save_task.await;
+            }
+
             let _ = window.update(|_, cx| {
                 workspace.update(cx, |workspace, cx| {
-                    if let Err(error) = result {
-                        eprintln!("Failed to save document before making it read-only: {error}");
-                        return;
-                    }
-
-                    if service.finalize_save_state(&document, state_id, cx) {
+                    let is_clean = document.read().map(|d| !d.is_dirty()).unwrap_or(false);
+                    if is_clean {
                         workspace.set_editor_read_only(&editor, true, cx);
+                    }
+                    for group in workspace.pane_tree.read(cx).all_groups() {
+                        group.update(cx, |_, cx| cx.notify());
                     }
                 });
             });
@@ -952,11 +961,13 @@ impl Workspace {
                 return;
             };
             let result = task.await;
-            let _ = window.update(|_, cx| {
+            let _ = window.update(|window, cx| {
                 workspace.update(cx, |this, cx| {
                     match result {
                         Ok(()) => {
                             service.finalize_save_as_state(&document, path.clone(), state_id, cx);
+                            let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
+                            window.push_notification(notification::info(format!("Saved {file_name}")), cx);
                             for group in this.pane_tree.read(cx).all_groups() {
                                 group.update(cx, |_, cx| cx.notify());
                             }
@@ -964,6 +975,7 @@ impl Workspace {
                         }
                         Err(error) => {
                             eprintln!("Failed to save document as: {error}");
+                            window.push_notification(notification::error(format!("Failed to save document: {error}")), cx);
                         }
                     }
                     cx.notify();
@@ -982,6 +994,48 @@ impl Workspace {
         F: FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
     {
         let dirty_docs = collect_dirty_documents(tabs, cx);
+        self.confirm_dirty_documents(dirty_docs, window, cx, on_proceed);
+    }
+
+    /// Confirms closing a subset of tabs, skipping dirty prompts for documents that remain open in another tab or split pane.
+    pub(crate) fn confirm_close_tabs_excluding_open<F>(
+        &mut self,
+        closing_tabs: &[crate::ui::pane::TabItem],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        on_proceed: F,
+    ) where
+        F: FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
+    {
+        let closing_ids: std::collections::HashSet<usize> = closing_tabs.iter().map(|t| t.id).collect();
+        let remaining_docs: Vec<Arc<RwLock<crate::core::document::Document>>> = self
+            .pane_tree
+            .read(cx)
+            .all_groups()
+            .into_iter()
+            .flat_map(|group| {
+                group
+                    .read(cx)
+                    .tabs
+                    .iter()
+                    .filter(|tab| !closing_ids.contains(&tab.id))
+                    .filter_map(|tab| tab.content.document(cx))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let dirty_docs = filter_dirty_documents_still_open(collect_dirty_documents(closing_tabs, cx), &remaining_docs);
+        self.confirm_dirty_documents(dirty_docs, window, cx, on_proceed);
+    }
+
+    fn confirm_dirty_documents<F>(
+        &mut self,
+        dirty_docs: Vec<(Arc<RwLock<crate::core::document::Document>>, String)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        on_proceed: F,
+    ) where
+        F: FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
+    {
         if dirty_docs.is_empty() {
             on_proceed(self, window, cx);
             return;
@@ -1117,7 +1171,13 @@ impl Workspace {
             }
 
             // Perform deletion
-            let _ = crate::service::ScratchService::delete_scratch(&file_path);
+            if let Err(error) = crate::service::ScratchService::delete_scratch(&file_path) {
+                eprintln!("Failed to delete scratchpad {}: {error}", file_path.display());
+                let _ = window.update(|window, cx| {
+                    window.push_notification(notification::error(format!("Failed to delete scratchpad \"{title}\": {error}")), cx);
+                });
+                return;
+            }
 
             window
                 .update(|window, cx| {
@@ -1260,6 +1320,20 @@ pub(crate) fn deduplicate_dirty_documents(
         }
     }
     result
+}
+
+pub(crate) fn filter_dirty_documents_still_open(
+    closing_docs: Vec<(Arc<RwLock<crate::core::document::Document>>, String)>,
+    remaining_docs: &[Arc<RwLock<crate::core::document::Document>>],
+) -> Vec<(Arc<RwLock<crate::core::document::Document>>, String)> {
+    closing_docs
+        .into_iter()
+        .filter(|(doc, _)| {
+            !remaining_docs
+                .iter()
+                .any(|rem| Arc::ptr_eq(rem, doc) || rem.read().ok().and_then(|d1| doc.read().ok().map(|d2| d1.path() == d2.path())).unwrap_or(false))
+        })
+        .collect()
 }
 
 pub(crate) fn collect_dirty_documents(tabs: &[crate::ui::pane::TabItem], cx: &App) -> Vec<(Arc<RwLock<crate::core::document::Document>>, String)> {

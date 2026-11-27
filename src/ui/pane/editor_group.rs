@@ -4,11 +4,73 @@ use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::{ActiveTheme, Icon, Sizable};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use schemars::JsonSchema;
+use serde::Deserialize;
 use std::collections::HashMap;
+use std::path::Path;
 
 use super::types::{DropPlacement, SplitDirection, TabContent, TabDrag, TabItem};
-use crate::app_state::AppState;
 use crate::core::editor::Editor;
+
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[action(namespace = editor_group)]
+#[serde(deny_unknown_fields)]
+struct TabContextClose {
+    tab_id: usize,
+}
+
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[action(namespace = editor_group)]
+#[serde(deny_unknown_fields)]
+struct TabContextCloseOthers {
+    tab_id: usize,
+}
+
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[action(namespace = editor_group)]
+#[serde(deny_unknown_fields)]
+struct TabContextCloseToRight {
+    tab_id: usize,
+}
+
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = editor_group)]
+struct TabContextCloseSaved;
+
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[action(namespace = editor_group)]
+#[serde(deny_unknown_fields)]
+struct TabContextSplitRight {
+    tab_id: usize,
+}
+
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[action(namespace = editor_group)]
+#[serde(deny_unknown_fields)]
+struct TabContextSplitDown {
+    tab_id: usize,
+}
+
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[action(namespace = editor_group)]
+#[serde(deny_unknown_fields)]
+struct TabContextCopyPath {
+    path: String,
+}
+
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[action(namespace = editor_group)]
+#[serde(deny_unknown_fields)]
+struct TabContextCopyFileName {
+    name: String,
+}
+
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[action(namespace = editor_group)]
+#[serde(deny_unknown_fields)]
+struct TabContextRevealInExplorer {
+    path: String,
+}
 
 #[allow(dead_code)]
 pub enum EditorGroupEvent {
@@ -17,6 +79,11 @@ pub enum EditorGroupEvent {
     Split { direction: SplitDirection, new_content: TabContent },
     CloseTab(usize),
     CloseGroup,
+    RequestCloseTab(usize),
+    RequestCloseGroup,
+    RequestCloseOtherTabs(usize),
+    RequestCloseTabsToRight(usize),
+    RequestCloseSavedTabs,
     DropTab { drag: TabDrag, target_index: usize },
     SplitWithDrop { drag: TabDrag, placement: DropPlacement },
 }
@@ -27,7 +94,9 @@ pub struct EditorGroup {
     pub active_index: usize,
     pub focus_handle: FocusHandle,
     pub is_active_group: bool,
+    tab_list_scroll_handle: ScrollHandle,
     editor_subscriptions: HashMap<usize, Subscription>,
+    tab_focus_subscriptions: HashMap<usize, [Subscription; 2]>,
     dirty_states: HashMap<usize, bool>,
     read_only_states: HashMap<usize, bool>,
 }
@@ -42,7 +111,9 @@ impl EditorGroup {
             active_index: 0,
             focus_handle,
             is_active_group: false,
+            tab_list_scroll_handle: ScrollHandle::new(),
             editor_subscriptions: HashMap::new(),
+            tab_focus_subscriptions: HashMap::new(),
             dirty_states: HashMap::new(),
             read_only_states: HashMap::new(),
         }
@@ -113,25 +184,30 @@ impl EditorGroup {
         self.editor_subscriptions.insert(tab_id, subscription);
     }
 
-    pub fn add_tab(&mut self, tab: TabItem, activate: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let new_idx = self.tabs.len();
+    fn observe_tab_focus(&mut self, tab: &TabItem, window: &mut Window, cx: &mut Context<Self>) {
         let tab_id = tab.id;
-        self.observe_tab_dirty_state(&tab, cx);
-        cx.on_focus_in(&tab.focus_handle(cx), window, move |this, _window, cx| {
+        let handle = tab.focus_handle(cx);
+        let focus_in = cx.on_focus_in(&handle, window, move |this, _window, cx| {
             if let Some(idx) = this.tabs.iter().position(|t| t.id == tab_id)
                 && this.active_index != idx
             {
                 this.active_index = idx;
+                this.tab_list_scroll_handle.scroll_to_item(idx);
                 cx.emit(EditorGroupEvent::TabChanged);
             }
             cx.emit(EditorGroupEvent::Focused);
             cx.notify();
-        })
-        .detach();
-        cx.on_focus_out(&tab.focus_handle(cx), window, move |_this, _window, _event, cx| {
+        });
+        let focus_out = cx.on_focus_out(&handle, window, move |_this, _window, _event, cx| {
             cx.notify();
-        })
-        .detach();
+        });
+        self.tab_focus_subscriptions.insert(tab_id, [focus_in, focus_out]);
+    }
+
+    pub fn add_tab(&mut self, tab: TabItem, activate: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let new_idx = self.tabs.len();
+        self.observe_tab_dirty_state(&tab, cx);
+        self.observe_tab_focus(&tab, window, cx);
 
         self.tabs.push(tab);
         if activate || self.tabs.len() == 1 {
@@ -143,23 +219,8 @@ impl EditorGroup {
 
     pub fn insert_tab(&mut self, index: usize, tab: TabItem, activate: bool, window: &mut Window, cx: &mut Context<Self>) {
         let clamped = index.min(self.tabs.len());
-        let tab_id = tab.id;
         self.observe_tab_dirty_state(&tab, cx);
-        cx.on_focus_in(&tab.focus_handle(cx), window, move |this, _window, cx| {
-            if let Some(idx) = this.tabs.iter().position(|t| t.id == tab_id)
-                && this.active_index != idx
-            {
-                this.active_index = idx;
-                cx.emit(EditorGroupEvent::TabChanged);
-            }
-            cx.emit(EditorGroupEvent::Focused);
-            cx.notify();
-        })
-        .detach();
-        cx.on_focus_out(&tab.focus_handle(cx), window, move |_this, _window, _event, cx| {
-            cx.notify();
-        })
-        .detach();
+        self.observe_tab_focus(&tab, window, cx);
 
         self.tabs.insert(clamped, tab);
         if activate || self.tabs.len() == 1 {
@@ -175,6 +236,7 @@ impl EditorGroup {
     pub fn remove_tab_by_id(&mut self, tab_id: usize, window: &mut Window, cx: &mut Context<Self>) -> Option<TabItem> {
         if let Some(pos) = self.tabs.iter().position(|t| t.id == tab_id) {
             self.editor_subscriptions.remove(&tab_id);
+            self.tab_focus_subscriptions.remove(&tab_id);
             self.dirty_states.remove(&tab_id);
             self.read_only_states.remove(&tab_id);
             let removed = self.tabs.remove(pos);
@@ -185,6 +247,7 @@ impl EditorGroup {
                 if let Some(tab) = self.tabs.get(self.active_index) {
                     tab.focus_handle(cx).focus(window, cx);
                 }
+                self.tab_list_scroll_handle.scroll_to_item(self.active_index);
             }
             cx.emit(EditorGroupEvent::TabChanged);
             cx.notify();
@@ -197,6 +260,7 @@ impl EditorGroup {
     pub fn activate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index < self.tabs.len() {
             self.active_index = index;
+            self.tab_list_scroll_handle.scroll_to_item(index);
             if let Some(tab) = self.tabs.get(index) {
                 tab.focus_handle(cx).focus(window, cx);
             }
@@ -228,68 +292,10 @@ impl EditorGroup {
         }
     }
 
-    pub fn close_tab(&mut self, tab_id: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.tabs.iter().find(|tab| tab.id == tab_id) else {
-            return;
-        };
-
-        if !tab.is_dirty(cx) {
-            self.close_tab_now(tab_id, window, cx);
-            return;
+    pub fn request_close_tab(&mut self, tab_id: usize, cx: &mut Context<Self>) {
+        if self.tabs.iter().any(|tab| tab.id == tab_id) {
+            cx.emit(EditorGroupEvent::RequestCloseTab(tab_id));
         }
-
-        let Some(document) = tab.content.document(cx) else {
-            self.close_tab_now(tab_id, window, cx);
-            return;
-        };
-        let state_id = {
-            let document_read = document.read().expect("document read lock");
-            document_read.history.state_id()
-        };
-        let title = tab.title(cx);
-        let prompt = window.prompt(
-            PromptLevel::Warning,
-            "Unsaved Changes",
-            Some(&format!("Save changes to {title} before closing?")),
-            &["Save", "Don't Save", "Cancel"],
-            cx,
-        );
-        let group = cx.entity().downgrade();
-        let service = AppState::global(cx).document_service.clone();
-
-        cx.spawn_in(window, async move |_, window| {
-            let Ok(choice) = prompt.await else {
-                return;
-            };
-
-            match choice {
-                0 => {
-                    let Some(save_task) = window.update(|_, cx| service.save_document(document.clone(), cx)).ok() else {
-                        return;
-                    };
-                    if let Err(error) = save_task.await {
-                        eprintln!("Failed to save document before closing: {error}");
-                        return;
-                    }
-
-                    let _ = window.update(|window, cx| {
-                        let _ = service.finalize_save_state(&document, state_id, cx);
-                        let _ = group.update(cx, |group, cx| {
-                            group.close_tab_now(tab_id, window, cx);
-                        });
-                    });
-                }
-                1 => {
-                    let _ = window.update(|window, cx| {
-                        let _ = group.update(cx, |group, cx| {
-                            group.close_tab_now(tab_id, window, cx);
-                        });
-                    });
-                }
-                _ => {}
-            }
-        })
-        .detach();
     }
 
     pub fn close_other_tabs(&mut self, keep_tab_id: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -330,14 +336,21 @@ impl EditorGroup {
         cx.emit(EditorGroupEvent::CloseGroup);
     }
 
-    pub fn split_active_tab(&mut self, direction: SplitDirection, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(active_content) = self.active_content() else {
+    pub fn split_tab_by_id(&mut self, tab_id: usize, direction: SplitDirection, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(content) = self.tabs.iter().find(|t| t.id == tab_id).map(|t| t.content.clone()) else {
             return;
         };
 
-        if let Some(new_content) = active_content.create_split(window, cx) {
+        if let Some(new_content) = content.create_split(window, cx) {
             cx.emit(EditorGroupEvent::Split { direction, new_content });
         }
+    }
+
+    pub fn split_active_tab(&mut self, direction: SplitDirection, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab_id) = self.active_tab().map(|t| t.id) else {
+            return;
+        };
+        self.split_tab_by_id(tab_id, direction, window, cx);
     }
 }
 
@@ -355,9 +368,38 @@ impl Render for EditorGroup {
         let tab_bar_bg = theme.tab_bar;
         let group_id = self.id;
         let active_index = self.active_index;
+        let group_focus_handle = self.focus_handle.clone();
 
         div()
             .id(ElementId::NamedInteger("editor-group".into(), group_id as u64))
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(|this, action: &TabContextClose, _, cx| {
+                this.request_close_tab(action.tab_id, cx);
+            }))
+            .on_action(cx.listener(|_, action: &TabContextCloseOthers, _, cx| {
+                cx.emit(EditorGroupEvent::RequestCloseOtherTabs(action.tab_id));
+            }))
+            .on_action(cx.listener(|_, action: &TabContextCloseToRight, _, cx| {
+                cx.emit(EditorGroupEvent::RequestCloseTabsToRight(action.tab_id));
+            }))
+            .on_action(cx.listener(|_, _: &TabContextCloseSaved, _, cx| {
+                cx.emit(EditorGroupEvent::RequestCloseSavedTabs);
+            }))
+            .on_action(cx.listener(|this, action: &TabContextSplitRight, window, cx| {
+                this.split_tab_by_id(action.tab_id, SplitDirection::Horizontal, window, cx);
+            }))
+            .on_action(cx.listener(|this, action: &TabContextSplitDown, window, cx| {
+                this.split_tab_by_id(action.tab_id, SplitDirection::Vertical, window, cx);
+            }))
+            .on_action(cx.listener(|_, action: &TabContextCopyPath, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(action.path.clone()));
+            }))
+            .on_action(cx.listener(|_, action: &TabContextCopyFileName, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(action.name.clone()));
+            }))
+            .on_action(cx.listener(|_, action: &TabContextRevealInExplorer, _, _| {
+                crate::ui::workspace::reveal_in_file_explorer(Path::new(&action.path));
+            }))
             .size_full()
             .min_w_0()
             .min_h_0()
@@ -390,6 +432,8 @@ impl Render for EditorGroup {
                             .min_w_0()
                             .h_full()
                             .overflow_x_scroll()
+                            .track_scroll(&self.tab_list_scroll_handle)
+                            .drag_over::<TabDrag>(|style, _drag, _window, cx| style.bg(cx.theme().drop_target))
                             .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
                                 cx.emit(EditorGroupEvent::DropTab {
                                     drag: *drag,
@@ -414,12 +458,14 @@ impl Render for EditorGroup {
                                 let tab_id = tab.id;
                                 let is_active = idx == active_index;
                                 let is_dirty = tab.is_dirty(cx);
-                                let is_read_only = tab.is_read_only(cx);
+                                let tab_icon = tab.icon(cx);
+                                let tab_tooltip = tab.tooltip(cx);
                                 let title = tab.title(cx);
                                 let title_for_drag = title.clone();
                                 let close_group = format!("tab-close-hover-{tab_id}");
                                 let tab_focus_handle = tab.focus_handle(cx);
                                 let is_workspace_active = self.is_workspace_active_tab(idx);
+                                let menu_action_context = group_focus_handle.clone();
 
                                 div()
                                     .id(ElementId::NamedInteger("tab-item".into(), tab_id as u64))
@@ -444,6 +490,9 @@ impl Render for EditorGroup {
                                     .when(is_workspace_active, |s| {
                                         s.child(div().absolute().top_0().left_0().right_0().h(px(2.0)).bg(theme.primary))
                                     })
+                                    .when_some(tab_tooltip, |el, tip| {
+                                        el.tooltip(move |_window, cx| cx.new(|_| gpui_kit::component::tooltip::Tooltip::new(tip.clone())).into())
+                                    })
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |this, _, window, cx| {
@@ -453,9 +502,9 @@ impl Render for EditorGroup {
                                     )
                                     .on_mouse_down(
                                         MouseButton::Middle,
-                                        cx.listener(move |this, _, window, cx| {
+                                        cx.listener(move |this, _, _window, cx| {
                                             cx.stop_propagation();
-                                            this.close_tab(tab_id, window, cx);
+                                            this.request_close_tab(tab_id, cx);
                                         }),
                                     )
                                     .on_drag(
@@ -468,6 +517,10 @@ impl Render for EditorGroup {
                                             cx.new(|_| DragPreview { title })
                                         },
                                     )
+                                    .drag_over::<TabDrag>(|style, _drag, _window, cx| {
+                                        let theme = cx.theme();
+                                        style.bg(theme.drop_target).border_l_2().border_color(theme.drag_border)
+                                    })
                                     .on_drop(cx.listener(move |_, drag: &TabDrag, _, cx| {
                                         cx.emit(EditorGroupEvent::DropTab {
                                             drag: *drag,
@@ -497,29 +550,25 @@ impl Render for EditorGroup {
                                             .collect();
                                         move |menu, window, cx| {
                                             let mut menu = menu
-                                                .menu_with_icon("Close", IconName::Close, Box::new(crate::actions::CloseActivePanel))
+                                                .action_context(menu_action_context.clone())
+                                                .menu_with_icon("Close", IconName::Close, Box::new(TabContextClose { tab_id }))
                                                 .menu_with_icon_and_disabled(
                                                     "Close Others",
                                                     IconName::Close,
-                                                    Box::new(crate::actions::CloseOtherTabs),
+                                                    Box::new(TabContextCloseOthers { tab_id }),
                                                     !can_close_others,
                                                 )
                                                 .menu_with_icon_and_disabled(
                                                     "Close to the Right",
                                                     IconName::ChevronRight,
-                                                    Box::new(crate::actions::CloseTabsToRight),
+                                                    Box::new(TabContextCloseToRight { tab_id }),
                                                     !can_close_right,
                                                 )
-                                                .menu_with_icon_and_disabled(
-                                                    "Close Saved",
-                                                    IconName::Check,
-                                                    Box::new(crate::actions::CloseSavedTabs),
-                                                    !has_saved,
-                                                )
+                                                .menu_with_icon_and_disabled("Close Saved", IconName::Check, Box::new(TabContextCloseSaved), !has_saved)
                                                 .menu_with_icon("Close All", IconName::Close, Box::new(crate::actions::CloseAllTabs))
                                                 .separator()
-                                                .menu_with_icon("Split Right", IconName::PanelRight, Box::new(crate::actions::SplitRight))
-                                                .menu_with_icon("Split Down", IconName::PanelBottom, Box::new(crate::actions::SplitDown));
+                                                .menu_with_icon("Split Right", IconName::PanelRight, Box::new(TabContextSplitRight { tab_id }))
+                                                .menu_with_icon("Split Down", IconName::PanelBottom, Box::new(TabContextSplitDown { tab_id }));
 
                                             if let Some(current_path) = &tab_path {
                                                 let current_path_str = current_path.to_string_lossy().to_string();
@@ -536,7 +585,7 @@ impl Render for EditorGroup {
                                                 if let Some(pending_path) = &pending_compare_path
                                                     && pending_path != &current_path_str
                                                 {
-                                                    let pending_name = std::path::Path::new(pending_path)
+                                                    let pending_name = Path::new(pending_path)
                                                         .file_name()
                                                         .map(|n| n.to_string_lossy().to_string())
                                                         .unwrap_or_else(|| "Selected".to_string());
@@ -598,13 +647,21 @@ impl Render for EditorGroup {
                                                         sub
                                                     });
                                                 }
-                                            }
 
-                                            if tab_path.is_some() {
+                                                let file_name = current_path
+                                                    .file_name()
+                                                    .map(|n| n.to_string_lossy().to_string())
+                                                    .unwrap_or_else(|| current_path_str.clone());
                                                 menu = menu
                                                     .separator()
-                                                    .menu_with_icon("Copy Path", IconName::Copy, Box::new(crate::actions::CopyPath))
-                                                    .menu_with_icon("Copy File Name", IconName::FileText, Box::new(crate::actions::CopyFileName))
+                                                    .menu_with_icon(
+                                                        "Copy Path",
+                                                        IconName::Copy,
+                                                        Box::new(TabContextCopyPath {
+                                                            path: current_path_str.clone(),
+                                                        }),
+                                                    )
+                                                    .menu_with_icon("Copy File Name", IconName::FileText, Box::new(TabContextCopyFileName { name: file_name }))
                                                     .menu_with_icon(
                                                         if cfg!(target_os = "macos") {
                                                             "Reveal in Finder"
@@ -612,14 +669,14 @@ impl Render for EditorGroup {
                                                             "Reveal in File Explorer"
                                                         },
                                                         IconName::FolderSearch,
-                                                        Box::new(crate::actions::RevealInExplorer),
+                                                        Box::new(TabContextRevealInExplorer { path: current_path_str }),
                                                     );
                                             }
                                             menu
                                         }
                                     })
                                     .child(
-                                        Icon::new(if is_read_only { IconName::PenOff } else { IconName::File })
+                                        Icon::new(tab_icon)
                                             .size(px(14.0))
                                             .text_color(if is_active { theme.primary } else { theme.muted_foreground }),
                                     )
@@ -646,9 +703,9 @@ impl Render for EditorGroup {
                                             .hover(|style| style.bg(theme.accent).text_color(theme.accent_foreground))
                                             .on_mouse_down(
                                                 MouseButton::Left,
-                                                cx.listener(move |this, _, window, cx| {
+                                                cx.listener(move |this, _, _window, cx| {
                                                     cx.stop_propagation();
-                                                    this.close_tab(tab_id, window, cx);
+                                                    this.request_close_tab(tab_id, cx);
                                                 }),
                                             )
                                             .when(is_dirty, |s| {
@@ -721,7 +778,7 @@ impl Render for EditorGroup {
                                     .ghost()
                                     .tooltip("Close Pane")
                                     .on_click(cx.listener(|_, _, _, cx| {
-                                        cx.emit(EditorGroupEvent::CloseGroup);
+                                        cx.emit(EditorGroupEvent::RequestCloseGroup);
                                     })),
                             ),
                     ),
@@ -813,6 +870,25 @@ impl Render for EditorGroup {
                                     cx.emit(EditorGroupEvent::SplitWithDrop {
                                         drag: *drag,
                                         placement: DropPlacement::Bottom,
+                                    });
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("drop-zone-center")
+                                .absolute()
+                                .top(px(50.0))
+                                .bottom(px(50.0))
+                                .left(px(80.0))
+                                .right(px(80.0))
+                                .drag_over::<TabDrag>(|style, _drag, _window, cx| {
+                                    let theme = cx.theme();
+                                    style.bg(theme.drop_target).border_2().border_color(theme.drag_border)
+                                })
+                                .on_drop(cx.listener(|_, drag: &TabDrag, _, cx| {
+                                    cx.emit(EditorGroupEvent::SplitWithDrop {
+                                        drag: *drag,
+                                        placement: DropPlacement::Center,
                                     });
                                 })),
                         )

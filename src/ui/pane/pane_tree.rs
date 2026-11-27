@@ -15,6 +15,11 @@ pub enum PaneNode {
 
 pub enum PaneTreeEvent {
     ActiveEditorChanged,
+    RequestCloseTab { group_id: usize, tab_id: usize },
+    RequestCloseGroup { group_id: usize },
+    RequestCloseOtherTabs { group_id: usize, keep_tab_id: usize },
+    RequestCloseTabsToRight { group_id: usize, target_tab_id: usize },
+    RequestCloseSavedTabs { group_id: usize },
 }
 
 type PaneParent = (usize, bool);
@@ -52,6 +57,15 @@ impl PaneTree {
 
     pub fn is_empty(&self) -> bool {
         self.root.is_none()
+    }
+
+    /// Removes all panes and tabs in place while keeping the `PaneTree` entity and its subscriptions intact.
+    pub fn clear(&mut self, cx: &mut Context<Self>) {
+        self.nodes.clear();
+        self.root = None;
+        self.active_group_id = None;
+        cx.emit(PaneTreeEvent::ActiveEditorChanged);
+        cx.notify();
     }
 
     pub fn active_group_id(&self) -> Option<usize> {
@@ -153,6 +167,27 @@ impl PaneTree {
             }
             EditorGroupEvent::CloseGroup => {
                 this.remove_group(id, window, cx);
+            }
+            EditorGroupEvent::RequestCloseTab(tab_id) => {
+                cx.emit(PaneTreeEvent::RequestCloseTab { group_id: id, tab_id: *tab_id });
+            }
+            EditorGroupEvent::RequestCloseGroup => {
+                cx.emit(PaneTreeEvent::RequestCloseGroup { group_id: id });
+            }
+            EditorGroupEvent::RequestCloseOtherTabs(keep_tab_id) => {
+                cx.emit(PaneTreeEvent::RequestCloseOtherTabs {
+                    group_id: id,
+                    keep_tab_id: *keep_tab_id,
+                });
+            }
+            EditorGroupEvent::RequestCloseTabsToRight(target_tab_id) => {
+                cx.emit(PaneTreeEvent::RequestCloseTabsToRight {
+                    group_id: id,
+                    target_tab_id: *target_tab_id,
+                });
+            }
+            EditorGroupEvent::RequestCloseSavedTabs => {
+                cx.emit(PaneTreeEvent::RequestCloseSavedTabs { group_id: id });
             }
             EditorGroupEvent::DropTab { drag, target_index } => {
                 this.move_tab(*drag, id, *target_index, window, cx);
@@ -377,6 +412,10 @@ impl PaneTree {
     }
 
     pub fn split_with_drop(&mut self, drag: TabDrag, target_group_id: usize, placement: DropPlacement, window: &mut Window, cx: &mut Context<Self>) {
+        if drag.from_group_id == target_group_id && placement == DropPlacement::Center {
+            return;
+        }
+
         let from_group = self.find_group(drag.from_group_id);
         let Some(from_group) = from_group else {
             return;
@@ -393,6 +432,7 @@ impl PaneTree {
         match placement {
             DropPlacement::Center => {
                 if let Some(target_group) = self.find_group(target_group_id) {
+                    self.active_group_id = Some(target_group_id);
                     target_group.update(cx, |g, cx| {
                         g.add_tab(tab, true, window, cx);
                     });
@@ -510,13 +550,14 @@ impl PaneTree {
         cx.notify();
     }
 
-    pub fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn close_active_tab(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(group) = self.active_group(cx) {
-            let tab_id = group.read(cx).active_tab().map(|t| t.id);
+            let (group_id, tab_id) = {
+                let g = group.read(cx);
+                (g.id, g.active_tab().map(|t| t.id))
+            };
             if let Some(tab_id) = tab_id {
-                group.update(cx, |g, cx| {
-                    g.close_tab(tab_id, window, cx);
-                });
+                cx.emit(PaneTreeEvent::RequestCloseTab { group_id, tab_id });
             }
         }
     }

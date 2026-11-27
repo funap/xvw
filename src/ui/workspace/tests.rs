@@ -533,3 +533,39 @@ fn test_resolve_initial_diff_encoding_ignores_unrelated_active_editor_and_falls_
         Encoding::Ascii
     );
 }
+
+#[test]
+fn test_filter_dirty_documents_still_open_skips_split_duplicates() {
+    use super::dialog_flow::filter_dirty_documents_still_open;
+
+    let shared_doc = Arc::new(RwLock::new(Document::new(PathBuf::from("shared.bin"), Buffer::new(vec![0x01]))));
+    let only_closing = Arc::new(RwLock::new(Document::new(PathBuf::from("closing.bin"), Buffer::new(vec![0x02]))));
+
+    let closing = vec![
+        (shared_doc.clone(), "shared.bin".to_string()),
+        (only_closing.clone(), "closing.bin".to_string()),
+    ];
+    let remaining = vec![shared_doc.clone()];
+
+    let filtered = filter_dirty_documents_still_open(closing, &remaining);
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].1, "closing.bin");
+    assert!(Arc::ptr_eq(&filtered[0].0, &only_closing));
+}
+
+#[test]
+fn test_filter_dirty_documents_still_open_matches_same_path_and_keeps_unmatched() {
+    use super::dialog_flow::filter_dirty_documents_still_open;
+
+    let closing_a = Arc::new(RwLock::new(Document::new(PathBuf::from("same.bin"), Buffer::new(vec![0x01]))));
+    let remaining_a = Arc::new(RwLock::new(Document::new(PathBuf::from("same.bin"), Buffer::new(vec![0x01]))));
+    let closing_b = Arc::new(RwLock::new(Document::new(PathBuf::from("other.bin"), Buffer::new(vec![0x02]))));
+
+    let filtered = filter_dirty_documents_still_open(
+        vec![(closing_a, "same.bin".to_string()), (closing_b.clone(), "other.bin".to_string())],
+        &[remaining_a],
+    );
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].1, "other.bin");
+    assert!(Arc::ptr_eq(&filtered[0].0, &closing_b));
+}

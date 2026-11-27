@@ -159,6 +159,10 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_action_reveal_in_explorer))
             .on_action(cx.listener(Self::on_action_split_right))
             .on_action(cx.listener(Self::on_action_split_down))
+            .drag_over::<ExternalPaths>(|style, _paths, _window, cx| {
+                let theme = cx.theme();
+                style.border_2().border_color(theme.drag_border).bg(theme.drop_target)
+            })
             .on_drop(cx.listener(move |this, external_paths: &ExternalPaths, window, cx| {
                 for path in external_paths.paths() {
                     if path.is_file() {
