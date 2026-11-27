@@ -116,7 +116,7 @@ impl Workspace {
                 this.open_settings_view(window, cx);
             }
             AppTitleBarEvent::OpenAbout => {
-                this.open_about_dialog(window, cx);
+                this.open_about_modal(window, cx);
             }
         })
         .detach();
