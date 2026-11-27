@@ -805,6 +805,93 @@ impl Workspace {
         }
     }
 
+    pub(crate) fn request_close_tab(&mut self, group_id: usize, tab_id: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(group) = self.pane_tree.read(cx).find_group(group_id) else {
+            return;
+        };
+        let Some(tab) = group.read(cx).tabs.iter().find(|t| t.id == tab_id).cloned() else {
+            return;
+        };
+        self.confirm_close_tabs_excluding_open(&[tab], window, cx, move |workspace, window, cx| {
+            if let Some(group) = workspace.pane_tree.read(cx).find_group(group_id) {
+                group.update(cx, |g, cx| {
+                    g.close_tab_now(tab_id, window, cx);
+                });
+            }
+            workspace.sync_active_editor(window, cx);
+            cx.notify();
+        });
+    }
+
+    pub(crate) fn request_close_group(&mut self, group_id: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(group) = self.pane_tree.read(cx).find_group(group_id) else {
+            return;
+        };
+        let group_tabs = group.read(cx).tabs.clone();
+        self.confirm_close_tabs_excluding_open(&group_tabs, window, cx, move |workspace, window, cx| {
+            workspace.pane_tree.update(cx, |tree, cx| {
+                tree.remove_group(group_id, window, cx);
+            });
+            workspace.sync_active_editor(window, cx);
+            cx.notify();
+        });
+    }
+
+    pub(crate) fn request_close_other_tabs_in_group(&mut self, group_id: usize, keep_tab_id: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(group) = self.pane_tree.read(cx).find_group(group_id) else {
+            return;
+        };
+        let other_tabs: Vec<crate::ui::pane::TabItem> = group.read(cx).tabs.iter().filter(|t| t.id != keep_tab_id).cloned().collect();
+        if other_tabs.is_empty() {
+            return;
+        }
+        self.confirm_close_tabs_excluding_open(&other_tabs, window, cx, move |workspace, window, cx| {
+            if let Some(group) = workspace.pane_tree.read(cx).find_group(group_id) {
+                group.update(cx, |g, cx| {
+                    g.close_other_tabs(keep_tab_id, window, cx);
+                });
+            }
+            workspace.sync_active_editor(window, cx);
+            cx.notify();
+        });
+    }
+
+    pub(crate) fn request_close_tabs_to_right_in_group(&mut self, group_id: usize, target_tab_id: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(group) = self.pane_tree.read(cx).find_group(group_id) else {
+            return;
+        };
+        let right_tabs: Vec<crate::ui::pane::TabItem> = {
+            let g = group.read(cx);
+            if let Some(pos) = g.tabs.iter().position(|t| t.id == target_tab_id) {
+                g.tabs[pos + 1..].to_vec()
+            } else {
+                Vec::new()
+            }
+        };
+        if right_tabs.is_empty() {
+            return;
+        }
+        self.confirm_close_tabs_excluding_open(&right_tabs, window, cx, move |workspace, window, cx| {
+            if let Some(group) = workspace.pane_tree.read(cx).find_group(group_id) {
+                group.update(cx, |g, cx| {
+                    g.close_tabs_to_right(target_tab_id, window, cx);
+                });
+            }
+            workspace.sync_active_editor(window, cx);
+            cx.notify();
+        });
+    }
+
+    pub(crate) fn request_close_saved_tabs_in_group(&mut self, group_id: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(group) = self.pane_tree.read(cx).find_group(group_id) {
+            group.update(cx, |g, cx| {
+                g.close_saved_tabs(window, cx);
+            });
+        }
+        self.sync_active_editor(window, cx);
+        cx.notify();
+    }
+
     pub(crate) fn on_action_close_active_panel(&mut self, _: &CloseActivePanel, window: &mut Window, cx: &mut Context<Self>) {
         self.pane_tree.update(cx, |tree, cx| {
             tree.close_active_tab(window, cx);
@@ -842,74 +929,40 @@ impl Workspace {
 
     pub(crate) fn on_action_close_other_tabs(&mut self, _: &CloseOtherTabs, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(group) = self.pane_tree.read(cx).active_group(cx) {
-            let (active_id, other_tabs): (Option<usize>, Vec<crate::ui::pane::TabItem>) = {
+            let (group_id, active_id) = {
                 let g = group.read(cx);
-                let active_id = g.active_tab().map(|t| t.id);
-                let other_tabs = if let Some(active_id) = active_id {
-                    g.tabs.iter().filter(|t| t.id != active_id).cloned().collect()
-                } else {
-                    Vec::new()
-                };
-                (active_id, other_tabs)
+                (g.id, g.active_tab().map(|t| t.id))
             };
             if let Some(active_id) = active_id {
-                self.confirm_close_tabs(&other_tabs, window, cx, move |workspace, window, cx| {
-                    if let Some(group) = workspace.pane_tree.read(cx).active_group(cx) {
-                        group.update(cx, |g, cx| {
-                            g.close_other_tabs(active_id, window, cx);
-                        });
-                    }
-                    workspace.sync_active_editor(window, cx);
-                    cx.notify();
-                });
+                self.request_close_other_tabs_in_group(group_id, active_id, window, cx);
             }
         }
     }
 
     pub(crate) fn on_action_close_tabs_to_right(&mut self, _: &CloseTabsToRight, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(group) = self.pane_tree.read(cx).active_group(cx) {
-            let (active_id, right_tabs): (Option<usize>, Vec<crate::ui::pane::TabItem>) = {
+            let (group_id, active_id) = {
                 let g = group.read(cx);
-                let active_id = g.active_tab().map(|t| t.id);
-                let right_tabs = if let Some(active_id) = active_id {
-                    if let Some(pos) = g.tabs.iter().position(|t| t.id == active_id) {
-                        g.tabs[pos + 1..].to_vec()
-                    } else {
-                        Vec::new()
-                    }
-                } else {
-                    Vec::new()
-                };
-                (active_id, right_tabs)
+                (g.id, g.active_tab().map(|t| t.id))
             };
             if let Some(active_id) = active_id {
-                self.confirm_close_tabs(&right_tabs, window, cx, move |workspace, window, cx| {
-                    if let Some(group) = workspace.pane_tree.read(cx).active_group(cx) {
-                        group.update(cx, |g, cx| {
-                            g.close_tabs_to_right(active_id, window, cx);
-                        });
-                    }
-                    workspace.sync_active_editor(window, cx);
-                    cx.notify();
-                });
+                self.request_close_tabs_to_right_in_group(group_id, active_id, window, cx);
             }
         }
     }
 
     pub(crate) fn on_action_close_saved_tabs(&mut self, _: &CloseSavedTabs, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(group) = self.pane_tree.read(cx).active_group(cx) {
-            group.update(cx, |g, cx| {
-                g.close_saved_tabs(window, cx);
-            });
+        if let Some(group_id) = self.pane_tree.read(cx).active_group(cx).map(|g| g.read(cx).id) {
+            self.request_close_saved_tabs_in_group(group_id, window, cx);
         }
-        self.sync_active_editor(window, cx);
-        cx.notify();
     }
 
     pub(crate) fn on_action_close_all_tabs(&mut self, _: &CloseAllTabs, window: &mut Window, cx: &mut Context<Self>) {
         let all_tabs: Vec<crate::ui::pane::TabItem> = self.pane_tree.read(cx).all_groups().iter().flat_map(|g| g.read(cx).tabs.clone()).collect();
         self.confirm_close_tabs(&all_tabs, window, cx, |workspace, window, cx| {
-            workspace.pane_tree = cx.new(|_| crate::ui::pane::PaneTree::new());
+            workspace.pane_tree.update(cx, |tree, cx| {
+                tree.clear(cx);
+            });
             workspace.sync_active_editor(window, cx);
             cx.notify();
         });
@@ -1001,6 +1054,7 @@ impl Workspace {
         // Persist initial scratch file immediately so it appears on disk and in menus
         if let Err(e) = ScratchService::save_scratch_atomic(&path, &content) {
             eprintln!("Failed to save initial scratchpad to {}: {}", path.display(), e);
+            window.push_notification(crate::ui::notification::error(format!("Failed to create scratchpad: {e}")), cx);
         }
 
         self.scratchpad_panel.update(cx, |sp, cx| {
@@ -1425,7 +1479,7 @@ impl Workspace {
 }
 
 /// Reveals a file in the platform's native file explorer (Explorer on Windows, Finder on macOS, xdg-open on Linux).
-fn reveal_in_file_explorer(path: &std::path::Path) {
+pub(crate) fn reveal_in_file_explorer(path: &std::path::Path) {
     #[cfg(target_os = "windows")]
     {
         let _ = std::process::Command::new("explorer")

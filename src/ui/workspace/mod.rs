@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 mod action_router;
+pub(crate) use action_router::reveal_in_file_explorer;
 pub mod activity_bar;
 mod dialog_flow;
 mod render;
@@ -107,6 +108,21 @@ impl Workspace {
         cx.subscribe_in(&pane_tree, window, |this, _, event: &PaneTreeEvent, window, cx| match event {
             PaneTreeEvent::ActiveEditorChanged => {
                 this.sync_active_editor(window, cx);
+            }
+            PaneTreeEvent::RequestCloseTab { group_id, tab_id } => {
+                this.request_close_tab(*group_id, *tab_id, window, cx);
+            }
+            PaneTreeEvent::RequestCloseGroup { group_id } => {
+                this.request_close_group(*group_id, window, cx);
+            }
+            PaneTreeEvent::RequestCloseOtherTabs { group_id, keep_tab_id } => {
+                this.request_close_other_tabs_in_group(*group_id, *keep_tab_id, window, cx);
+            }
+            PaneTreeEvent::RequestCloseTabsToRight { group_id, target_tab_id } => {
+                this.request_close_tabs_to_right_in_group(*group_id, *target_tab_id, window, cx);
+            }
+            PaneTreeEvent::RequestCloseSavedTabs { group_id } => {
+                this.request_close_saved_tabs_in_group(*group_id, window, cx);
             }
         })
         .detach();
