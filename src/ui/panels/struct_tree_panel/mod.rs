@@ -24,71 +24,71 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 actions!(
-    struct_tree,
+    struct_tree_panel,
     [MoveUp, MoveDown, MoveTop, MoveBottom, PageUp, PageDown, ToggleExpand, Expand, Collapse, Dismiss]
 );
 
 #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
-#[action(namespace = struct_tree)]
+#[action(namespace = struct_tree_panel)]
 pub struct CopyFieldValue {
     pub value: String,
 }
 
 #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
-#[action(namespace = struct_tree)]
+#[action(namespace = struct_tree_panel)]
 pub struct CopyFieldName {
     pub name: String,
 }
 
 #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
-#[action(namespace = struct_tree)]
+#[action(namespace = struct_tree_panel)]
 pub struct CopyFieldOffset {
     pub offset: String,
 }
 
-const CONTEXT: &str = "StructTreeView";
+const CONTEXT: &str = "StructTreePanel";
 
-pub use model::{FlattenedField, StructColumn, StructTreeViewEvent};
+pub use model::{FlattenedField, StructColumn, StructTreePanelEvent};
 use model::{StructureExportStatus, default_yaml_file_name, path_from_string_file_name, resolve_field_at_path};
 pub use table::StructTreeTableDelegate;
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("escape", Dismiss, Some("StructTreeView")),
-        KeyBinding::new("escape", Dismiss, Some("StructTreeView > DataTable")),
-        KeyBinding::new("up", MoveUp, Some("StructTreeView && !Input")),
-        KeyBinding::new("down", MoveDown, Some("StructTreeView && !Input")),
-        KeyBinding::new("k", MoveUp, Some("StructTreeView && !Input")),
-        KeyBinding::new("j", MoveDown, Some("StructTreeView && !Input")),
-        KeyBinding::new("home", MoveTop, Some("StructTreeView && !Input")),
+        KeyBinding::new("escape", Dismiss, Some("StructTreePanel")),
+        KeyBinding::new("escape", Dismiss, Some("StructTreePanel > DataTable")),
+        KeyBinding::new("up", MoveUp, Some("StructTreePanel && !Input")),
+        KeyBinding::new("down", MoveDown, Some("StructTreePanel && !Input")),
+        KeyBinding::new("k", MoveUp, Some("StructTreePanel && !Input")),
+        KeyBinding::new("j", MoveDown, Some("StructTreePanel && !Input")),
+        KeyBinding::new("home", MoveTop, Some("StructTreePanel && !Input")),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-home", MoveTop, Some("StructTreeView && !Input")),
+        KeyBinding::new("cmd-home", MoveTop, Some("StructTreePanel && !Input")),
         #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-home", MoveTop, Some("StructTreeView && !Input")),
-        KeyBinding::new("end", MoveBottom, Some("StructTreeView && !Input")),
+        KeyBinding::new("ctrl-home", MoveTop, Some("StructTreePanel && !Input")),
+        KeyBinding::new("end", MoveBottom, Some("StructTreePanel && !Input")),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-end", MoveBottom, Some("StructTreeView && !Input")),
+        KeyBinding::new("cmd-end", MoveBottom, Some("StructTreePanel && !Input")),
         #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-end", MoveBottom, Some("StructTreeView && !Input")),
-        KeyBinding::new("pageup", PageUp, Some("StructTreeView && !Input")),
-        KeyBinding::new("pagedown", PageDown, Some("StructTreeView && !Input")),
-        KeyBinding::new("space", ToggleExpand, Some("StructTreeView && !Input")),
-        KeyBinding::new("enter", ToggleExpand, Some("StructTreeView && !Input")),
-        KeyBinding::new("right", Expand, Some("StructTreeView && !Input")),
-        KeyBinding::new("left", Collapse, Some("StructTreeView && !Input")),
-        KeyBinding::new("l", Expand, Some("StructTreeView && !Input")),
-        KeyBinding::new("h", Collapse, Some("StructTreeView && !Input")),
-        // When DataTable has focus within StructTreeView, override navigation for tree actions
-        KeyBinding::new("space", ToggleExpand, Some("StructTreeView > DataTable")),
-        KeyBinding::new("enter", ToggleExpand, Some("StructTreeView > DataTable")),
-        KeyBinding::new("right", Expand, Some("StructTreeView > DataTable")),
-        KeyBinding::new("left", Collapse, Some("StructTreeView > DataTable")),
-        KeyBinding::new("l", Expand, Some("StructTreeView > DataTable")),
-        KeyBinding::new("h", Collapse, Some("StructTreeView > DataTable")),
+        KeyBinding::new("ctrl-end", MoveBottom, Some("StructTreePanel && !Input")),
+        KeyBinding::new("pageup", PageUp, Some("StructTreePanel && !Input")),
+        KeyBinding::new("pagedown", PageDown, Some("StructTreePanel && !Input")),
+        KeyBinding::new("space", ToggleExpand, Some("StructTreePanel && !Input")),
+        KeyBinding::new("enter", ToggleExpand, Some("StructTreePanel && !Input")),
+        KeyBinding::new("right", Expand, Some("StructTreePanel && !Input")),
+        KeyBinding::new("left", Collapse, Some("StructTreePanel && !Input")),
+        KeyBinding::new("l", Expand, Some("StructTreePanel && !Input")),
+        KeyBinding::new("h", Collapse, Some("StructTreePanel && !Input")),
+        // When DataTable has focus within StructTreePanel, override navigation for tree actions
+        KeyBinding::new("space", ToggleExpand, Some("StructTreePanel > DataTable")),
+        KeyBinding::new("enter", ToggleExpand, Some("StructTreePanel > DataTable")),
+        KeyBinding::new("right", Expand, Some("StructTreePanel > DataTable")),
+        KeyBinding::new("left", Collapse, Some("StructTreePanel > DataTable")),
+        KeyBinding::new("l", Expand, Some("StructTreePanel > DataTable")),
+        KeyBinding::new("h", Collapse, Some("StructTreePanel > DataTable")),
     ]);
 }
 
-pub struct StructTreeView {
+pub struct StructTreePanel {
     pub parse_result: Option<std::sync::Arc<ParseResult>>,
     pub flattened_fields: Vec<FlattenedField>,
     pub expanded_paths: HashSet<Vec<usize>>,
@@ -111,9 +111,9 @@ pub struct StructTreeView {
     _editor_subscription: Option<Subscription>,
 }
 
-impl EventEmitter<StructTreeViewEvent> for StructTreeView {}
+impl EventEmitter<StructTreePanelEvent> for StructTreePanel {}
 
-impl StructTreeView {
+impl StructTreePanel {
     pub fn new(
         parse_result: Option<std::sync::Arc<crate::core::structure::types::ParseResult>>,
         editor: Option<Entity<Editor>>,
@@ -754,7 +754,7 @@ impl StructTreeView {
         self.last_selection_cursor = Some(nav_offset);
         self.last_selection_scan_len = self.flattened_fields.len();
 
-        cx.emit(StructTreeViewEvent::NavigateTo {
+        cx.emit(StructTreePanelEvent::NavigateTo {
             offset: nav_offset,
             size: item.size,
         });
@@ -912,7 +912,7 @@ impl StructTreeView {
     }
 
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(StructTreeViewEvent::FocusEditor);
+        cx.emit(StructTreePanelEvent::FocusEditor);
         window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
@@ -1021,7 +1021,7 @@ impl StructTreeView {
     }
 }
 
-impl Render for StructTreeView {
+impl Render for StructTreePanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_parsing = self.editor.as_ref().is_some_and(|ed| ed.read(cx).structure.is_parsing());
         let is_empty = self.flattened_fields.is_empty() && self.parse_result.as_ref().is_none_or(|result| result.fields.is_empty());
@@ -1362,7 +1362,7 @@ impl Render for StructTreeView {
     }
 }
 
-impl Focusable for StructTreeView {
+impl Focusable for StructTreePanel {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }

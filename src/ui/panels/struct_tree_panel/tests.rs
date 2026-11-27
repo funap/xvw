@@ -1,4 +1,4 @@
-use super::StructTreeView;
+use super::StructTreePanel;
 use super::model::{
     AUTOFIT_CHAR_WIDTH, AUTOFIT_WIDE_CHAR_WIDTH, StructColumn, StructValueStyle, categorize_field_value, default_yaml_file_name, estimated_text_width,
     resolve_field_at_path, value_text,
@@ -268,7 +268,7 @@ fn test_flatten_fields_hierarchy() {
     // When collapsed (not in expanded_paths)
     let expanded = HashSet::new();
     let mut flattened = Vec::new();
-    StructTreeView::flatten_fields(std::iter::once(&field_parent), 0, &[], &expanded, &mut flattened, 0);
+    StructTreePanel::flatten_fields(std::iter::once(&field_parent), 0, &[], &expanded, &mut flattened, 0);
     assert_eq!(flattened.len(), 1);
     assert!(flattened[0].has_children);
     assert!(flattened[0].is_collapsed);
@@ -278,7 +278,7 @@ fn test_flatten_fields_hierarchy() {
     let mut expanded = HashSet::new();
     expanded.insert(vec![0]);
     let mut flattened = Vec::new();
-    StructTreeView::flatten_fields(std::iter::once(&field_parent), 0, &[], &expanded, &mut flattened, 0);
+    StructTreePanel::flatten_fields(std::iter::once(&field_parent), 0, &[], &expanded, &mut flattened, 0);
     assert_eq!(flattened.len(), 2);
     assert_eq!(flattened[0].path, vec![0]);
     assert!(!flattened[0].is_collapsed);
@@ -302,15 +302,15 @@ fn test_go_to_offset_action_target_format() {
 }
 
 #[test]
-fn test_struct_tree_view_event_focus_editor() {
-    let event = super::StructTreeViewEvent::FocusEditor;
-    assert_eq!(event, super::StructTreeViewEvent::FocusEditor);
+fn test_struct_tree_panel_event_focus_editor() {
+    let event = super::StructTreePanelEvent::FocusEditor;
+    assert_eq!(event, super::StructTreePanelEvent::FocusEditor);
 
-    let parent_ctx = gpui_kit::KeyContext::try_from("StructTreeView").unwrap();
+    let parent_ctx = gpui_kit::KeyContext::try_from("StructTreePanel").unwrap();
     let child_ctx = gpui_kit::KeyContext::try_from("DataTable").unwrap();
     let contexts = vec![parent_ctx, child_ctx];
 
-    let pred_desc = gpui_kit::KeyBindingContextPredicate::parse("StructTreeView > DataTable").unwrap();
+    let pred_desc = gpui_kit::KeyBindingContextPredicate::parse("StructTreePanel > DataTable").unwrap();
     assert!(pred_desc.eval(&contexts));
     assert_eq!(pred_desc.depth_of(&contexts), Some(2));
 }

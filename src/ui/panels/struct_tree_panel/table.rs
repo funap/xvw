@@ -2,7 +2,7 @@ use super::model::{
     AUTOFIT_HORIZONTAL_PADDING, AUTOFIT_MAX_WIDTH, AUTOFIT_MIN_WIDTH, COLUMN_GAP, FlattenedField, StructColumn, StructValueStyle, TREE_INDENT_WIDTH,
     TREE_INDICATOR_WIDTH, categorize_field_value, estimated_text_width, resolve_field_at_path, value_text,
 };
-use super::{CopyFieldName, CopyFieldOffset, CopyFieldValue, StructTreeView};
+use super::{CopyFieldName, CopyFieldOffset, CopyFieldValue, StructTreePanel};
 use crate::core::appearance::Appearance;
 use crate::core::format::format_with_commas;
 use crate::core::radix::{DisplayRadix, HexCase};
@@ -18,7 +18,7 @@ use gpui_kit::*;
 use std::collections::HashMap;
 
 pub struct StructTreeTableDelegate {
-    pub(super) panel: WeakEntity<StructTreeView>,
+    pub(super) panel: WeakEntity<StructTreePanel>,
     pub(super) flattened_fields: Vec<FlattenedField>,
     pub(super) parse_result: Option<std::sync::Arc<ParseResult>>,
     pub(super) value_radix: DisplayRadix,

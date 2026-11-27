@@ -7,7 +7,7 @@ use crate::ui::panels::data_inspector_panel::DataInspector;
 use crate::ui::panels::file_tree_panel::{FileTreePanel, FileTreePanelEvent};
 use crate::ui::panels::search_panel::{SearchPanel, SearchPanelEvent};
 use crate::ui::panels::strings_panel::{StringsPanel, StringsPanelEvent};
-use crate::ui::panels::struct_tree_panel::StructTreeView;
+use crate::ui::panels::struct_tree_panel::StructTreePanel;
 use crate::ui::panels::visual_map_panel::{VisualMapPanel, VisualMapPanelEvent};
 use crate::ui::panels::zlib_panel::{ZlibPanel, ZlibPanelEvent};
 use std::path::PathBuf;
@@ -30,7 +30,7 @@ pub struct LeftPanel {
     pub search_panel: Entity<SearchPanel>,
     pub strings_panel: Entity<StringsPanel>,
     pub zlib_panel: Entity<ZlibPanel>,
-    pub struct_tree: Entity<StructTreeView>,
+    pub struct_tree: Entity<StructTreePanel>,
     pub data_inspector: Entity<DataInspector>,
     pub visual_map: Entity<VisualMapPanel>,
     pub checksum_panel: Entity<ChecksumPanel>,
@@ -51,7 +51,7 @@ impl LeftPanel {
         let search_panel = cx.new(|cx| SearchPanel::new(None, window, cx));
         let strings_panel = cx.new(|cx| StringsPanel::new(None, window, cx));
         let zlib_panel = cx.new(|cx| ZlibPanel::new(None, window, cx));
-        let struct_tree = cx.new(|cx| StructTreeView::new(None, None, window, cx));
+        let struct_tree = cx.new(|cx| StructTreePanel::new(None, None, window, cx));
         let data_inspector = cx.new(|cx| DataInspector::new(None, window, cx));
         let visual_map = cx.new(|cx| VisualMapPanel::new(None, cx));
         let checksum_panel = cx.new(|cx| ChecksumPanel::new(None, window, cx));

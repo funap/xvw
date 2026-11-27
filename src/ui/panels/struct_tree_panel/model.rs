@@ -175,7 +175,7 @@ pub(super) enum StructureExportStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum StructTreeViewEvent {
+pub enum StructTreePanelEvent {
     NavigateTo { offset: usize, size: usize },
     FocusEditor,
 }
