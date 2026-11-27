@@ -761,7 +761,7 @@ impl StructTreeView {
         cx.notify();
     }
 
-    pub(super) fn toggle_collapse_at(&mut self, idx: usize, cx: &mut Context<Self>) {
+    fn toggle_collapse_at(&mut self, idx: usize, cx: &mut Context<Self>) {
         if let Some(field) = self.flattened_fields.get(idx) {
             if !field.has_children {
                 return;
