@@ -92,10 +92,42 @@ impl Workspace {
         }
     }
 
+    pub(crate) fn on_action_undo(&mut self, action: &Undo, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.undo(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_redo(&mut self, action: &Redo, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.redo(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_cut(&mut self, action: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.cut(action, window, cx);
+            });
+        }
+    }
+
     pub(crate) fn on_action_copy(&mut self, action: &Copy, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.copy(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_paste(&mut self, action: &Paste, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.paste(action, window, cx);
             });
         }
     }
@@ -715,6 +747,60 @@ impl Workspace {
             editor.update(cx, |editor, cx| {
                 editor.toggle_inline_structure_view();
                 cx.notify();
+            });
+        }
+    }
+
+    pub(crate) fn on_action_expand_all_structure(&mut self, _: &ExpandAllStructure, _: &mut Window, cx: &mut Context<Self>) {
+        let struct_tree = self.left_panel.read(cx).struct_tree.clone();
+        struct_tree.update(cx, |panel, cx| {
+            panel.expand_all(cx);
+        });
+    }
+
+    pub(crate) fn on_action_collapse_all_structure(&mut self, _: &CollapseAllStructure, _: &mut Window, cx: &mut Context<Self>) {
+        let struct_tree = self.left_panel.read(cx).struct_tree.clone();
+        struct_tree.update(cx, |panel, cx| {
+            panel.collapse_all(cx);
+        });
+    }
+
+    pub(crate) fn on_action_swap_diff_files(&mut self, _: &SwapDiffFiles, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(diff_view) = self.active_diff_view(cx) {
+            diff_view.update(cx, |view, cx| {
+                view.swap_documents(window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_refresh_diff(&mut self, _: &RefreshDiff, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(diff_view) = self.active_diff_view(cx) {
+            diff_view.update(cx, |view, cx| {
+                view.refresh_diff(window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_next_difference(&mut self, action: &NextDifference, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(diff_view) = self.active_diff_view(cx) {
+            diff_view.update(cx, |view, cx| {
+                view.next_difference(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_prev_difference(&mut self, action: &PrevDifference, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(diff_view) = self.active_diff_view(cx) {
+            diff_view.update(cx, |view, cx| {
+                view.prev_difference(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_toggle_sync_scroll(&mut self, action: &ToggleSyncScroll, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(diff_view) = self.active_diff_view(cx) {
+            diff_view.update(cx, |view, cx| {
+                view.toggle_sync_scroll(action, window, cx);
             });
         }
     }
