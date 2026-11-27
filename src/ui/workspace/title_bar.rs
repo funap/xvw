@@ -47,7 +47,13 @@ impl AppTitleBar {
 
 impl Render for AppTitleBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        TitleBar::new().child(self.app_menu_bar.clone()).child(
+        let left_slot = if cfg!(target_os = "macos") {
+            div().flex_1().into_any_element()
+        } else {
+            self.app_menu_bar.clone().into_any_element()
+        };
+
+        TitleBar::new().child(left_slot).child(
             div()
                 .flex()
                 .items_center()
