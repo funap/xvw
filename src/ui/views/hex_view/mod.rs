@@ -707,7 +707,7 @@ impl HexView {
         });
     }
 
-    pub(super) fn current_layout(&self, cx: &App) -> HexViewLayout {
+    fn current_layout(&self, cx: &App) -> HexViewLayout {
         let (max_bytes_per_row, is_struct_mode) = {
             let editor = self.editor.read(cx);
             let line_starts = editor.line_starts();
