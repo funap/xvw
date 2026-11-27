@@ -12,7 +12,7 @@ Use these locations consistently:
 | --- | --- | --- |
 | Small unit tests, including private implementation details | Next to the implementation in `src/**/*.rs` | Keep the `#[cfg(test)] mod tests` block local to the module. |
 | Large unit-test suites for one subsystem | A sibling file such as `src/core/structure/tests.rs` | Declare it with `#[cfg(test)] mod tests;` in the owning module. |
-| Pure UI/layout helpers | A sibling file such as `src/ui/components/hex_view/layout_tests.rs` | Test calculations without starting a GPUI application. |
+| Pure UI/layout helpers | A sibling file such as `src/ui/views/hex_view/layout_tests.rs` | Test calculations without starting a GPUI application. |
 | Stable input fixtures | `testdata/` | Load with `include_str!`/`include_bytes!`; never use a developer-specific absolute path. |
 | Public API integration tests | `tests/*.rs` | Add these only after the tested API is intentionally exposed from a library target. |
 | GPUI/UI end-to-end tests | A separately opted-in target or crate | Do not make the default `cargo test` start a window or a full UI runtime. |
