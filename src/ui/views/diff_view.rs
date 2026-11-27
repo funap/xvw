@@ -647,6 +647,15 @@ impl crate::ui::pane::WorkspaceTab for Entity<DiffView> {
         format!("Diff: {} ↔ {}", left_name, right_name)
     }
 
+    fn icon(&self, _cx: &App) -> crate::ui::icon::IconName {
+        crate::ui::icon::IconName::GitCompare
+    }
+
+    fn tooltip(&self, cx: &App) -> Option<String> {
+        let dp = self.read(cx);
+        Some(format!("{} ↔ {}", dp.left_path().display(), dp.right_path().display()))
+    }
+
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.read(cx).focus_handle(cx)
     }

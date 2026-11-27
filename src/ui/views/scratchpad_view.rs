@@ -868,6 +868,10 @@ impl crate::ui::pane::WorkspaceTab for Entity<ScratchpadView> {
         Some(self.read(cx).file_path.clone())
     }
 
+    fn icon(&self, _cx: &App) -> crate::ui::icon::IconName {
+        crate::ui::icon::IconName::FileText
+    }
+
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.read(cx).focus_handle.clone()
     }

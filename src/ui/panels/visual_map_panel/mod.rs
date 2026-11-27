@@ -773,6 +773,10 @@ impl crate::ui::pane::WorkspaceTab for Entity<VisualMapPanel> {
         "Visual Map".to_string()
     }
 
+    fn icon(&self, _cx: &App) -> crate::ui::icon::IconName {
+        crate::ui::icon::IconName::Map
+    }
+
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.read(cx).focus_handle(cx)
     }

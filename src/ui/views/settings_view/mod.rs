@@ -1087,6 +1087,10 @@ impl crate::ui::pane::WorkspaceTab for Entity<SettingsView> {
         "Settings".to_string()
     }
 
+    fn icon(&self, _cx: &App) -> crate::ui::icon::IconName {
+        crate::ui::icon::IconName::Settings
+    }
+
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.read(cx).focus_handle(cx)
     }

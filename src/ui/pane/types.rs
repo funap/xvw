@@ -71,6 +71,20 @@ pub trait WorkspaceTab: 'static {
         None
     }
 
+    /// Returns the icon representing this tab kind in the tab bar.
+    fn icon(&self, cx: &App) -> crate::ui::icon::IconName {
+        if self.is_read_only(cx) {
+            crate::ui::icon::IconName::PenOff
+        } else {
+            crate::ui::icon::IconName::File
+        }
+    }
+
+    /// Returns an optional tooltip (e.g. full file path) for the tab bar item.
+    fn tooltip(&self, cx: &App) -> Option<String> {
+        self.path(cx).map(|path| path.display().to_string())
+    }
+
     /// Creates a clone of this tab content suitable for a split pane.
     fn create_split(&self, window: &mut Window, cx: &mut App) -> Option<TabContent> {
         let _ = (window, cx);
@@ -121,6 +135,14 @@ impl TabContent {
         self.0.is_read_only(cx)
     }
 
+    pub fn icon(&self, cx: &App) -> crate::ui::icon::IconName {
+        self.0.icon(cx)
+    }
+
+    pub fn tooltip(&self, cx: &App) -> Option<String> {
+        self.0.tooltip(cx)
+    }
+
     pub fn render(&self) -> AnyElement {
         self.0.render()
     }
@@ -155,6 +177,14 @@ impl TabItem {
 
     pub fn is_read_only(&self, cx: &App) -> bool {
         self.content.is_read_only(cx)
+    }
+
+    pub fn icon(&self, cx: &App) -> crate::ui::icon::IconName {
+        self.content.icon(cx)
+    }
+
+    pub fn tooltip(&self, cx: &App) -> Option<String> {
+        self.content.tooltip(cx)
     }
 
     pub fn focus_handle(&self, cx: &App) -> FocusHandle {
