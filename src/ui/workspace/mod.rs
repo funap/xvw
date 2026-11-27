@@ -4,7 +4,7 @@ use gpui_kit::*;
 use crate::actions::*;
 
 use crate::ui::pane::{PaneTree, PaneTreeEvent, TabContent};
-use crate::ui::panels::file_tree_panel::{FileTreeView, FileTreeViewEvent};
+use crate::ui::panels::file_tree_panel::{FileTreePanel, FileTreePanelEvent};
 use crate::ui::panels::left_panel::{LeftPanel, LeftPanelTab};
 use crate::ui::views::diff_view::DiffView;
 use crate::ui::views::editor_view::EditorView;
@@ -121,7 +121,7 @@ impl Workspace {
         })
         .detach();
 
-        let file_tree = cx.new(|cx| FileTreeView::new("FILES", window, cx));
+        let file_tree = cx.new(|cx| FileTreePanel::new("FILES", window, cx));
         let left_panel = cx.new(|cx| LeftPanel::new(file_tree.clone(), window, cx));
         let activity_bar = cx.new(ActivityBar::new);
 
@@ -311,8 +311,8 @@ impl Workspace {
         )
         .detach();
 
-        cx.subscribe(&left_panel, |_, _, event: &FileTreeViewEvent, cx| match event {
-            FileTreeViewEvent::OpenFile { path, format, record_recent } => {
+        cx.subscribe(&left_panel, |_, _, event: &FileTreePanelEvent, cx| match event {
+            FileTreePanelEvent::OpenFile { path, format, record_recent } => {
                 let action = if *record_recent {
                     crate::actions::OpenFile::with_format(path.to_string_lossy().to_string(), *format)
                 } else {

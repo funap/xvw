@@ -4,7 +4,7 @@ use crate::core::editor::Editor;
 use crate::ui::panels::bookmark_panel::BookmarkPanel;
 use crate::ui::panels::checksum_panel::{ChecksumPanel, ChecksumPanelEvent};
 use crate::ui::panels::data_inspector_panel::DataInspector;
-use crate::ui::panels::file_tree_panel::{FileTreeView, FileTreeViewEvent};
+use crate::ui::panels::file_tree_panel::{FileTreePanel, FileTreePanelEvent};
 use crate::ui::panels::search_panel::{SearchPanel, SearchPanelEvent};
 use crate::ui::panels::strings_panel::{StringsPanel, StringsPanelEvent};
 use crate::ui::panels::struct_tree_panel::StructTreeView;
@@ -26,7 +26,7 @@ pub enum LeftPanelTab {
 }
 
 pub struct LeftPanel {
-    pub file_tree: Entity<FileTreeView>,
+    pub file_tree: Entity<FileTreePanel>,
     pub search_panel: Entity<SearchPanel>,
     pub strings_panel: Entity<StringsPanel>,
     pub zlib_panel: Entity<ZlibPanel>,
@@ -39,7 +39,7 @@ pub struct LeftPanel {
     is_panel_visible: bool,
 }
 
-impl EventEmitter<FileTreeViewEvent> for LeftPanel {}
+impl EventEmitter<FileTreePanelEvent> for LeftPanel {}
 impl EventEmitter<SearchPanelEvent> for LeftPanel {}
 impl EventEmitter<StringsPanelEvent> for LeftPanel {}
 impl EventEmitter<ZlibPanelEvent> for LeftPanel {}
@@ -47,7 +47,7 @@ impl EventEmitter<VisualMapPanelEvent> for LeftPanel {}
 impl EventEmitter<ChecksumPanelEvent> for LeftPanel {}
 
 impl LeftPanel {
-    pub fn new(file_tree: Entity<FileTreeView>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(file_tree: Entity<FileTreePanel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search_panel = cx.new(|cx| SearchPanel::new(None, window, cx));
         let strings_panel = cx.new(|cx| StringsPanel::new(None, window, cx));
         let zlib_panel = cx.new(|cx| ZlibPanel::new(None, window, cx));
@@ -57,8 +57,8 @@ impl LeftPanel {
         let checksum_panel = cx.new(|cx| ChecksumPanel::new(None, window, cx));
         let bookmark_panel = cx.new(|cx| BookmarkPanel::new(None, window, cx));
 
-        cx.subscribe(&file_tree, |_, _, event: &FileTreeViewEvent, cx| match event {
-            FileTreeViewEvent::OpenFile { path, format, record_recent } => cx.emit(FileTreeViewEvent::OpenFile {
+        cx.subscribe(&file_tree, |_, _, event: &FileTreePanelEvent, cx| match event {
+            FileTreePanelEvent::OpenFile { path, format, record_recent } => cx.emit(FileTreePanelEvent::OpenFile {
                 path: path.clone(),
                 format: *format,
                 record_recent: *record_recent,
