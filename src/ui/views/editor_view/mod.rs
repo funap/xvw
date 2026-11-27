@@ -28,13 +28,13 @@ use crate::ui::views::hex_view::{self, HexView};
 #[cfg(not(test))]
 use highlights::compose_search_highlights;
 #[cfg(test)]
-pub use highlights::compose_search_highlights;
+pub(crate) use highlights::compose_search_highlights;
 use highlights::{CachedSearchPattern, HighlightSyncState, scan_viewport_matches, viewport_match_slice};
 use std::ops::Range;
 use std::path::PathBuf;
 
 pub mod goto_offset_bar;
-pub mod highlights;
+mod highlights;
 mod search_bar;
 
 #[cfg(test)]

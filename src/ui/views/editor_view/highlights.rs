@@ -92,7 +92,10 @@ pub(super) fn scan_viewport_matches(data: &[u8], pattern: &[PatternByte], segmen
 
 /// Composes search panel highlights and find widget highlights, giving precedence
 /// to find widget highlights where they overlap.
-pub fn compose_search_highlights(search_panel_highlights: Vec<(Range<usize>, Hsla)>, find_highlights: Vec<(Range<usize>, Hsla)>) -> Vec<(Range<usize>, Hsla)> {
+pub(crate) fn compose_search_highlights(
+    search_panel_highlights: Vec<(Range<usize>, Hsla)>,
+    find_highlights: Vec<(Range<usize>, Hsla)>,
+) -> Vec<(Range<usize>, Hsla)> {
     if find_highlights.is_empty() {
         return search_panel_highlights;
     }
@@ -108,7 +111,7 @@ pub fn compose_search_highlights(search_panel_highlights: Vec<(Range<usize>, Hsl
 
 /// Subtracts a slice of mask ranges from a vector of highlighted ranges, preserving
 /// non-overlapping portions with their original colors.
-pub fn subtract_ranges(source_ranges: Vec<(Range<usize>, Hsla)>, mask_ranges: &[Range<usize>]) -> Vec<(Range<usize>, Hsla)> {
+pub(super) fn subtract_ranges(source_ranges: Vec<(Range<usize>, Hsla)>, mask_ranges: &[Range<usize>]) -> Vec<(Range<usize>, Hsla)> {
     if mask_ranges.is_empty() {
         return source_ranges;
     }
