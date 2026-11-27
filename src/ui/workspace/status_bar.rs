@@ -1,9 +1,9 @@
 use crate::actions::*;
 use crate::app_state::InsertModeState;
+use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::format::{HexCase, decode_uint_value, format_binary_repr, format_size_friendly, format_text_repr};
-use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 use crate::ui::views::diff_view::DiffView;
 use gpui_kit::component::button::{Button, ButtonVariants as _};

@@ -28,8 +28,6 @@ impl Default for Appearance {
     }
 }
 
-impl gpui_kit::Global for Appearance {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

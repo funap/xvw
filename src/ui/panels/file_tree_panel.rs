@@ -1,6 +1,6 @@
 use crate::actions::{LoadChildren, OpenDiff, OpenFile, Rename, SelectForCompare, SelectItem};
 use crate::core::format::FileFormat;
-use crate::core::structure::RecentFileEntry;
+use crate::core::recent_history::RecentFileEntry;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -21,9 +21,9 @@ use gpui_kit::{
     prelude::FluentBuilder as _, px, relative,
 };
 
-actions!(file_tree, [MoveUp, MoveDown, MoveTop, MoveBottom, PageUp, PageDown, Dismiss]);
+actions!(file_tree_panel, [MoveUp, MoveDown, MoveTop, MoveBottom, PageUp, PageDown, Dismiss]);
 
-const CONTEXT: &str = "FileTreeView";
+const CONTEXT: &str = "FileTreePanel";
 
 fn path_file_name(path: &Path) -> String {
     path.file_name()
@@ -33,28 +33,28 @@ fn path_file_name(path: &Path) -> String {
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("escape", Dismiss, Some("FileTreeView && !Input")),
-        KeyBinding::new("up", MoveUp, Some("FileTreeView && !Input")),
-        KeyBinding::new("down", MoveDown, Some("FileTreeView && !Input")),
-        KeyBinding::new("k", MoveUp, Some("FileTreeView && !Input")),
-        KeyBinding::new("j", MoveDown, Some("FileTreeView && !Input")),
-        KeyBinding::new("home", MoveTop, Some("FileTreeView && !Input")),
+        KeyBinding::new("escape", Dismiss, Some("FileTreePanel && !Input")),
+        KeyBinding::new("up", MoveUp, Some("FileTreePanel && !Input")),
+        KeyBinding::new("down", MoveDown, Some("FileTreePanel && !Input")),
+        KeyBinding::new("k", MoveUp, Some("FileTreePanel && !Input")),
+        KeyBinding::new("j", MoveDown, Some("FileTreePanel && !Input")),
+        KeyBinding::new("home", MoveTop, Some("FileTreePanel && !Input")),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-home", MoveTop, Some("FileTreeView && !Input")),
+        KeyBinding::new("cmd-home", MoveTop, Some("FileTreePanel && !Input")),
         #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-home", MoveTop, Some("FileTreeView && !Input")),
-        KeyBinding::new("end", MoveBottom, Some("FileTreeView && !Input")),
+        KeyBinding::new("ctrl-home", MoveTop, Some("FileTreePanel && !Input")),
+        KeyBinding::new("end", MoveBottom, Some("FileTreePanel && !Input")),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-end", MoveBottom, Some("FileTreeView && !Input")),
+        KeyBinding::new("cmd-end", MoveBottom, Some("FileTreePanel && !Input")),
         #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-end", MoveBottom, Some("FileTreeView && !Input")),
-        KeyBinding::new("pageup", PageUp, Some("FileTreeView && !Input")),
-        KeyBinding::new("pagedown", PageDown, Some("FileTreeView && !Input")),
-        KeyBinding::new("enter", SelectItem, Some("FileTreeView && !Input")),
+        KeyBinding::new("ctrl-end", MoveBottom, Some("FileTreePanel && !Input")),
+        KeyBinding::new("pageup", PageUp, Some("FileTreePanel && !Input")),
+        KeyBinding::new("pagedown", PageDown, Some("FileTreePanel && !Input")),
+        KeyBinding::new("enter", SelectItem, Some("FileTreePanel && !Input")),
     ]);
 }
 
-pub enum FileTreeViewEvent {
+pub enum FileTreePanelEvent {
     OpenFile {
         path: PathBuf,
         format: Option<FileFormat>,
@@ -143,7 +143,7 @@ impl RecentDisplayHistory {
     }
 }
 
-pub struct FileTreeView {
+pub struct FileTreePanel {
     tree_state: Entity<TreeState>,
     selected_item: Option<TreeItem>,
     selected_items: Vec<TreeItem>,
@@ -197,7 +197,7 @@ fn update_item_children(items: &mut [TreeItem], target_id: &str, children: Vec<T
     false
 }
 
-impl FileTreeView {
+impl FileTreePanel {
     pub fn new(title: impl Into<SharedString>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let tree_state = cx.new(|cx| TreeState::new(cx));
         let focus_handle = cx.focus_handle();
@@ -240,7 +240,7 @@ impl FileTreeView {
     }
 
     fn load_root(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        cx.spawn(|view: WeakEntity<FileTreeView>, cx: &mut AsyncApp| {
+        cx.spawn(|view: WeakEntity<FileTreePanel>, cx: &mut AsyncApp| {
             let mut cx = cx.clone();
             async move {
                 let ignorer = Ignorer::new(&path.to_string_lossy());
@@ -269,7 +269,7 @@ impl FileTreeView {
             let item_id_clone = item_id.to_string();
             let root_path = self.root_path.clone();
 
-            cx.spawn(|view: WeakEntity<FileTreeView>, cx: &mut AsyncApp| {
+            cx.spawn(|view: WeakEntity<FileTreePanel>, cx: &mut AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
                     if let Some(root_path) = root_path {
@@ -305,7 +305,7 @@ impl FileTreeView {
             self.clear_tree_selection(cx);
 
             if !item.is_folder() {
-                cx.emit(FileTreeViewEvent::OpenFile {
+                cx.emit(FileTreePanelEvent::OpenFile {
                     path: PathBuf::from(item.id.to_string()),
                     format: None,
                     record_recent: true,
@@ -531,7 +531,7 @@ impl FileTreeView {
     }
 }
 
-impl Render for FileTreeView {
+impl Render for FileTreePanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_empty = self.root_path.is_none();
         let is_focused = self.focus_handle.is_focused(window);
@@ -630,7 +630,7 @@ impl Render for FileTreeView {
                                 .hover(|style| style.bg(theme.list_hover))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.focus_handle.focus(window, cx);
-                                    cx.emit(FileTreeViewEvent::OpenFile {
+                                    cx.emit(FileTreePanelEvent::OpenFile {
                                         path: open_path.clone(),
                                         format: open_format,
                                         record_recent: false,
@@ -825,7 +825,7 @@ impl Render for FileTreeView {
                                     }
 
                                     if !item.is_folder() && this.selected_items.len() == 1 {
-                                        cx.emit(FileTreeViewEvent::OpenFile {
+                                        cx.emit(FileTreePanelEvent::OpenFile {
                                             path: PathBuf::from(item.id.to_string()),
                                             format: None,
                                             record_recent: true,
@@ -842,23 +842,23 @@ impl Render for FileTreeView {
     }
 }
 
-impl EventEmitter<FileTreeViewEvent> for FileTreeView {}
+impl EventEmitter<FileTreePanelEvent> for FileTreePanel {}
 
-impl Focusable for FileTreeView {
+impl Focusable for FileTreePanel {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct FileTreeViewState {
+pub struct FileTreePanelState {
     pub root_path: Option<PathBuf>,
 }
 
-impl FileTreeViewState {
+impl FileTreePanelState {
     #[allow(dead_code)]
     pub fn to_value(&self) -> serde_json::Value {
-        serde_json::to_value(self).expect("serialize FileTreeViewState")
+        serde_json::to_value(self).expect("serialize FileTreePanelState")
     }
 
     #[allow(dead_code)]
@@ -871,7 +871,7 @@ impl FileTreeViewState {
 mod tests {
     use super::RecentDisplayHistory;
     use crate::core::format::FileFormat;
-    use crate::core::structure::RecentFileEntry;
+    use crate::core::recent_history::RecentFileEntry;
     use std::path::PathBuf;
 
     #[test]
@@ -1027,25 +1027,25 @@ mod tests {
     }
 
     #[test]
-    fn test_file_tree_view_event_open_file_record_recent_flag() {
-        use super::FileTreeViewEvent;
+    fn test_file_tree_panel_event_open_file_record_recent_flag() {
+        use super::FileTreePanelEvent;
 
-        let recents_event = FileTreeViewEvent::OpenFile {
+        let recents_event = FileTreePanelEvent::OpenFile {
             path: PathBuf::from("recent.bin"),
             format: None,
             record_recent: false,
         };
         match recents_event {
-            FileTreeViewEvent::OpenFile { record_recent, .. } => assert!(!record_recent),
+            FileTreePanelEvent::OpenFile { record_recent, .. } => assert!(!record_recent),
         }
 
-        let tree_event = FileTreeViewEvent::OpenFile {
+        let tree_event = FileTreePanelEvent::OpenFile {
             path: PathBuf::from("tree.bin"),
             format: None,
             record_recent: true,
         };
         match tree_event {
-            FileTreeViewEvent::OpenFile { record_recent, .. } => assert!(record_recent),
+            FileTreePanelEvent::OpenFile { record_recent, .. } => assert!(record_recent),
         }
     }
 }

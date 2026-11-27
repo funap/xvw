@@ -136,6 +136,27 @@ fn normalize_path(path: &Path) -> PathBuf {
     }
 }
 
+/// Display mode for the Markdown scratchpad editor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScratchpadMode {
+    #[default]
+    Edit,
+    Split,
+    Preview,
+}
+
+impl ScratchpadMode {
+    /// Cycles to the next scratchpad mode (Edit -> Split -> Preview -> Edit).
+    pub fn next(self) -> Self {
+        match self {
+            Self::Edit => Self::Split,
+            Self::Split => Self::Preview,
+            Self::Preview => Self::Edit,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +171,60 @@ mod tests {
         assert!(!is_same_target_file(Path::new("."), Path::new("/foo/bar/firmware.bin")));
         assert!(!is_same_target_file(Path::new("a/.."), Path::new("/foo/bar/firmware.bin")));
         assert!(!is_same_target_file(Path::new(""), Path::new("/foo/bar/firmware.bin")));
+    }
+
+    #[test]
+    fn test_split_frontmatter_and_body() {
+        let content = "---\ntarget_file: /path/to/firmware.bin\n---\n# Firmware Bootloader Notes\n\nNotes here.";
+        let (yaml, body) = split_frontmatter_and_body(content).expect("must split frontmatter");
+        assert_eq!(yaml, "target_file: /path/to/firmware.bin\n");
+        assert_eq!(body, "# Firmware Bootloader Notes\n\nNotes here.");
+
+        // CRLF
+        let crlf = "---\r\ntarget_file: C:\\firmware.bin\r\n---\r\n# Notes\r\n";
+        let (yaml_crlf, body_crlf) = split_frontmatter_and_body(crlf).expect("must split CRLF frontmatter");
+        assert_eq!(yaml_crlf, "target_file: C:\\firmware.bin\r\n");
+        assert_eq!(body_crlf, "# Notes\r\n");
+
+        // Horizontal rules in body after frontmatter
+        let hr = "---\ntarget_file: a.bin\n---\n# Heading\n---\nMore notes";
+        let (yaml_hr, body_hr) = split_frontmatter_and_body(hr).expect("must split with HR");
+        assert_eq!(yaml_hr, "target_file: a.bin\n");
+        assert_eq!(body_hr, "# Heading\n---\nMore notes");
+
+        // No frontmatter
+        assert_eq!(split_frontmatter_and_body("# Plain markdown"), None);
+        assert_eq!(split_frontmatter_and_body("---\nUnclosed frontmatter"), None);
+        assert_eq!(split_frontmatter_and_body(""), None);
+
+        // Indented delimiters should not be treated as frontmatter
+        assert_eq!(split_frontmatter_and_body("   ---\ntarget_file: a.bin\n---\n# Notes"), None);
+        assert_eq!(split_frontmatter_and_body("---\ntarget_file: a.bin\n   ---\n# Notes"), None);
+    }
+
+    #[test]
+    fn test_scratchpad_mode_default_and_variants() {
+        assert_eq!(ScratchpadMode::default(), ScratchpadMode::Edit);
+        assert_ne!(ScratchpadMode::Split, ScratchpadMode::Edit);
+        assert_ne!(ScratchpadMode::Split, ScratchpadMode::Preview);
+        assert_ne!(ScratchpadMode::Edit, ScratchpadMode::Preview);
+    }
+
+    #[test]
+    fn test_scratchpad_mode_cycle() {
+        assert_eq!(ScratchpadMode::Edit.next(), ScratchpadMode::Split);
+        assert_eq!(ScratchpadMode::Split.next(), ScratchpadMode::Preview);
+        assert_eq!(ScratchpadMode::Preview.next(), ScratchpadMode::Edit);
+    }
+
+    #[test]
+    fn test_scratchpad_mode_serde() {
+        assert_eq!(serde_json::to_string(&ScratchpadMode::Edit).unwrap(), "\"edit\"");
+        assert_eq!(serde_json::to_string(&ScratchpadMode::Split).unwrap(), "\"split\"");
+        assert_eq!(serde_json::to_string(&ScratchpadMode::Preview).unwrap(), "\"preview\"");
+
+        assert_eq!(serde_json::from_str::<ScratchpadMode>("\"edit\"").unwrap(), ScratchpadMode::Edit);
+        assert_eq!(serde_json::from_str::<ScratchpadMode>("\"split\"").unwrap(), ScratchpadMode::Split);
+        assert_eq!(serde_json::from_str::<ScratchpadMode>("\"preview\"").unwrap(), ScratchpadMode::Preview);
     }
 }

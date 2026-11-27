@@ -265,3 +265,6 @@ impl Render for CommandPaletteModal {
             )
     }
 }
+
+#[cfg(test)]
+mod tests;

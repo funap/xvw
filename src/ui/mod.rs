@@ -1,4 +1,3 @@
-pub mod appearance;
 pub mod color;
 pub mod components;
 pub mod dialogs;
@@ -10,6 +9,7 @@ pub mod panels;
 pub mod views;
 pub mod workspace;
 
+impl gpui_kit::Global for crate::core::appearance::Appearance {}
 impl gpui_kit::Global for crate::core::layout::BytesPerRow {}
 impl gpui_kit::Global for crate::core::encoding::Encoding {}
 impl gpui_kit::Global for crate::core::radix::DisplayRadix {}
@@ -28,13 +28,13 @@ pub fn init(cx: &mut gpui_kit::App) {
     dialogs::new_file_modal::init(cx);
     dialogs::fill_selection_modal::init(cx);
     dialogs::command_palette_modal::init(cx);
-    panels::file_tree_view::init(cx);
+    panels::file_tree_panel::init(cx);
     panels::search_panel::init(cx);
     panels::strings_panel::init(cx);
     panels::zlib_panel::init(cx);
-    panels::struct_tree_view::init(cx);
+    panels::struct_tree_panel::init(cx);
     panels::bookmark_panel::init(cx);
-    panels::data_inspector::init(cx);
+    panels::data_inspector_panel::init(cx);
     panels::checksum_panel::init(cx);
     panels::visual_map_panel::init(cx);
     views::editor_view::init(cx);

@@ -1,8 +1,21 @@
-/// Discards a heavy value in the background using Tokio's blocking thread pool if available,
-/// or directly drops it synchronously if no runtime is active (e.g. in deterministic unit tests).
+use std::sync::OnceLock;
+
+/// Function pointer type for offloading heavy deallocations to a background thread pool.
+pub type BackgroundDropDispatcher = fn(Box<dyn FnOnce() + Send>);
+
+static BACKGROUND_DISPATCHER: OnceLock<BackgroundDropDispatcher> = OnceLock::new();
+
+/// Registers the background deallocation dispatcher used by [`discard_in_background`].
+/// Subsequent calls after initial registration are ignored.
+pub fn register_background_dispatcher(dispatcher: BackgroundDropDispatcher) {
+    let _ = BACKGROUND_DISPATCHER.set(dispatcher);
+}
+
+/// Discards a heavy value in the background using the registered dispatcher if available,
+/// or directly drops it synchronously if no dispatcher is registered (e.g. in deterministic unit tests).
 pub fn discard_in_background<T: Send + 'static>(value: T) {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.spawn_blocking(move || drop(value));
+    if let Some(dispatcher) = BACKGROUND_DISPATCHER.get() {
+        dispatcher(Box::new(move || drop(value)));
     } else {
         drop(value);
     }
@@ -13,7 +26,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_discard_in_background_without_runtime() {
+    fn test_discard_in_background_without_dispatcher() {
         let val = vec![1, 2, 3, 4, 5];
         discard_in_background(val);
     }

@@ -1,8 +1,8 @@
 //! Toolbar controls and configuration sections for the visual map panel.
 
 use super::VisualMapPanel;
+use crate::core::appearance::Appearance;
 use crate::core::visual_map::VisualMapColorMode as ColorMode;
-use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{Disableable, Icon, Sizable, Size, StyledExt, h_flex, v_flex};

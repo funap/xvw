@@ -859,7 +859,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_open_about(&mut self, _: &OpenAbout, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_about_dialog(window, cx);
+        self.open_about_modal(window, cx);
     }
 
     pub(crate) fn open_settings_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {

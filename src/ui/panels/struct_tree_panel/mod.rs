@@ -1,15 +1,18 @@
+mod model;
+mod table;
+
+#[cfg(test)]
+mod tests;
+
 use crate::core::editor::Editor;
-use crate::core::format::{format_size_friendly, format_with_commas};
-use crate::core::radix::{DisplayRadix, HexCase};
+use crate::core::format::format_size_friendly;
+use crate::core::radix::DisplayRadix;
 use crate::core::structure::{
-    FieldValue, ParseResult, ParsedField, StructureYamlIncludeOffsets, StructureYamlShaThreshold, YamlExportOptions, format_parse_result_as_text,
+    ParseResult, ParsedField, StructureYamlIncludeOffsets, StructureYamlShaThreshold, YamlExportOptions, format_parse_result_as_text,
     format_parse_result_as_yaml_with_options,
 };
-use crate::ui::appearance::Appearance;
 use crate::ui::icon::IconName;
-use crate::ui::views::hex_view::paint::DescriptionPalette;
-use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu};
-use gpui_kit::component::table::{Column, DataTable, TableDelegate, TableEvent, TableState};
+use gpui_kit::component::table::{DataTable, TableEvent, TableState};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _, StyledExt as _, WindowExt as _, button::ButtonVariants as _, h_flex, toolbar::Toolbar, v_flex,
 };
@@ -18,593 +21,74 @@ use gpui_kit::*;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 actions!(
-    struct_tree,
+    struct_tree_panel,
     [MoveUp, MoveDown, MoveTop, MoveBottom, PageUp, PageDown, ToggleExpand, Expand, Collapse, Dismiss]
 );
 
 #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
-#[action(namespace = struct_tree)]
+#[action(namespace = struct_tree_panel)]
 pub struct CopyFieldValue {
     pub value: String,
 }
 
 #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
-#[action(namespace = struct_tree)]
+#[action(namespace = struct_tree_panel)]
 pub struct CopyFieldName {
     pub name: String,
 }
 
 #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
-#[action(namespace = struct_tree)]
+#[action(namespace = struct_tree_panel)]
 pub struct CopyFieldOffset {
     pub offset: String,
 }
 
-const CONTEXT: &str = "StructTreeView";
-const TREE_INDICATOR_WIDTH: f32 = 12.0;
-const TREE_INDENT_WIDTH: f32 = 14.0;
-const COLUMN_GAP: f32 = 4.0;
-const FIELD_COLUMN_WIDTH: f32 = 150.0;
-const ADDRESS_COLUMN_WIDTH: f32 = 78.0;
-const TYPE_COLUMN_WIDTH: f32 = 108.0;
-const SIZE_COLUMN_WIDTH: f32 = 58.0;
-const VALUE_COLUMN_WIDTH: f32 = 180.0;
-const AUTOFIT_HORIZONTAL_PADDING: f32 = 16.0;
-const AUTOFIT_MIN_WIDTH: f32 = 52.0;
-const AUTOFIT_MAX_WIDTH: f32 = 360.0;
-const AUTOFIT_CHAR_WIDTH: f32 = 7.2;
-const AUTOFIT_WIDE_CHAR_WIDTH: f32 = 13.0;
-const AUTOFIT_MAX_TEXT_CHARS: usize = 128;
+const CONTEXT: &str = "StructTreePanel";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum StructColumn {
-    Field,
-    Address,
-    Type,
-    Size,
-    Value,
-}
-
-impl StructColumn {
-    pub fn key(&self) -> &'static str {
-        match self {
-            Self::Field => "field",
-            Self::Address => "address",
-            Self::Type => "type",
-            Self::Size => "size",
-            Self::Value => "value",
-        }
-    }
-
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Field => "Field",
-            Self::Address => "Address",
-            Self::Type => "Type",
-            Self::Size => "Size",
-            Self::Value => "Value",
-        }
-    }
-
-    pub fn default_width(&self) -> Pixels {
-        match self {
-            Self::Field => px(FIELD_COLUMN_WIDTH),
-            Self::Address => px(ADDRESS_COLUMN_WIDTH),
-            Self::Type => px(TYPE_COLUMN_WIDTH),
-            Self::Size => px(SIZE_COLUMN_WIDTH),
-            Self::Value => px(VALUE_COLUMN_WIDTH),
-        }
-    }
-
-    pub fn min_width(&self) -> Pixels {
-        match self {
-            Self::Field => px(60.0),
-            Self::Address => px(50.0),
-            Self::Type => px(50.0),
-            Self::Size => px(40.0),
-            Self::Value => px(60.0),
-        }
-    }
-}
-
-fn path_from_string_file_name(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "Untitled".to_string())
-}
-
-fn default_yaml_file_name(definition_id: &str) -> String {
-    let mut name: String = definition_id
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if name.is_empty() || name == "." || name == ".." {
-        name = "structure".to_string();
-    }
-    if !name.ends_with(".yaml") && !name.ends_with(".yml") {
-        name.push_str(".yaml");
-    }
-    name
-}
-
-fn estimated_text_width(text: &str) -> f32 {
-    text.chars()
-        .take(AUTOFIT_MAX_TEXT_CHARS)
-        .map(|character| if character.is_ascii() { AUTOFIT_CHAR_WIDTH } else { AUTOFIT_WIDE_CHAR_WIDTH })
-        .sum()
-}
-
-fn value_text(parsed_field: &ParsedField, radix: DisplayRadix, hex_case: HexCase) -> String {
-    if parsed_field.is_struct() {
-        format!(
-            "{} child{}",
-            parsed_field.children.len(),
-            if parsed_field.children.len() == 1 { "" } else { "ren" }
-        )
-    } else if let Some(label) = &parsed_field.enum_label {
-        format!("{} ({})", parsed_field.value.format_with_radix_and_case(radix, hex_case), label)
-    } else {
-        parsed_field.value.format_with_radix_and_case(radix, hex_case)
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum StructValueStyle {
-    StructSummary(usize),
-    Enum { value: String, label: String },
-    Number(String),
-    String(String),
-    Bytes(String),
-}
-
-pub(crate) fn categorize_field_value(parsed_field: &ParsedField, radix: DisplayRadix, hex_case: HexCase) -> StructValueStyle {
-    if parsed_field.is_struct() {
-        StructValueStyle::StructSummary(parsed_field.children.len())
-    } else if let Some(label) = &parsed_field.enum_label {
-        StructValueStyle::Enum {
-            value: parsed_field.value.format_with_radix_and_case(radix, hex_case),
-            label: label.clone(),
-        }
-    } else {
-        let val_str = parsed_field.value.format_with_radix_and_case(radix, hex_case);
-        match &parsed_field.value {
-            FieldValue::String(_) => StructValueStyle::String(val_str),
-            FieldValue::Bytes(_) => StructValueStyle::Bytes(val_str),
-            _ => StructValueStyle::Number(val_str),
-        }
-    }
-}
-
-fn resolve_field_at_path<'a>(parse_result: &'a Option<std::sync::Arc<ParseResult>>, path: &[usize]) -> Option<&'a ParsedField> {
-    let res = parse_result.as_ref()?;
-    let (&first, rest) = path.split_first()?;
-    let mut target_field = res.fields.get(first)?;
-    for &idx in rest {
-        target_field = target_field.children.get(idx)?;
-    }
-    Some(target_field)
-}
+pub use model::{FlattenedField, StructColumn, StructTreePanelEvent};
+use model::{StructureExportStatus, default_yaml_file_name, path_from_string_file_name, resolve_field_at_path};
+pub use table::StructTreeTableDelegate;
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("escape", Dismiss, Some("StructTreeView")),
-        KeyBinding::new("escape", Dismiss, Some("StructTreeView > DataTable")),
-        KeyBinding::new("up", MoveUp, Some("StructTreeView && !Input")),
-        KeyBinding::new("down", MoveDown, Some("StructTreeView && !Input")),
-        KeyBinding::new("k", MoveUp, Some("StructTreeView && !Input")),
-        KeyBinding::new("j", MoveDown, Some("StructTreeView && !Input")),
-        KeyBinding::new("home", MoveTop, Some("StructTreeView && !Input")),
+        KeyBinding::new("escape", Dismiss, Some("StructTreePanel")),
+        KeyBinding::new("escape", Dismiss, Some("StructTreePanel > DataTable")),
+        KeyBinding::new("up", MoveUp, Some("StructTreePanel && !Input")),
+        KeyBinding::new("down", MoveDown, Some("StructTreePanel && !Input")),
+        KeyBinding::new("k", MoveUp, Some("StructTreePanel && !Input")),
+        KeyBinding::new("j", MoveDown, Some("StructTreePanel && !Input")),
+        KeyBinding::new("home", MoveTop, Some("StructTreePanel && !Input")),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-home", MoveTop, Some("StructTreeView && !Input")),
+        KeyBinding::new("cmd-home", MoveTop, Some("StructTreePanel && !Input")),
         #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-home", MoveTop, Some("StructTreeView && !Input")),
-        KeyBinding::new("end", MoveBottom, Some("StructTreeView && !Input")),
+        KeyBinding::new("ctrl-home", MoveTop, Some("StructTreePanel && !Input")),
+        KeyBinding::new("end", MoveBottom, Some("StructTreePanel && !Input")),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-end", MoveBottom, Some("StructTreeView && !Input")),
+        KeyBinding::new("cmd-end", MoveBottom, Some("StructTreePanel && !Input")),
         #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-end", MoveBottom, Some("StructTreeView && !Input")),
-        KeyBinding::new("pageup", PageUp, Some("StructTreeView && !Input")),
-        KeyBinding::new("pagedown", PageDown, Some("StructTreeView && !Input")),
-        KeyBinding::new("space", ToggleExpand, Some("StructTreeView && !Input")),
-        KeyBinding::new("enter", ToggleExpand, Some("StructTreeView && !Input")),
-        KeyBinding::new("right", Expand, Some("StructTreeView && !Input")),
-        KeyBinding::new("left", Collapse, Some("StructTreeView && !Input")),
-        KeyBinding::new("l", Expand, Some("StructTreeView && !Input")),
-        KeyBinding::new("h", Collapse, Some("StructTreeView && !Input")),
-        // When DataTable has focus within StructTreeView, override navigation for tree actions
-        KeyBinding::new("space", ToggleExpand, Some("StructTreeView > DataTable")),
-        KeyBinding::new("enter", ToggleExpand, Some("StructTreeView > DataTable")),
-        KeyBinding::new("right", Expand, Some("StructTreeView > DataTable")),
-        KeyBinding::new("left", Collapse, Some("StructTreeView > DataTable")),
-        KeyBinding::new("l", Expand, Some("StructTreeView > DataTable")),
-        KeyBinding::new("h", Collapse, Some("StructTreeView > DataTable")),
+        KeyBinding::new("ctrl-end", MoveBottom, Some("StructTreePanel && !Input")),
+        KeyBinding::new("pageup", PageUp, Some("StructTreePanel && !Input")),
+        KeyBinding::new("pagedown", PageDown, Some("StructTreePanel && !Input")),
+        KeyBinding::new("space", ToggleExpand, Some("StructTreePanel && !Input")),
+        KeyBinding::new("enter", ToggleExpand, Some("StructTreePanel && !Input")),
+        KeyBinding::new("right", Expand, Some("StructTreePanel && !Input")),
+        KeyBinding::new("left", Collapse, Some("StructTreePanel && !Input")),
+        KeyBinding::new("l", Expand, Some("StructTreePanel && !Input")),
+        KeyBinding::new("h", Collapse, Some("StructTreePanel && !Input")),
+        // When DataTable has focus within StructTreePanel, override navigation for tree actions
+        KeyBinding::new("space", ToggleExpand, Some("StructTreePanel > DataTable")),
+        KeyBinding::new("enter", ToggleExpand, Some("StructTreePanel > DataTable")),
+        KeyBinding::new("right", Expand, Some("StructTreePanel > DataTable")),
+        KeyBinding::new("left", Collapse, Some("StructTreePanel > DataTable")),
+        KeyBinding::new("l", Expand, Some("StructTreePanel > DataTable")),
+        KeyBinding::new("h", Collapse, Some("StructTreePanel > DataTable")),
     ]);
 }
 
-#[derive(Clone)]
-pub struct FlattenedField {
-    pub path: Vec<usize>,
-    pub offset: usize,
-    pub size: usize,
-    pub depth: usize,
-    pub has_children: bool,
-    pub is_collapsed: bool,
-}
-
-#[derive(Clone, Default)]
-enum StructureExportStatus {
-    #[default]
-    Idle,
-    Copying,
-    Exporting,
-    Success(String),
-    Error(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum StructTreeViewEvent {
-    NavigateTo { offset: usize, size: usize },
-    FocusEditor,
-}
-
-pub struct StructTreeTableDelegate {
-    panel: WeakEntity<StructTreeView>,
-    flattened_fields: Vec<FlattenedField>,
-    parse_result: Option<std::sync::Arc<ParseResult>>,
-    value_radix: DisplayRadix,
-    selected_index: Option<usize>,
-    visible_columns: Vec<StructColumn>,
-    column_widths: HashMap<StructColumn, Pixels>,
-    focus_handle: FocusHandle,
-}
-
-impl StructTreeTableDelegate {
-    fn field_at_path<'a>(&'a self, path: &[usize]) -> Option<&'a ParsedField> {
-        resolve_field_at_path(&self.parse_result, path)
-    }
-}
-
-impl TableDelegate for StructTreeTableDelegate {
-    fn columns_count(&self, _cx: &App) -> usize {
-        self.visible_columns.len()
-    }
-
-    fn rows_count(&self, _cx: &App) -> usize {
-        self.flattened_fields.len()
-    }
-
-    fn column(&self, col_ix: usize, _cx: &App) -> Column {
-        let Some(col) = self.visible_columns.get(col_ix) else {
-            return Column::default();
-        };
-
-        let width = self.column_widths.get(col).copied().unwrap_or_else(|| col.default_width());
-        Column::new(col.key(), col.name()).width(width).min_width(col.min_width()).resizable(true)
-    }
-
-    fn fit_column(&mut self, col_ix: usize, _window: &mut Window, _cx: &mut Context<TableState<Self>>) -> Option<Pixels> {
-        let col = self.visible_columns.get(col_ix)?;
-        let mut max_width = estimated_text_width(col.name());
-        if *col == StructColumn::Field {
-            max_width += TREE_INDICATOR_WIDTH + COLUMN_GAP;
-        }
-
-        let hex_case = _cx.try_global::<HexCase>().copied().unwrap_or_default();
-        for field in self.flattened_fields.iter().take(128) {
-            let Some(parsed_field) = self.field_at_path(&field.path) else {
-                continue;
-            };
-
-            let text = match col {
-                StructColumn::Field => parsed_field.id.clone(),
-                StructColumn::Address => hex_case.format_prefixed(parsed_field.offset),
-                StructColumn::Type => {
-                    if parsed_field.field_type.is_empty() {
-                        if field.has_children { "struct".to_string() } else { "value".to_string() }
-                    } else {
-                        parsed_field.field_type.clone()
-                    }
-                }
-                StructColumn::Size => format!("{} B", format_with_commas(field.size)),
-                StructColumn::Value => value_text(parsed_field, self.value_radix, hex_case),
-            };
-            let mut text_width = estimated_text_width(&text);
-            if *col == StructColumn::Field {
-                text_width += field.depth as f32 * TREE_INDENT_WIDTH + TREE_INDICATOR_WIDTH + COLUMN_GAP;
-            }
-            max_width = max_width.max(text_width);
-        }
-
-        let width = (max_width + AUTOFIT_HORIZONTAL_PADDING).clamp(AUTOFIT_MIN_WIDTH, AUTOFIT_MAX_WIDTH);
-        self.column_widths.insert(*col, px(width));
-        Some(px(width))
-    }
-
-    fn render_th(&mut self, col_ix: usize, _window: &mut Window, _cx: &mut Context<TableState<Self>>) -> impl IntoElement {
-        let col = self.visible_columns.get(col_ix);
-        let name = col.map(|c| c.name()).unwrap_or_default();
-        let is_address_visible = self.visible_columns.contains(&StructColumn::Address);
-        let is_type_visible = self.visible_columns.contains(&StructColumn::Type);
-        let is_size_visible = self.visible_columns.contains(&StructColumn::Size);
-        let is_value_visible = self.visible_columns.contains(&StructColumn::Value);
-        let value_radix = self.value_radix;
-        let context_focus = self.focus_handle.clone();
-
-        let header_content = if col == Some(&StructColumn::Field) {
-            h_flex()
-                .size_full()
-                .items_center()
-                .gap_1()
-                .child(div().flex_shrink_0().w(px(TREE_INDICATOR_WIDTH)).h(px(TREE_INDICATOR_WIDTH)))
-                .child(div().flex_1().min_w_0().truncate().whitespace_nowrap().child(name))
-                .into_any_element()
-        } else {
-            div().size_full().child(name).into_any_element()
-        };
-
-        div().size_full().child(header_content).context_menu(move |menu, window, cx| {
-            menu.action_context(context_focus.clone())
-                .label("Visible columns")
-                .separator()
-                .menu_with_check("Address", is_address_visible, Box::new(crate::actions::ToggleStructureAddressColumn))
-                .menu_with_check("Type", is_type_visible, Box::new(crate::actions::ToggleStructureTypeColumn))
-                .menu_with_check("Size", is_size_visible, Box::new(crate::actions::ToggleStructureSizeColumn))
-                .menu_with_check("Value", is_value_visible, Box::new(crate::actions::ToggleStructureValueColumn))
-                .separator()
-                .submenu("Value format", window, cx, move |menu, _window, _cx| {
-                    menu.menu_with_check(
-                        "Hexadecimal (16)",
-                        value_radix == DisplayRadix::Hexadecimal,
-                        Box::new(crate::actions::SetRadixHex),
-                    )
-                    .menu_with_check("Decimal (10)", value_radix == DisplayRadix::Decimal, Box::new(crate::actions::SetRadixDec))
-                    .menu_with_check("Octal (8)", value_radix == DisplayRadix::Octal, Box::new(crate::actions::SetRadixOct))
-                    .menu_with_check("Binary (2)", value_radix == DisplayRadix::Binary, Box::new(crate::actions::SetRadixBin))
-                })
-        })
-    }
-
-    fn context_menu(&mut self, row_ix: usize, menu: PopupMenu, window: &mut Window, cx: &mut Context<TableState<Self>>) -> PopupMenu {
-        let Some(field) = self.flattened_fields.get(row_ix) else {
-            return menu;
-        };
-        let Some(parsed_field) = self.field_at_path(&field.path) else {
-            return menu;
-        };
-        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
-        let field_id = parsed_field.id.clone();
-        let field_offset = parsed_field.offset;
-        let field_value = value_text(parsed_field, self.value_radix, hex_case);
-        let value_radix = self.value_radix;
-        let offset_hex = hex_case.format_prefixed_pad(field_offset, 8);
-        let context_focus = self.focus_handle.clone();
-
-        let value_format_submenu = PopupMenu::build(window, cx, move |menu, _window, _cx| {
-            menu.menu_with_check(
-                "Hexadecimal (16)",
-                value_radix == DisplayRadix::Hexadecimal,
-                Box::new(crate::actions::SetRadixHex),
-            )
-            .menu_with_check("Decimal (10)", value_radix == DisplayRadix::Decimal, Box::new(crate::actions::SetRadixDec))
-            .menu_with_check("Octal (8)", value_radix == DisplayRadix::Octal, Box::new(crate::actions::SetRadixOct))
-            .menu_with_check("Binary (2)", value_radix == DisplayRadix::Binary, Box::new(crate::actions::SetRadixBin))
-        });
-
-        menu.action_context(context_focus)
-            .menu_with_icon(
-                format!("Go to Offset ({})", offset_hex),
-                IconName::ChevronRight,
-                Box::new(crate::actions::NavigateToOffset {
-                    target: offset_hex.clone(),
-                    target_file: None,
-                }),
-            )
-            .separator()
-            .menu_with_icon(
-                format!("Copy Value ({})", field_value),
-                IconName::Copy,
-                Box::new(CopyFieldValue { value: field_value }),
-            )
-            .menu_with_icon(
-                format!("Copy Field Name ({})", field_id),
-                IconName::Copy,
-                Box::new(CopyFieldName { name: field_id }),
-            )
-            .menu_with_icon(
-                format!("Copy Offset ({})", offset_hex),
-                IconName::Hash,
-                Box::new(CopyFieldOffset { offset: offset_hex }),
-            )
-            .separator()
-            .item(gpui_kit::component::menu::PopupMenuItem::submenu("Value format", value_format_submenu))
-            .separator()
-            .menu_with_icon("Copy Structure Analysis", IconName::Copy, Box::new(crate::actions::CopyStructureResult))
-            .menu_with_icon(
-                "Export Structure as YAML",
-                IconName::HardDriveDownload,
-                Box::new(crate::actions::ExportStructureYaml),
-            )
-            .separator()
-            .menu_with_icon("Expand All", IconName::ChevronDown, Box::new(crate::actions::ExpandAllStructure))
-            .menu_with_icon("Collapse All", IconName::ChevronUp, Box::new(crate::actions::CollapseAllStructure))
-    }
-
-    fn render_td(&mut self, row_ix: usize, col_ix: usize, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
-        let Some(field) = self.flattened_fields.get(row_ix) else {
-            return div().into_any_element();
-        };
-        let Some(parsed_field) = self.field_at_path(&field.path) else {
-            return div().into_any_element();
-        };
-        let Some(col) = self.visible_columns.get(col_ix) else {
-            return div().into_any_element();
-        };
-
-        let theme = cx.theme();
-        let palette = DescriptionPalette::from_theme(theme);
-        let font_family = cx.global::<Appearance>().font_family.clone();
-        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
-        let is_selected = self.selected_index == Some(row_ix);
-
-        match col {
-            StructColumn::Field => {
-                let id = SharedString::from(parsed_field.id.clone());
-                let chevron_symbol = if field.has_children {
-                    if field.is_collapsed { "▶" } else { "▼" }
-                } else {
-                    " "
-                };
-                let has_children = field.has_children;
-                let depth = field.depth;
-                let panel = self.panel.clone();
-
-                h_flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        h_flex()
-                            .flex_shrink_0()
-                            .w(px(TREE_INDENT_WIDTH * depth as f32 + TREE_INDICATOR_WIDTH))
-                            .h(px(TREE_INDICATOR_WIDTH))
-                            .items_center()
-                            .justify_end()
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .w(px(TREE_INDICATOR_WIDTH))
-                                    .h(px(TREE_INDICATOR_WIDTH))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .when(has_children, |this| {
-                                        this.cursor_pointer().on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
-                                            cx.stop_propagation();
-                                            if let Some(panel) = panel.upgrade() {
-                                                cx.defer(move |cx| {
-                                                    panel.update(cx, |this, cx| {
-                                                        this.toggle_collapse_at(row_ix, cx);
-                                                    });
-                                                });
-                                            }
-                                        })
-                                    })
-                                    .child(chevron_symbol),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .whitespace_nowrap()
-                            .text_sm()
-                            .font_medium()
-                            .text_color(palette.field_id)
-                            .child(id),
-                    )
-                    .into_any_element()
-            }
-            StructColumn::Address => {
-                let field_offset = parsed_field.offset;
-                div()
-                    .text_xs()
-                    .font_family(font_family)
-                    .text_color(if is_selected { theme.accent_foreground } else { theme.muted_foreground })
-                    .truncate()
-                    .whitespace_nowrap()
-                    .child(hex_case.format_prefixed(field_offset))
-                    .into_any_element()
-            }
-            StructColumn::Type => {
-                let type_name = if parsed_field.field_type.is_empty() {
-                    if field.has_children { "struct" } else { "value" }
-                } else {
-                    parsed_field.field_type.as_str()
-                };
-                let type_label = SharedString::from(type_name.to_string());
-                div()
-                    .text_xs()
-                    .font_family(font_family)
-                    .text_color(palette.type_name)
-                    .truncate()
-                    .whitespace_nowrap()
-                    .child(type_label)
-                    .into_any_element()
-            }
-            StructColumn::Size => div()
-                .text_xs()
-                .font_family(font_family)
-                .text_color(palette.number_value)
-                .truncate()
-                .whitespace_nowrap()
-                .child(format!("{} B", format_with_commas(field.size)))
-                .into_any_element(),
-            StructColumn::Value => match categorize_field_value(parsed_field, self.value_radix, hex_case) {
-                StructValueStyle::StructSummary(count) => {
-                    let text = format!("{} child{}", count, if count == 1 { "" } else { "ren" });
-                    div()
-                        .text_xs()
-                        .font_family(font_family)
-                        .text_color(theme.muted_foreground)
-                        .truncate()
-                        .whitespace_nowrap()
-                        .child(text)
-                        .into_any_element()
-                }
-                StructValueStyle::Enum { value, label } => h_flex()
-                    .items_center()
-                    .text_xs()
-                    .font_family(font_family)
-                    .truncate()
-                    .whitespace_nowrap()
-                    .min_w_0()
-                    .child(div().text_color(palette.number_value).child(value))
-                    .child(div().text_color(palette.punctuation).child(" ("))
-                    .child(div().text_color(palette.enum_label).child(label))
-                    .child(div().text_color(palette.punctuation).child(")"))
-                    .into_any_element(),
-                StructValueStyle::Number(val_str) => div()
-                    .text_xs()
-                    .font_family(font_family)
-                    .text_color(palette.number_value)
-                    .truncate()
-                    .whitespace_nowrap()
-                    .child(val_str)
-                    .into_any_element(),
-                StructValueStyle::String(val_str) => div()
-                    .text_xs()
-                    .font_family(font_family)
-                    .text_color(palette.string_value)
-                    .truncate()
-                    .whitespace_nowrap()
-                    .child(val_str)
-                    .into_any_element(),
-                StructValueStyle::Bytes(val_str) => div()
-                    .text_xs()
-                    .font_family(font_family)
-                    .text_color(palette.bytes_value)
-                    .truncate()
-                    .whitespace_nowrap()
-                    .child(val_str)
-                    .into_any_element(),
-            },
-        }
-    }
-}
-
-pub struct StructTreeView {
+pub struct StructTreePanel {
     pub parse_result: Option<std::sync::Arc<ParseResult>>,
     pub flattened_fields: Vec<FlattenedField>,
     pub expanded_paths: HashSet<Vec<usize>>,
@@ -627,9 +111,9 @@ pub struct StructTreeView {
     _editor_subscription: Option<Subscription>,
 }
 
-impl EventEmitter<StructTreeViewEvent> for StructTreeView {}
+impl EventEmitter<StructTreePanelEvent> for StructTreePanel {}
 
-impl StructTreeView {
+impl StructTreePanel {
     pub fn new(
         parse_result: Option<std::sync::Arc<crate::core::structure::types::ParseResult>>,
         editor: Option<Entity<Editor>>,
@@ -1270,7 +754,7 @@ impl StructTreeView {
         self.last_selection_cursor = Some(nav_offset);
         self.last_selection_scan_len = self.flattened_fields.len();
 
-        cx.emit(StructTreeViewEvent::NavigateTo {
+        cx.emit(StructTreePanelEvent::NavigateTo {
             offset: nav_offset,
             size: item.size,
         });
@@ -1428,7 +912,7 @@ impl StructTreeView {
     }
 
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(StructTreeViewEvent::FocusEditor);
+        cx.emit(StructTreePanelEvent::FocusEditor);
         window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
@@ -1537,7 +1021,7 @@ impl StructTreeView {
     }
 }
 
-impl Render for StructTreeView {
+impl Render for StructTreePanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_parsing = self.editor.as_ref().is_some_and(|ed| ed.read(cx).structure.is_parsing());
         let is_empty = self.flattened_fields.is_empty() && self.parse_result.as_ref().is_none_or(|result| result.fields.is_empty());
@@ -1878,327 +1362,8 @@ impl Render for StructTreeView {
     }
 }
 
-impl Focusable for StructTreeView {
+impl Focusable for StructTreePanel {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        AUTOFIT_CHAR_WIDTH, AUTOFIT_WIDE_CHAR_WIDTH, StructColumn, StructTreeView, StructValueStyle, categorize_field_value, default_yaml_file_name,
-        estimated_text_width, resolve_field_at_path, value_text,
-    };
-    use crate::core::color::RgbaColor;
-    use crate::core::format::HexCase;
-    use crate::core::radix::DisplayRadix;
-    use crate::core::structure::types::FieldValue;
-    use crate::core::structure::{ParseResult, ParsedField};
-    use std::collections::HashSet;
-
-    #[test]
-    fn test_struct_column_properties() {
-        assert_eq!(StructColumn::Field.key(), "field");
-        assert_eq!(StructColumn::Field.name(), "Field");
-        assert_eq!(StructColumn::Address.key(), "address");
-        assert_eq!(StructColumn::Address.name(), "Address");
-        assert_eq!(StructColumn::Type.key(), "type");
-        assert_eq!(StructColumn::Type.name(), "Type");
-        assert_eq!(StructColumn::Size.key(), "size");
-        assert_eq!(StructColumn::Size.name(), "Size");
-        assert_eq!(StructColumn::Value.key(), "value");
-        assert_eq!(StructColumn::Value.name(), "Value");
-    }
-
-    #[test]
-    fn test_estimated_text_width() {
-        let ascii_width = estimated_text_width("abc");
-        assert!((ascii_width - (3.0 * AUTOFIT_CHAR_WIDTH)).abs() < 0.001);
-
-        let wide_width = estimated_text_width("あ");
-        assert!((wide_width - AUTOFIT_WIDE_CHAR_WIDTH).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_value_text_formatting() {
-        let field_int = ParsedField {
-            id: "magic".to_string(),
-            field_type: "u4".to_string(),
-            offset: 0,
-            size: 4,
-            value: FieldValue::U32(255),
-            color: RgbaColor::default(),
-            description: None,
-            enum_label: None,
-            is_instance: false,
-            children: Vec::new(),
-        };
-
-        assert_eq!(value_text(&field_int, DisplayRadix::Decimal, HexCase::Lower), "255");
-        assert_eq!(value_text(&field_int, DisplayRadix::Hexadecimal, HexCase::Lower), "0xff");
-        assert_eq!(value_text(&field_int, DisplayRadix::Hexadecimal, HexCase::Upper), "0xFF");
-        assert_eq!(value_text(&field_int, DisplayRadix::Octal, HexCase::Lower), "0o377");
-        assert_eq!(value_text(&field_int, DisplayRadix::Binary, HexCase::Lower), "0b11111111");
-
-        let field_with_enum = ParsedField {
-            id: "kind".to_string(),
-            field_type: "u1".to_string(),
-            offset: 4,
-            size: 1,
-            value: FieldValue::U8(1),
-            color: RgbaColor::default(),
-            description: None,
-            enum_label: Some("HEADER".to_string()),
-            is_instance: false,
-            children: Vec::new(),
-        };
-
-        assert_eq!(value_text(&field_with_enum, DisplayRadix::Decimal, HexCase::Lower), "1 (HEADER)");
-
-        let field_struct = ParsedField {
-            id: "header".to_string(),
-            field_type: String::new(),
-            offset: 0,
-            size: 5,
-            value: FieldValue::Struct,
-            color: RgbaColor::default(),
-            description: None,
-            enum_label: None,
-            is_instance: false,
-            children: vec![field_int, field_with_enum],
-        };
-
-        assert_eq!(value_text(&field_struct, DisplayRadix::Decimal, HexCase::Lower), "2 children");
-    }
-
-    #[test]
-    fn test_categorize_field_value() {
-        let field_int = ParsedField {
-            id: "magic".to_string(),
-            field_type: "u4".to_string(),
-            offset: 0,
-            size: 4,
-            value: FieldValue::U32(255),
-            color: RgbaColor::default(),
-            description: None,
-            enum_label: None,
-            is_instance: false,
-            children: Vec::new(),
-        };
-        assert_eq!(
-            categorize_field_value(&field_int, DisplayRadix::Hexadecimal, HexCase::Lower),
-            StructValueStyle::Number("0xff".to_string())
-        );
-        assert_eq!(
-            categorize_field_value(&field_int, DisplayRadix::Hexadecimal, HexCase::Upper),
-            StructValueStyle::Number("0xFF".to_string())
-        );
-
-        let field_str = ParsedField {
-            id: "tag".to_string(),
-            field_type: "str".to_string(),
-            offset: 0,
-            size: 4,
-            value: FieldValue::String("PNG".to_string()),
-            color: RgbaColor::default(),
-            description: None,
-            enum_label: None,
-            is_instance: false,
-            children: Vec::new(),
-        };
-        assert_eq!(
-            categorize_field_value(&field_str, DisplayRadix::Decimal, HexCase::Lower),
-            StructValueStyle::String("\"PNG\"".to_string())
-        );
-
-        let field_bytes = ParsedField {
-            id: "buf".to_string(),
-            field_type: "bytes".to_string(),
-            offset: 0,
-            size: 4,
-            value: FieldValue::Bytes(vec![0; 4]),
-            color: RgbaColor::default(),
-            description: None,
-            enum_label: None,
-            is_instance: false,
-            children: Vec::new(),
-        };
-        assert_eq!(
-            categorize_field_value(&field_bytes, DisplayRadix::Decimal, HexCase::Lower),
-            StructValueStyle::Bytes("[4 bytes]".to_string())
-        );
-
-        let field_enum = ParsedField {
-            id: "kind".to_string(),
-            field_type: "u1".to_string(),
-            offset: 4,
-            size: 1,
-            value: FieldValue::U8(1),
-            color: RgbaColor::default(),
-            description: None,
-            enum_label: Some("HEADER".to_string()),
-            is_instance: false,
-            children: Vec::new(),
-        };
-        assert_eq!(
-            categorize_field_value(&field_enum, DisplayRadix::Decimal, HexCase::Lower),
-            StructValueStyle::Enum {
-                value: "1".to_string(),
-                label: "HEADER".to_string(),
-            }
-        );
-
-        let field_struct = ParsedField {
-            id: "root".to_string(),
-            field_type: String::new(),
-            offset: 0,
-            size: 5,
-            value: FieldValue::Struct,
-            color: RgbaColor::default(),
-            description: None,
-            enum_label: None,
-            is_instance: false,
-            children: vec![field_int, field_enum],
-        };
-        assert_eq!(
-            categorize_field_value(&field_struct, DisplayRadix::Decimal, HexCase::Lower),
-            StructValueStyle::StructSummary(2)
-        );
-    }
-
-    #[test]
-    fn test_default_yaml_file_name() {
-        assert_eq!(default_yaml_file_name("png"), "png.yaml");
-        assert_eq!(default_yaml_file_name("zip.yaml"), "zip.yaml");
-        assert_eq!(default_yaml_file_name("bad/name"), "bad_name.yaml");
-        assert_eq!(default_yaml_file_name(""), "structure.yaml");
-    }
-
-    #[test]
-    fn test_resolve_field_at_path() {
-        let field_a = ParsedField {
-            id: "a".to_string(),
-            field_type: "u1".to_string(),
-            offset: 0,
-            size: 1,
-            value: FieldValue::U8(10),
-            color: RgbaColor::default(),
-            description: None,
-            enum_label: None,
-            is_instance: false,
-            children: Vec::new(),
-        };
-        let field_b = ParsedField {
-            id: "b".to_string(),
-            field_type: "u1".to_string(),
-            offset: 1,
-            size: 1,
-            value: FieldValue::U8(20),
-            color: RgbaColor::default(),
-            description: None,
-            enum_label: None,
-            is_instance: false,
-            children: Vec::new(),
-        };
-        let field_parent = ParsedField {
-            id: "parent".to_string(),
-            field_type: String::new(),
-            offset: 0,
-            size: 2,
-            value: FieldValue::Struct,
-            color: RgbaColor::default(),
-            description: None,
-            enum_label: None,
-            is_instance: false,
-            children: vec![field_a, field_b],
-        };
-
-        let result = std::sync::Arc::new(ParseResult::new("test".to_string(), vec![field_parent], 2, Vec::new()));
-
-        let opt_res = Some(result);
-        assert_eq!(resolve_field_at_path(&opt_res, &[0]).map(|f| f.id.as_str()), Some("parent"));
-        assert_eq!(resolve_field_at_path(&opt_res, &[0, 0]).map(|f| f.id.as_str()), Some("a"));
-        assert_eq!(resolve_field_at_path(&opt_res, &[0, 1]).map(|f| f.id.as_str()), Some("b"));
-        assert!(resolve_field_at_path(&opt_res, &[0, 2]).is_none());
-        assert!(resolve_field_at_path(&opt_res, &[1]).is_none());
-        assert!(resolve_field_at_path(&opt_res, &[]).is_none());
-    }
-
-    #[test]
-    fn test_flatten_fields_hierarchy() {
-        let field_child = ParsedField {
-            id: "child".to_string(),
-            field_type: "u1".to_string(),
-            offset: 0,
-            size: 1,
-            value: FieldValue::U8(1),
-            color: RgbaColor::default(),
-            description: None,
-            enum_label: None,
-            is_instance: false,
-            children: Vec::new(),
-        };
-        let field_parent = ParsedField {
-            id: "root".to_string(),
-            field_type: String::new(),
-            offset: 0,
-            size: 1,
-            value: FieldValue::Struct,
-            color: RgbaColor::default(),
-            description: None,
-            enum_label: None,
-            is_instance: false,
-            children: vec![field_child],
-        };
-
-        // When collapsed (not in expanded_paths)
-        let expanded = HashSet::new();
-        let mut flattened = Vec::new();
-        StructTreeView::flatten_fields(std::iter::once(&field_parent), 0, &[], &expanded, &mut flattened, 0);
-        assert_eq!(flattened.len(), 1);
-        assert!(flattened[0].has_children);
-        assert!(flattened[0].is_collapsed);
-        assert_eq!(flattened[0].depth, 0);
-
-        // When expanded
-        let mut expanded = HashSet::new();
-        expanded.insert(vec![0]);
-        let mut flattened = Vec::new();
-        StructTreeView::flatten_fields(std::iter::once(&field_parent), 0, &[], &expanded, &mut flattened, 0);
-        assert_eq!(flattened.len(), 2);
-        assert_eq!(flattened[0].path, vec![0]);
-        assert!(!flattened[0].is_collapsed);
-        assert_eq!(flattened[1].path, vec![0, 0]);
-        assert_eq!(flattened[1].depth, 1);
-        assert!(!flattened[1].has_children);
-    }
-
-    #[test]
-    fn test_go_to_offset_action_target_format() {
-        let field_offset = 0x12ABusize;
-        let offset_hex = format!("0x{:08X}", field_offset);
-        assert_eq!(offset_hex, "0x000012AB");
-
-        let action = crate::actions::NavigateToOffset {
-            target: offset_hex,
-            target_file: None,
-        };
-        assert_eq!(action.target, "0x000012AB");
-        assert!(action.target_file.is_none());
-    }
-
-    #[test]
-    fn test_struct_tree_view_event_focus_editor() {
-        let event = super::StructTreeViewEvent::FocusEditor;
-        assert_eq!(event, super::StructTreeViewEvent::FocusEditor);
-
-        let parent_ctx = gpui_kit::KeyContext::try_from("StructTreeView").unwrap();
-        let child_ctx = gpui_kit::KeyContext::try_from("DataTable").unwrap();
-        let contexts = vec![parent_ctx, child_ctx];
-
-        let pred_desc = gpui_kit::KeyBindingContextPredicate::parse("StructTreeView > DataTable").unwrap();
-        assert!(pred_desc.eval(&contexts));
-        assert_eq!(pred_desc.depth_of(&contexts), Some(2));
     }
 }

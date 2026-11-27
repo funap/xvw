@@ -966,9 +966,10 @@ mod tests {
 
     #[test]
     fn test_scratch_menu_recent_label_formatting() {
+        use crate::service::scratch_service::ScratchEntry;
         use std::path::PathBuf;
 
-        let entry_same_title = crate::service::ScratchEntry {
+        let entry_same_title = ScratchEntry {
             id: Some(1),
             filename: "scratch_1.md".to_string(),
             path: PathBuf::from("scratch_1.md"),
@@ -983,7 +984,7 @@ mod tests {
         };
         assert_eq!(label1, "Scratchpad (scratch_1.md)");
 
-        let entry_custom = crate::service::ScratchEntry {
+        let entry_custom = ScratchEntry {
             id: Some(2),
             filename: "scratch_2.md".to_string(),
             path: PathBuf::from("scratch_2.md"),

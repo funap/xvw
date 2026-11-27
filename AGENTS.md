@@ -24,7 +24,7 @@ cargo test                   # full deterministic unit suite
 
 ## Architecture & Layer Boundaries
 
-- **`src/core/` (pure engine)**: Deterministic domain logic (`Buffer`, `Document`, `History`, `Command`, `Editor`, `AddressMap`, format codecs, Kaitai `.ksy` parser). Keep GPUI/UI and filesystem I/O out of `core/` (`src/core/dealloc.rs` is the sole exception that optionally offloads drops to Tokio). Put `gpui_kit::Global` impls outside `core/` (`src/ui/`, `src/app_state.rs`, `src/settings.rs`).
+- **`src/core/` (pure engine)**: Deterministic domain logic (`Buffer`, `Document`, `History`, `Command`, `Editor`, `AddressMap`, format codecs, Kaitai `.ksy` parser). Keep GPUI/UI, Tokio, and filesystem I/O out of `core/` (background drop dispatch is registered from `service/`). Put `gpui_kit::Global` impls outside `core/` (`src/ui/`, `src/app_state.rs`, `src/settings.rs`).
 - **`src/service/` (orchestration & async)**: Async tasks, file I/O, and background parsing/scanning bridging `core/` with `gpui_kit` and Tokio.
 - **`src/ui/` (GPUI presentation)**: `gpui_kit` views, panels, dialogs, pane tree, menus, and `Workspace`. Use `gpui_kit` rather than raw `gpui::` directly (except low-level graphics/font/color types).
 - **Non-blocking UI & GPUI state**: Wire reactive updates with `cx.new` / `cx.observe` / `cx.subscribe` / `cx.notify()`. Offload file I/O, CPU-heavy work, and heavy `Arc` drops (`crate::core::dealloc::discard_in_background`) off the UI thread. Keep layout/formatting helpers pure and unit-testable without a GPUI window.

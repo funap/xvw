@@ -1,10 +1,10 @@
 //! Status footer rendering for hovered pixel details, address offsets, and buffer stats.
 
 use super::legend::VisualMapByteCategoryExt;
+use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::format::HexCase;
 use crate::core::visual_map::{HoveredPixel, VisualMapByteCategory, VisualMapColorMode as ColorMode};
-use crate::ui::appearance::Appearance;
 use gpui_kit::component::{StyledExt, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;

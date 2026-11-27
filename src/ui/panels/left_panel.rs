@@ -3,11 +3,11 @@ use gpui_kit::*;
 use crate::core::editor::Editor;
 use crate::ui::panels::bookmark_panel::BookmarkPanel;
 use crate::ui::panels::checksum_panel::{ChecksumPanel, ChecksumPanelEvent};
-use crate::ui::panels::data_inspector::DataInspector;
-use crate::ui::panels::file_tree_view::{FileTreeView, FileTreeViewEvent};
+use crate::ui::panels::data_inspector_panel::DataInspectorPanel;
+use crate::ui::panels::file_tree_panel::{FileTreePanel, FileTreePanelEvent};
 use crate::ui::panels::search_panel::{SearchPanel, SearchPanelEvent};
 use crate::ui::panels::strings_panel::{StringsPanel, StringsPanelEvent};
-use crate::ui::panels::struct_tree_view::StructTreeView;
+use crate::ui::panels::struct_tree_panel::StructTreePanel;
 use crate::ui::panels::visual_map_panel::{VisualMapPanel, VisualMapPanelEvent};
 use crate::ui::panels::zlib_panel::{ZlibPanel, ZlibPanelEvent};
 use std::path::PathBuf;
@@ -26,12 +26,12 @@ pub enum LeftPanelTab {
 }
 
 pub struct LeftPanel {
-    pub file_tree: Entity<FileTreeView>,
+    pub file_tree: Entity<FileTreePanel>,
     pub search_panel: Entity<SearchPanel>,
     pub strings_panel: Entity<StringsPanel>,
     pub zlib_panel: Entity<ZlibPanel>,
-    pub struct_tree: Entity<StructTreeView>,
-    pub data_inspector: Entity<DataInspector>,
+    pub struct_tree: Entity<StructTreePanel>,
+    pub data_inspector: Entity<DataInspectorPanel>,
     pub visual_map: Entity<VisualMapPanel>,
     pub checksum_panel: Entity<ChecksumPanel>,
     pub bookmark_panel: Entity<BookmarkPanel>,
@@ -39,7 +39,7 @@ pub struct LeftPanel {
     is_panel_visible: bool,
 }
 
-impl EventEmitter<FileTreeViewEvent> for LeftPanel {}
+impl EventEmitter<FileTreePanelEvent> for LeftPanel {}
 impl EventEmitter<SearchPanelEvent> for LeftPanel {}
 impl EventEmitter<StringsPanelEvent> for LeftPanel {}
 impl EventEmitter<ZlibPanelEvent> for LeftPanel {}
@@ -47,18 +47,18 @@ impl EventEmitter<VisualMapPanelEvent> for LeftPanel {}
 impl EventEmitter<ChecksumPanelEvent> for LeftPanel {}
 
 impl LeftPanel {
-    pub fn new(file_tree: Entity<FileTreeView>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(file_tree: Entity<FileTreePanel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search_panel = cx.new(|cx| SearchPanel::new(None, window, cx));
         let strings_panel = cx.new(|cx| StringsPanel::new(None, window, cx));
         let zlib_panel = cx.new(|cx| ZlibPanel::new(None, window, cx));
-        let struct_tree = cx.new(|cx| StructTreeView::new(None, None, window, cx));
-        let data_inspector = cx.new(|cx| DataInspector::new(None, window, cx));
+        let struct_tree = cx.new(|cx| StructTreePanel::new(None, None, window, cx));
+        let data_inspector = cx.new(|cx| DataInspectorPanel::new(None, window, cx));
         let visual_map = cx.new(|cx| VisualMapPanel::new(None, cx));
         let checksum_panel = cx.new(|cx| ChecksumPanel::new(None, window, cx));
         let bookmark_panel = cx.new(|cx| BookmarkPanel::new(None, window, cx));
 
-        cx.subscribe(&file_tree, |_, _, event: &FileTreeViewEvent, cx| match event {
-            FileTreeViewEvent::OpenFile { path, format, record_recent } => cx.emit(FileTreeViewEvent::OpenFile {
+        cx.subscribe(&file_tree, |_, _, event: &FileTreePanelEvent, cx| match event {
+            FileTreePanelEvent::OpenFile { path, format, record_recent } => cx.emit(FileTreePanelEvent::OpenFile {
                 path: path.clone(),
                 format: *format,
                 record_recent: *record_recent,
@@ -143,7 +143,7 @@ impl LeftPanel {
     }
 
     /// Updates the recent binary file entries shown by the Files panel.
-    pub fn set_file_history(&mut self, entries: &[crate::core::structure::RecentFileEntry], cx: &mut Context<Self>) {
+    pub fn set_file_history(&mut self, entries: &[crate::core::recent_history::RecentFileEntry], cx: &mut Context<Self>) {
         self.file_tree.update(cx, |panel, cx| {
             panel.set_recent_file_history(entries, cx);
         });

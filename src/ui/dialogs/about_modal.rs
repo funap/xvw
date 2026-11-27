@@ -33,8 +33,8 @@ pub fn version_info_text() -> String {
     )
 }
 
-/// Displays the About / Version dialog.
-pub fn open_about_dialog(window: &mut Window, cx: &mut App) {
+/// Displays the About / Version modal dialog.
+pub fn open_about_modal(window: &mut Window, cx: &mut App) {
     if window.has_active_dialog(cx) {
         return;
     }
