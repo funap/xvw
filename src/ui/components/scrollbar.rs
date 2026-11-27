@@ -14,13 +14,35 @@ pub const SCROLLBAR_THUMB_RADIUS: Pixels = px(4.0);
 pub const SCROLLBAR_MIN_THUMB_LENGTH: Pixels = px(24.0);
 
 /// Returns the scrollbar track background color for the given state.
-pub fn scrollbar_track_color(_is_hovered: bool, _is_dragging: bool, theme: &Theme) -> Hsla {
-    theme.scrollbar
+pub fn scrollbar_track_color(is_hovered: bool, is_dragging: bool, theme: &Theme) -> Hsla {
+    if is_dragging {
+        if theme.scrollbar.a > 0.0 {
+            Hsla {
+                a: (theme.scrollbar.a + 0.25).min(1.0),
+                ..theme.scrollbar
+            }
+        } else {
+            Hsla { a: 0.45, ..theme.border }
+        }
+    } else if is_hovered {
+        if theme.scrollbar.a > 0.0 {
+            Hsla {
+                a: (theme.scrollbar.a + 0.12).min(1.0),
+                ..theme.scrollbar
+            }
+        } else {
+            Hsla { a: 0.25, ..theme.border }
+        }
+    } else {
+        theme.scrollbar
+    }
 }
 
-/// Returns the scrollbar thumb background color with strong contrast against backgrounds.
+/// Returns the scrollbar thumb background color with clear progression across idle, hover, and drag states.
 pub fn scrollbar_thumb_color(is_hovered: bool, is_dragging: bool, theme: &Theme) -> Hsla {
-    if is_dragging || is_hovered {
+    if is_dragging {
+        Hsla { a: 0.75, ..theme.primary }
+    } else if is_hovered {
         theme.scrollbar_thumb_hover
     } else {
         theme.scrollbar_thumb
@@ -213,24 +235,39 @@ mod tests {
 
     #[test]
     fn test_scrollbar_colors_and_styles() {
-        let theme = Theme::default();
-        let track_idle = scrollbar_track_color(false, false, &theme);
-        let track_hover = scrollbar_track_color(true, false, &theme);
-        let track_active = scrollbar_track_color(false, true, &theme);
+        use crate::assets::Assets;
+        use crate::settings::{DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME};
+        use crate::theme::load_themes_from_assets;
 
-        assert_eq!(track_idle, theme.scrollbar);
-        assert_eq!(track_hover, theme.scrollbar);
-        assert_eq!(track_active, theme.scrollbar);
+        let registry = load_themes_from_assets(&Assets);
+        for name in [DEFAULT_LIGHT_THEME, DEFAULT_DARK_THEME] {
+            let config = registry.themes().get(name).expect("default theme should exist");
+            let mut theme = Theme::default();
+            theme.apply_config(config);
 
-        let thumb_idle = scrollbar_thumb_color(false, false, &theme);
-        let thumb_hover = scrollbar_thumb_color(true, false, &theme);
-        let thumb_active = scrollbar_thumb_color(false, true, &theme);
+            let track_idle = scrollbar_track_color(false, false, &theme);
+            let track_hover = scrollbar_track_color(true, false, &theme);
+            let track_active = scrollbar_track_color(false, true, &theme);
 
-        assert_eq!(thumb_idle, theme.scrollbar_thumb);
-        assert_eq!(thumb_hover, theme.scrollbar_thumb_hover);
-        assert_eq!(thumb_active, theme.scrollbar_thumb_hover);
+            assert_eq!(track_idle, theme.scrollbar);
+            assert_ne!(track_hover, track_idle);
+            assert_ne!(track_active, track_hover);
+            assert!(track_hover.a > track_idle.a);
+            assert!(track_active.a > track_hover.a);
 
-        let _styles = common_scrollbar_styles(&theme);
+            let thumb_idle = scrollbar_thumb_color(false, false, &theme);
+            let thumb_hover = scrollbar_thumb_color(true, false, &theme);
+            let thumb_active = scrollbar_thumb_color(false, true, &theme);
+
+            assert_eq!(thumb_idle, theme.scrollbar_thumb);
+            assert_eq!(thumb_hover, theme.scrollbar_thumb_hover);
+            assert_eq!(thumb_active, Hsla { a: 0.75, ..theme.primary });
+            assert_ne!(thumb_hover, thumb_idle);
+            assert_ne!(thumb_active, thumb_hover);
+
+            let _styles = common_scrollbar_styles(&theme);
+        }
+
         assert_eq!(SCROLLBAR_WIDTH, px(12.0));
         assert_eq!(SCROLLBAR_THUMB_WIDTH, px(8.0));
         assert_eq!(SCROLLBAR_THUMB_INSET, px(2.0));

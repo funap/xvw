@@ -1,5 +1,6 @@
 use crate::ui::icon::IconName;
 use gpui_kit::component::{Icon, StyledExt as _, h_flex, theme::Theme, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{AnyElement, Div, Hsla, ParentElement, SharedString, Styled, div, px};
 
 /// Returns the header text color based on the focus state.
@@ -13,10 +14,13 @@ pub fn panel_container(_is_focused: bool, theme: &Theme) -> Div {
     v_flex().size_full().min_w_0().min_h_0().overflow_hidden().bg(theme.sidebar)
 }
 
-/// Creates a standardized panel header toolbar with fixed height, border, and uppercase title.
+/// Creates a standardized panel header toolbar with fixed height, border, focus indicator, and truncating title.
 pub fn panel_header(title: impl Into<SharedString>, is_focused: bool, theme: &Theme, badge: Option<AnyElement>, actions: Option<AnyElement>) -> Div {
-    let mut title_part = h_flex().items_center().gap_2().child(
+    let mut title_part = h_flex().flex_1().min_w_0().items_center().gap_2().child(
         div()
+            .min_w_0()
+            .truncate()
+            .whitespace_nowrap()
             .text_xs()
             .font_semibold()
             .text_color(header_text_color(is_focused, theme))
@@ -24,22 +28,27 @@ pub fn panel_header(title: impl Into<SharedString>, is_focused: bool, theme: &Th
     );
 
     if let Some(b) = badge {
-        title_part = title_part.child(b);
+        title_part = title_part.child(div().flex_shrink_0().child(b));
     }
 
     let mut header = h_flex()
+        .relative()
         .justify_between()
         .items_center()
+        .gap_2()
         .h(px(34.0))
         .flex_shrink_0()
         .px_3()
         .border_b_1()
         .border_color(theme.border)
         .bg(theme.sidebar)
+        .when(is_focused, |el| {
+            el.child(div().absolute().top_0().left_0().right_0().h(px(2.0)).bg(theme.primary))
+        })
         .child(title_part);
 
     if let Some(act) = actions {
-        header = header.child(act);
+        header = header.child(div().flex_shrink_0().child(act));
     }
 
     header
@@ -52,6 +61,7 @@ pub fn panel_badge(count_or_text: impl Into<SharedString>, theme: &Theme) -> Div
         .py_0p5()
         .rounded_sm()
         .bg(theme.secondary)
+        .whitespace_nowrap()
         .text_xs()
         .text_color(theme.muted_foreground)
         .child(count_or_text.into())
