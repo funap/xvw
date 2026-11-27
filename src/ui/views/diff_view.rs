@@ -276,7 +276,7 @@ impl DiffView {
         }
     }
 
-    fn next_difference(&mut self, _: &NextDifference, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn next_difference(&mut self, _: &NextDifference, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(diff_result) = &self.diff_result {
             let modified_chunks: Vec<_> = diff_result.chunks.iter().filter(|c| matches!(c, DiffChunk::Modified { .. })).collect();
 
@@ -287,7 +287,7 @@ impl DiffView {
         }
     }
 
-    fn prev_difference(&mut self, _: &PrevDifference, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn prev_difference(&mut self, _: &PrevDifference, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(diff_result) = &self.diff_result {
             let modified_chunks: Vec<_> = diff_result.chunks.iter().filter(|c| matches!(c, DiffChunk::Modified { .. })).collect();
 
@@ -302,7 +302,7 @@ impl DiffView {
         }
     }
 
-    fn toggle_sync_scroll(&mut self, _: &ToggleSyncScroll, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_sync_scroll(&mut self, _: &ToggleSyncScroll, _window: &mut Window, cx: &mut Context<Self>) {
         self.sync_scroll = !self.sync_scroll;
         cx.notify();
     }

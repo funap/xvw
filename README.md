@@ -182,7 +182,7 @@ xvw binary.bin --panel map
 | **Reset Breaks in Range** | `Shift + Enter` | `Shift + Enter` |
 | **Join Lines** | `Cmd + J` | `Ctrl + J` |
 | **Reset Custom Breaks** | `Cmd + Shift + Backspace` | `Ctrl + Shift + Backspace` |
-| **Toggle Insert / Overwrite** | `Insert` | `Insert` |
+| **Toggle Insert / Overwrite** | `Option + Cmd + I` / `Insert` | `Insert` |
 
 ### Search & Workspace
 
@@ -193,10 +193,11 @@ xvw binary.bin --panel map
 | **Next / Prev Match** | `Cmd + G` / `Cmd + Shift + G` | `F3` / `Shift + F3` |
 | **Open File Dialog** | `Cmd + O` | `Ctrl + O` |
 | **Open Folder** | `Cmd + Shift + O` | `Ctrl + Shift + O` |
+| **Save / Save As** | `Cmd + S` / `Cmd + Shift + S` | `Ctrl + S` / `Ctrl + Shift + S` |
 | **Toggle Left Sidebar** | `Cmd + B` | `Ctrl + B` |
 | **Split Editor (Right / Down)** | `Cmd + \` / `Cmd + Shift + D` | `Ctrl + \` / `Ctrl + Shift + D` |
 | **Switch Tabs** | `Cmd + 1` .. `Cmd + 9` | `Ctrl + 1` .. `Ctrl + 9` |
-| **Load Kaitai Struct (`.ksy`)** | `Cmd + Shift + S` | `Ctrl + Shift + S` |
+| **Load Kaitai Struct (`.ksy`)** | `Cmd + Shift + K` | `Ctrl + Shift + K` |
 | **Toggle Inline Structure** | `Cmd + Shift + V` | `Ctrl + Shift + V` |
 | **Copy as Hex Dump** | `Cmd + Shift + C` | `Ctrl + Shift + C` |
 | **Settings** | `Cmd + ,` | `Ctrl + ,` |

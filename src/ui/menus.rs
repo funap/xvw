@@ -1,13 +1,17 @@
 use std::sync::Arc;
 
+use crate::core::encoding::Encoding;
+use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
 use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::{Action, Context, Menu, MenuItem, SharedString, Window};
+use gpui_kit::{Action, Context, Menu, MenuItem, OsAction, SharedString, Window};
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct MenuEditorState {
     pub has_doc: bool,
+    pub has_tab: bool,
     pub has_diff: bool,
     pub is_read_only: bool,
+    pub is_insert_mode: bool,
     pub can_undo: bool,
     pub can_redo: bool,
     pub has_selection: bool,
@@ -16,7 +20,15 @@ pub struct MenuEditorState {
     pub can_close_right: bool,
     pub has_saved: bool,
     pub has_scratch: bool,
+    pub encoding: Option<Encoding>,
+    pub radix: Option<DisplayRadix>,
+    pub group_size: Option<ByteGroupSize>,
+    pub byte_order: Option<ByteOrder>,
+    pub inline_structure_view: bool,
+    pub hide_unbookmarked: bool,
 }
+
+type StatePredicate = Arc<dyn Fn(&MenuEditorState) -> bool + Send + Sync>;
 
 #[derive(Clone)]
 pub enum MenuItemDef {
@@ -24,6 +36,8 @@ pub enum MenuItemDef {
         label: SharedString,
         action: Arc<dyn Fn() -> Box<dyn Action> + Send + Sync>,
         is_enabled: Option<fn(&MenuEditorState) -> bool>,
+        is_checked: Option<StatePredicate>,
+        os_action: Option<OsAction>,
     },
     Submenu {
         label: SharedString,
@@ -38,6 +52,8 @@ impl MenuItemDef {
             label: label.into(),
             action: Arc::new(move || Box::new(action.clone())),
             is_enabled: None,
+            is_checked: None,
+            os_action: None,
         }
     }
 
@@ -50,6 +66,37 @@ impl MenuItemDef {
             label: label.into(),
             action: Arc::new(move || Box::new(action.clone())),
             is_enabled: Some(is_enabled),
+            is_checked: None,
+            os_action: None,
+        }
+    }
+
+    pub fn action_with_condition_and_check<A, F>(label: impl Into<SharedString>, action: A, is_enabled: fn(&MenuEditorState) -> bool, is_checked: F) -> Self
+    where
+        A: Action + Clone + 'static + Sync,
+        F: Fn(&MenuEditorState) -> bool + Send + Sync + 'static,
+    {
+        Self::Action {
+            label: label.into(),
+            action: Arc::new(move || Box::new(action.clone())),
+            is_enabled: Some(is_enabled),
+            is_checked: Some(Arc::new(is_checked)),
+            os_action: None,
+        }
+    }
+
+    pub fn action_with_condition_and_os_action<A: Action + Clone + 'static + Sync>(
+        label: impl Into<SharedString>,
+        action: A,
+        is_enabled: fn(&MenuEditorState) -> bool,
+        os_action: OsAction,
+    ) -> Self {
+        Self::Action {
+            label: label.into(),
+            action: Arc::new(move || Box::new(action.clone())),
+            is_enabled: Some(is_enabled),
+            is_checked: None,
+            os_action: Some(os_action),
         }
     }
 
@@ -61,18 +108,24 @@ impl MenuItemDef {
         Self::Separator
     }
 
-    pub fn to_gpui_menu_item(&self) -> MenuItem {
+    pub fn to_gpui_menu_item(&self, state: &MenuEditorState) -> MenuItem {
         match self {
-            MenuItemDef::Action { label, action, .. } => MenuItem::Action {
+            MenuItemDef::Action {
+                label,
+                action,
+                is_enabled,
+                is_checked,
+                os_action,
+            } => MenuItem::Action {
                 name: label.clone(),
                 action: (action)(),
-                os_action: None,
-                checked: false,
-                disabled: false,
+                os_action: *os_action,
+                checked: is_checked.as_ref().is_some_and(|f| f(state)),
+                disabled: is_enabled.is_some_and(|f| !f(state)),
             },
             MenuItemDef::Submenu { label, items } => MenuItem::submenu(Menu {
                 name: label.clone(),
-                items: items.iter().map(|item| item.to_gpui_menu_item()).collect(),
+                items: items.iter().map(|item| item.to_gpui_menu_item(state)).collect(),
                 disabled: false,
             }),
             MenuItemDef::Separator => MenuItem::separator(),
@@ -81,9 +134,19 @@ impl MenuItemDef {
 
     pub fn apply_to_popup_menu(&self, menu: PopupMenu, state: &MenuEditorState, window: &mut Window, cx: &mut Context<PopupMenu>) -> PopupMenu {
         match self {
-            MenuItemDef::Action { label, action, is_enabled } => {
+            MenuItemDef::Action {
+                label,
+                action,
+                is_enabled,
+                is_checked,
+                ..
+            } => {
                 let disabled = is_enabled.is_some_and(|f| !f(state));
-                menu.menu_with_disabled(label.clone(), (action)(), disabled)
+                if let Some(checked_fn) = is_checked {
+                    menu.menu_with_check_and_disabled(label.clone(), checked_fn(state), (action)(), disabled)
+                } else {
+                    menu.menu_with_disabled(label.clone(), (action)(), disabled)
+                }
             }
             MenuItemDef::Submenu { label, items } => {
                 let sub_items = items.clone();
@@ -104,10 +167,10 @@ pub struct MenuDef {
 }
 
 impl MenuDef {
-    pub fn to_gpui_menu(&self) -> Menu {
+    pub fn to_gpui_menu(&self, state: &MenuEditorState) -> Menu {
         Menu {
             name: self.name.into(),
-            items: self.items.iter().map(|item| item.to_gpui_menu_item()).collect(),
+            items: self.items.iter().map(|item| item.to_gpui_menu_item(state)).collect(),
             disabled: false,
         }
     }
@@ -146,7 +209,9 @@ pub(crate) fn shortcut_for_label(category: &str, label: &str) -> Option<&'static
             ("File", "Quick Open...") => Some("⌘P"),
             ("File", "Open Folder...") => Some("⇧⌘O"),
             ("File", "Save") => Some("⌘S"),
+            ("File", "Save As...") => Some("⇧⌘S"),
             ("File", "Close Tab") => Some("⌘W"),
+            ("File", "Settings...") => Some("⌘,"),
             ("File", "Quit") => Some("⌘Q"),
             ("Edit", "Undo") => Some("⌘Z"),
             ("Edit", "Redo") => Some("⇧⌘Z"),
@@ -159,7 +224,7 @@ pub(crate) fn shortcut_for_label(category: &str, label: &str) -> Option<&'static
             ("Edit", "Find in File (Scan All)") => Some("⇧⌘F"),
             ("Edit", "Find Next") | ("Go", "Find Next") => Some("⌘G"),
             ("Edit", "Find Previous") | ("Go", "Find Previous") => Some("⇧⌘G"),
-            ("Edit", "Toggle Insert Mode") => Some("Insert"),
+            ("Edit", "Toggle Insert Mode") => Some("⌥⌘I"),
             ("Edit", "Unfold at Cursor")
             | ("Edit", "Unfold Bookmark at Cursor")
             | ("Go", "Unfold Bookmark at Cursor")
@@ -200,10 +265,13 @@ pub(crate) fn shortcut_for_label(category: &str, label: &str) -> Option<&'static
             ("Go", "Go to End") | ("Go", "End of File") => Some("⌘End"),
             ("Go", "Next Difference") | ("Analysis", "Next Difference") => Some("F3"),
             ("Go", "Previous Difference") | ("Analysis", "Previous Difference") => Some("⇧F3"),
-            ("Analysis", "Load Definition...") => Some("⇧⌘S"),
+            ("Analysis", "Load Definition...") => Some("⇧⌘K"),
             ("Analysis", "Toggle Inline Structure View") => Some("⇧⌘V"),
             ("Analysis", "Compare Open Files...") => Some("⌥⌘D"),
+            ("Scratch", "Toggle Scratchpad Panel") => Some("⌥⌘B"),
             ("Scratch", "New Scratchpad") => Some("⇧⌘N"),
+            ("Scratch", "Switch Note Palette...") => Some("⌘P"),
+            ("Scratch", "Toggle View Mode") => Some("⌘E"),
             ("Scratch", "as Offset") => Some("⌥⌘O"),
             ("Scratch", "as Hex Bytes") => Some("⌥⌘H"),
             ("Scratch", "as Text / String") => Some("⌥⌘T"),
@@ -222,7 +290,9 @@ pub(crate) fn shortcut_for_label(category: &str, label: &str) -> Option<&'static
             ("File", "Quick Open...") => Some("Ctrl+P"),
             ("File", "Open Folder...") => Some("Ctrl+Shift+O"),
             ("File", "Save") => Some("Ctrl+S"),
+            ("File", "Save As...") => Some("Ctrl+Shift+S"),
             ("File", "Close Tab") => Some("Ctrl+W"),
+            ("File", "Settings...") => Some("Ctrl+,"),
             ("File", "Quit") => Some("Ctrl+Q"),
             ("Edit", "Undo") => Some("Ctrl+Z"),
             ("Edit", "Redo") => Some("Ctrl+Shift+Z"),
@@ -276,10 +346,13 @@ pub(crate) fn shortcut_for_label(category: &str, label: &str) -> Option<&'static
             ("Go", "Go to End") | ("Go", "End of File") => Some("Ctrl+End"),
             ("Go", "Next Difference") | ("Analysis", "Next Difference") => Some("F3"),
             ("Go", "Previous Difference") | ("Analysis", "Previous Difference") => Some("Shift+F3"),
-            ("Analysis", "Load Definition...") => Some("Ctrl+Shift+S"),
+            ("Analysis", "Load Definition...") => Some("Ctrl+Shift+K"),
             ("Analysis", "Toggle Inline Structure View") => Some("Ctrl+Shift+V"),
             ("Analysis", "Compare Open Files...") => Some("Alt+Ctrl+D"),
+            ("Scratch", "Toggle Scratchpad Panel") => Some("Alt+Ctrl+B"),
             ("Scratch", "New Scratchpad") => Some("Ctrl+Shift+N"),
+            ("Scratch", "Switch Note Palette...") => Some("Ctrl+P"),
+            ("Scratch", "Toggle View Mode") => Some("Ctrl+E"),
             ("Scratch", "as Offset") => Some("Alt+Ctrl+O"),
             ("Scratch", "as Hex Bytes") => Some("Alt+Ctrl+H"),
             ("Scratch", "as Text / String") => Some("Alt+Ctrl+T"),
@@ -295,7 +368,7 @@ pub(crate) fn shortcut_for_label(category: &str, label: &str) -> Option<&'static
 fn collect_items_into(category: &str, prefix_path: &str, items: &[MenuItemDef], out: &mut Vec<PaletteCommand>) {
     for item in items {
         match item {
-            MenuItemDef::Action { label, action, is_enabled } => {
+            MenuItemDef::Action { label, action, is_enabled, .. } => {
                 let full_title = if prefix_path.is_empty() {
                     format!("{category}: {label}")
                 } else {
@@ -342,12 +415,40 @@ pub fn application_menus() -> Vec<MenuDef> {
         build_analysis_menu(),
         build_scratch_menu(),
         build_window_menu(),
+        build_help_menu(),
     ]
 }
 
-/// Updates the system menu bar with the latest application menus.
+fn build_macos_app_menu() -> MenuDef {
+    MenuDef {
+        name: "xvw",
+        items: vec![
+            MenuItemDef::action("About xvw", crate::actions::OpenAbout),
+            MenuItemDef::separator(),
+            MenuItemDef::action("Settings...", crate::actions::OpenSettings),
+            MenuItemDef::separator(),
+            MenuItemDef::action("Quit xvw", crate::actions::Quit),
+        ],
+    }
+}
+
+pub(crate) fn build_native_menus(state: &MenuEditorState, include_macos_app_menu: bool) -> Vec<Menu> {
+    let mut menus = Vec::new();
+    if include_macos_app_menu {
+        menus.push(build_macos_app_menu().to_gpui_menu(state));
+    }
+    menus.extend(application_menus().iter().map(|menu| menu.to_gpui_menu(state)));
+    menus
+}
+
+/// Updates the system menu bar with the latest application menus and editor state.
+pub fn update_application_menus_with_state(state: &MenuEditorState, cx: &gpui_kit::App) {
+    cx.set_menus(build_native_menus(state, cfg!(target_os = "macos")));
+}
+
+/// Updates the system menu bar with default editor state (used during app startup and scratchpad list refreshes).
 pub fn update_application_menus(cx: &gpui_kit::App) {
-    cx.set_menus(application_menus().iter().map(|menu| menu.to_gpui_menu()));
+    update_application_menus_with_state(&MenuEditorState::default(), cx);
 }
 
 fn build_file_menu() -> MenuDef {
@@ -380,20 +481,22 @@ fn build_file_menu() -> MenuDef {
                 ],
             ),
             MenuItemDef::separator(),
-            MenuItemDef::action_with_condition("Close Tab", crate::actions::CloseActivePanel, |s| s.has_doc),
+            MenuItemDef::action_with_condition("Close Tab", crate::actions::CloseActivePanel, |s| s.has_tab || s.has_doc || s.has_diff),
             MenuItemDef::submenu(
                 "Close Other Tabs",
                 vec![
                     MenuItemDef::action_with_condition("Close Others", crate::actions::CloseOtherTabs, |s| s.can_close_others),
                     MenuItemDef::action_with_condition("Close Tabs to Right", crate::actions::CloseTabsToRight, |s| s.can_close_right),
                     MenuItemDef::action_with_condition("Close Saved Tabs", crate::actions::CloseSavedTabs, |s| s.has_saved),
-                    MenuItemDef::action_with_condition("Close All Tabs", crate::actions::CloseAllTabs, |s| s.has_doc),
+                    MenuItemDef::action_with_condition("Close All Tabs", crate::actions::CloseAllTabs, |s| s.has_tab || s.has_doc || s.has_diff),
                 ],
             ),
             MenuItemDef::separator(),
             MenuItemDef::action_with_condition("Copy Path", crate::actions::CopyPath, |s| s.has_doc),
             MenuItemDef::action_with_condition("Copy File Name", crate::actions::CopyFileName, |s| s.has_doc),
             MenuItemDef::action_with_condition("Reveal in File Manager", crate::actions::RevealInExplorer, |s| s.has_doc),
+            MenuItemDef::separator(),
+            MenuItemDef::action("Settings...", crate::actions::OpenSettings),
             MenuItemDef::separator(),
             MenuItemDef::action("Quit", crate::actions::Quit),
         ],
@@ -404,17 +507,27 @@ fn build_edit_menu() -> MenuDef {
     MenuDef {
         name: "Edit",
         items: vec![
-            MenuItemDef::action_with_condition("Undo", crate::actions::Undo, |s| s.can_undo),
-            MenuItemDef::action_with_condition("Redo", crate::actions::Redo, |s| s.can_redo),
+            MenuItemDef::action_with_condition_and_os_action("Undo", crate::actions::Undo, |s| s.can_undo, OsAction::Undo),
+            MenuItemDef::action_with_condition_and_os_action("Redo", crate::actions::Redo, |s| s.can_redo, OsAction::Redo),
             MenuItemDef::separator(),
-            MenuItemDef::action_with_condition("Cut", crate::actions::Cut, |s| !s.is_read_only && s.has_doc && s.has_selection),
-            MenuItemDef::action_with_condition("Copy", crate::actions::Copy, |s| s.can_copy),
-            MenuItemDef::action_with_condition("Paste", crate::actions::Paste, |s| !s.is_read_only && s.has_doc),
+            MenuItemDef::action_with_condition_and_os_action("Cut", crate::actions::Cut, |s| !s.is_read_only && s.has_doc && s.has_selection, OsAction::Cut),
+            MenuItemDef::action_with_condition_and_os_action("Copy", crate::actions::Copy, |s| s.can_copy, OsAction::Copy),
+            MenuItemDef::action_with_condition_and_os_action("Paste", crate::actions::Paste, |s| !s.is_read_only && s.has_doc, OsAction::Paste),
             MenuItemDef::action_with_condition("Fill Selection...", crate::actions::FillSelection, |s| {
                 !s.is_read_only && s.has_doc && s.has_selection
             }),
-            MenuItemDef::action_with_condition("Toggle Insert Mode", crate::actions::ToggleInsertMode, |s| !s.is_read_only && s.has_doc),
-            MenuItemDef::action_with_condition("Toggle Read-only", crate::actions::ToggleReadOnly, |s| s.has_doc),
+            MenuItemDef::action_with_condition_and_check(
+                "Toggle Insert Mode",
+                crate::actions::ToggleInsertMode,
+                |s| !s.is_read_only && s.has_doc,
+                |s| s.is_insert_mode,
+            ),
+            MenuItemDef::action_with_condition_and_check(
+                "Toggle Read-only",
+                crate::actions::ToggleReadOnly,
+                |s| s.has_doc,
+                |s| s.has_doc && s.is_read_only,
+            ),
             MenuItemDef::separator(),
             MenuItemDef::submenu(
                 "Copy As",
@@ -431,7 +544,7 @@ fn build_edit_menu() -> MenuDef {
                     MenuItemDef::action_with_condition("as JSON Array", crate::actions::CopyAsJsonArray, |s| s.can_copy),
                 ],
             ),
-            MenuItemDef::action_with_condition("Select All", crate::actions::SelectAll, |s| s.has_doc),
+            MenuItemDef::action_with_condition_and_os_action("Select All", crate::actions::SelectAll, |s| s.has_doc, OsAction::SelectAll),
             MenuItemDef::separator(),
             MenuItemDef::action_with_condition("Find", crate::actions::ToggleSearch, |s| s.has_doc),
             MenuItemDef::action_with_condition("Find in File (Scan All)", crate::actions::ToggleSearchPanel, |s| s.has_doc),
@@ -463,7 +576,12 @@ fn build_edit_menu() -> MenuDef {
                     MenuItemDef::action_with_condition("Show All Bookmarks", crate::actions::ShowAllBookmarks, |s| s.has_doc),
                     MenuItemDef::action_with_condition("Hide All Bookmarks", crate::actions::HideAllBookmarks, |s| s.has_doc),
                     MenuItemDef::separator(),
-                    MenuItemDef::action_with_condition("Show Only Bookmarked Regions", crate::actions::ToggleHideUnbookmarked, |s| s.has_doc),
+                    MenuItemDef::action_with_condition_and_check(
+                        "Show Only Bookmarked Regions",
+                        crate::actions::ToggleHideUnbookmarked,
+                        |s| s.has_doc,
+                        |s| s.has_doc && s.hide_unbookmarked,
+                    ),
                     MenuItemDef::separator(),
                     MenuItemDef::action_with_condition("Unfold at Cursor", crate::actions::UnfoldBookmarkAtCursor, |s| s.has_doc),
                     MenuItemDef::separator(),
@@ -503,22 +621,30 @@ fn build_view_menu() -> MenuDef {
     let mut encoding_items = Vec::new();
 
     // Primary encodings (ASCII, UTF-8, UTF-16LE, UTF-16BE) directly at top level
-    for encoding in crate::core::encoding::Encoding::primary_encodings() {
-        encoding_items.push(MenuItemDef::action_with_condition(
+    for &encoding in Encoding::primary_encodings() {
+        encoding_items.push(MenuItemDef::action_with_condition_and_check(
             encoding.label(),
-            crate::actions::SetEncoding { encoding: *encoding },
+            crate::actions::SetEncoding { encoding },
             |s| s.has_doc || s.has_diff,
+            move |s| s.encoding == Some(encoding),
         ));
     }
 
     encoding_items.push(MenuItemDef::separator());
 
     // Regional/legacy categories as submenus
-    for (category, encodings) in crate::core::encoding::Encoding::secondary_categories() {
+    for (category, encodings) in Encoding::secondary_categories() {
         let cat_items = encodings
             .iter()
             .copied()
-            .map(|encoding| MenuItemDef::action_with_condition(encoding.label(), crate::actions::SetEncoding { encoding }, |s| s.has_doc || s.has_diff))
+            .map(|encoding| {
+                MenuItemDef::action_with_condition_and_check(
+                    encoding.label(),
+                    crate::actions::SetEncoding { encoding },
+                    |s| s.has_doc || s.has_diff,
+                    move |s| s.encoding == Some(encoding),
+                )
+            })
             .collect();
         encoding_items.push(MenuItemDef::submenu(category.label(), cat_items));
     }
@@ -549,26 +675,76 @@ fn build_view_menu() -> MenuDef {
             MenuItemDef::submenu(
                 "Radix",
                 vec![
-                    MenuItemDef::action_with_condition("Hexadecimal (16)", crate::actions::SetRadixHex, |s| s.has_doc),
-                    MenuItemDef::action_with_condition("Decimal (10)", crate::actions::SetRadixDec, |s| s.has_doc),
-                    MenuItemDef::action_with_condition("Octal (8)", crate::actions::SetRadixOct, |s| s.has_doc),
-                    MenuItemDef::action_with_condition("Binary (2)", crate::actions::SetRadixBin, |s| s.has_doc),
+                    MenuItemDef::action_with_condition_and_check(
+                        "Hexadecimal (16)",
+                        crate::actions::SetRadixHex,
+                        |s| s.has_doc,
+                        |s| s.radix == Some(DisplayRadix::Hexadecimal),
+                    ),
+                    MenuItemDef::action_with_condition_and_check(
+                        "Decimal (10)",
+                        crate::actions::SetRadixDec,
+                        |s| s.has_doc,
+                        |s| s.radix == Some(DisplayRadix::Decimal),
+                    ),
+                    MenuItemDef::action_with_condition_and_check(
+                        "Octal (8)",
+                        crate::actions::SetRadixOct,
+                        |s| s.has_doc,
+                        |s| s.radix == Some(DisplayRadix::Octal),
+                    ),
+                    MenuItemDef::action_with_condition_and_check(
+                        "Binary (2)",
+                        crate::actions::SetRadixBin,
+                        |s| s.has_doc,
+                        |s| s.radix == Some(DisplayRadix::Binary),
+                    ),
                 ],
             ),
             MenuItemDef::submenu(
                 "Grouping",
                 vec![
-                    MenuItemDef::action_with_condition("1 Byte (8-bit)", crate::actions::SetGroupSize1, |s| s.has_doc),
-                    MenuItemDef::action_with_condition("2 Bytes (16-bit)", crate::actions::SetGroupSize2, |s| s.has_doc),
-                    MenuItemDef::action_with_condition("4 Bytes (32-bit)", crate::actions::SetGroupSize4, |s| s.has_doc),
-                    MenuItemDef::action_with_condition("8 Bytes (64-bit)", crate::actions::SetGroupSize8, |s| s.has_doc),
+                    MenuItemDef::action_with_condition_and_check(
+                        "1 Byte (8-bit)",
+                        crate::actions::SetGroupSize1,
+                        |s| s.has_doc,
+                        |s| s.group_size == Some(ByteGroupSize::One),
+                    ),
+                    MenuItemDef::action_with_condition_and_check(
+                        "2 Bytes (16-bit)",
+                        crate::actions::SetGroupSize2,
+                        |s| s.has_doc,
+                        |s| s.group_size == Some(ByteGroupSize::Two),
+                    ),
+                    MenuItemDef::action_with_condition_and_check(
+                        "4 Bytes (32-bit)",
+                        crate::actions::SetGroupSize4,
+                        |s| s.has_doc,
+                        |s| s.group_size == Some(ByteGroupSize::Four),
+                    ),
+                    MenuItemDef::action_with_condition_and_check(
+                        "8 Bytes (64-bit)",
+                        crate::actions::SetGroupSize8,
+                        |s| s.has_doc,
+                        |s| s.group_size == Some(ByteGroupSize::Eight),
+                    ),
                 ],
             ),
             MenuItemDef::submenu(
                 "Byte Order",
                 vec![
-                    MenuItemDef::action_with_condition("Little Endian", crate::actions::SetByteOrderLittleEndian, |s| s.has_doc),
-                    MenuItemDef::action_with_condition("Big Endian", crate::actions::SetByteOrderBigEndian, |s| s.has_doc),
+                    MenuItemDef::action_with_condition_and_check(
+                        "Little Endian",
+                        crate::actions::SetByteOrderLittleEndian,
+                        |s| s.has_doc,
+                        |s| s.byte_order == Some(ByteOrder::LittleEndian),
+                    ),
+                    MenuItemDef::action_with_condition_and_check(
+                        "Big Endian",
+                        crate::actions::SetByteOrderBigEndian,
+                        |s| s.has_doc,
+                        |s| s.byte_order == Some(ByteOrder::BigEndian),
+                    ),
                     MenuItemDef::separator(),
                     MenuItemDef::action_with_condition("Toggle Byte Order", crate::actions::ToggleByteOrder, |s| s.has_doc),
                 ],
@@ -601,8 +777,8 @@ fn build_go_menu() -> MenuDef {
             MenuItemDef::action_with_condition("Go to Beginning", crate::actions::GoToBeginning, |s| s.has_doc),
             MenuItemDef::action_with_condition("Go to End", crate::actions::GoToEnd, |s| s.has_doc),
             MenuItemDef::separator(),
-            MenuItemDef::action_with_condition("Next Difference", crate::actions::NextDifference, |s| s.has_doc),
-            MenuItemDef::action_with_condition("Previous Difference", crate::actions::PrevDifference, |s| s.has_doc),
+            MenuItemDef::action_with_condition("Next Difference", crate::actions::NextDifference, |s| s.has_diff),
+            MenuItemDef::action_with_condition("Previous Difference", crate::actions::PrevDifference, |s| s.has_diff),
         ],
     }
 }
@@ -617,7 +793,12 @@ fn build_analysis_menu() -> MenuDef {
                     MenuItemDef::action_with_condition("Load Definition...", crate::actions::LoadStructureDefinition, |s| s.has_doc),
                     MenuItemDef::action_with_condition("Clear Definition", crate::actions::ClearStructureDefinition, |s| s.has_doc),
                     MenuItemDef::separator(),
-                    MenuItemDef::action_with_condition("Toggle Inline Structure View", crate::actions::ToggleInlineStructureView, |s| s.has_doc),
+                    MenuItemDef::action_with_condition_and_check(
+                        "Toggle Inline Structure View",
+                        crate::actions::ToggleInlineStructureView,
+                        |s| s.has_doc,
+                        |s| s.has_doc && s.inline_structure_view,
+                    ),
                     MenuItemDef::separator(),
                     MenuItemDef::action_with_condition("Expand All", crate::actions::ExpandAllStructure, |s| s.has_doc),
                     MenuItemDef::action_with_condition("Collapse All", crate::actions::CollapseAllStructure, |s| s.has_doc),
@@ -633,11 +814,11 @@ fn build_analysis_menu() -> MenuDef {
                     MenuItemDef::action("Compare Open Files...", crate::actions::CompareOpenFiles),
                     MenuItemDef::action("Compare Visible Split Panes", crate::actions::CompareVisiblePanes),
                     MenuItemDef::separator(),
-                    MenuItemDef::action("Swap Diff Files", crate::actions::SwapDiffFiles),
-                    MenuItemDef::action("Refresh Diff", crate::actions::RefreshDiff),
+                    MenuItemDef::action_with_condition("Swap Diff Files", crate::actions::SwapDiffFiles, |s| s.has_diff),
+                    MenuItemDef::action_with_condition("Refresh Diff", crate::actions::RefreshDiff, |s| s.has_diff),
                     MenuItemDef::separator(),
-                    MenuItemDef::action_with_condition("Next Difference", crate::actions::NextDifference, |s| s.has_doc),
-                    MenuItemDef::action_with_condition("Previous Difference", crate::actions::PrevDifference, |s| s.has_doc),
+                    MenuItemDef::action_with_condition("Next Difference", crate::actions::NextDifference, |s| s.has_diff),
+                    MenuItemDef::action_with_condition("Previous Difference", crate::actions::PrevDifference, |s| s.has_diff),
                 ],
             ),
         ],
@@ -703,6 +884,13 @@ fn build_window_menu() -> MenuDef {
     }
 }
 
+fn build_help_menu() -> MenuDef {
+    MenuDef {
+        name: "Help",
+        items: vec![MenuItemDef::action("About xvw", crate::actions::OpenAbout)],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{MenuEditorState, MenuItemDef, application_menus};
@@ -710,7 +898,7 @@ mod tests {
     #[test]
     fn test_application_menus_structure() {
         let menus = application_menus();
-        assert_eq!(menus.len(), 7);
+        assert_eq!(menus.len(), 8);
         assert_eq!(menus[0].name, "File");
         assert_eq!(menus[1].name, "Edit");
         assert_eq!(menus[2].name, "View");
@@ -718,13 +906,15 @@ mod tests {
         assert_eq!(menus[4].name, "Analysis");
         assert_eq!(menus[5].name, "Scratch");
         assert_eq!(menus[6].name, "Window");
+        assert_eq!(menus[7].name, "Help");
     }
 
     #[test]
     fn test_to_gpui_menu_conversion() {
         let menus = application_menus();
+        let state = MenuEditorState::default();
         for menu in &menus {
-            let gpui_menu = menu.to_gpui_menu();
+            let gpui_menu = menu.to_gpui_menu(&state);
             assert_eq!(gpui_menu.name.as_ref(), menu.name);
             assert!(!gpui_menu.items.is_empty());
         }
@@ -1027,6 +1217,9 @@ mod tests {
         assert_eq!(copy_hex.shortcut.as_deref(), Some("Ctrl+Shift+C"));
 
         let insert_mode = commands.iter().find(|c| c.title == "Edit: Toggle Insert Mode").expect("Toggle Insert Mode");
+        #[cfg(target_os = "macos")]
+        assert_eq!(insert_mode.shortcut.as_deref(), Some("⌥⌘I"));
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(insert_mode.shortcut.as_deref(), Some("Insert"));
 
         let find_next = commands.iter().find(|c| c.title == "Edit: Find Next").expect("Find Next");
@@ -1230,7 +1423,30 @@ mod tests {
         }
 
         // Toggle Insert Mode
+        #[cfg(target_os = "macos")]
+        assert_eq!(shortcut_for_label("Edit", "Toggle Insert Mode"), Some("⌥⌘I"));
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(shortcut_for_label("Edit", "Toggle Insert Mode"), Some("Insert"));
+
+        // Save As, Settings, Load Definition, Scratchpad shortcuts
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(shortcut_for_label("File", "Save As..."), Some("⇧⌘S"));
+            assert_eq!(shortcut_for_label("File", "Settings..."), Some("⌘,"));
+            assert_eq!(shortcut_for_label("Analysis", "Load Definition..."), Some("⇧⌘K"));
+            assert_eq!(shortcut_for_label("Scratch", "Toggle Scratchpad Panel"), Some("⌥⌘B"));
+            assert_eq!(shortcut_for_label("Scratch", "Switch Note Palette..."), Some("⌘P"));
+            assert_eq!(shortcut_for_label("Scratch", "Toggle View Mode"), Some("⌘E"));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(shortcut_for_label("File", "Save As..."), Some("Ctrl+Shift+S"));
+            assert_eq!(shortcut_for_label("File", "Settings..."), Some("Ctrl+,"));
+            assert_eq!(shortcut_for_label("Analysis", "Load Definition..."), Some("Ctrl+Shift+K"));
+            assert_eq!(shortcut_for_label("Scratch", "Toggle Scratchpad Panel"), Some("Alt+Ctrl+B"));
+            assert_eq!(shortcut_for_label("Scratch", "Switch Note Palette..."), Some("Ctrl+P"));
+            assert_eq!(shortcut_for_label("Scratch", "Toggle View Mode"), Some("Ctrl+E"));
+        }
 
         // Copy as Hex Dump
         #[cfg(target_os = "macos")]
@@ -1309,5 +1525,155 @@ mod tests {
                 Some("Ctrl+Shift+Backspace")
             );
         }
+    }
+
+    #[test]
+    fn test_settings_and_about_in_palette_and_menus() {
+        let menus = application_menus();
+        let commands = super::collect_palette_commands(&menus);
+        let state = MenuEditorState::default();
+
+        let settings_cmd = commands.iter().find(|c| c.title == "File: Settings...").expect("Settings command in palette");
+        assert!(settings_cmd.is_executable(&state));
+        #[cfg(target_os = "macos")]
+        assert_eq!(settings_cmd.shortcut.as_deref(), Some("⌘,"));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(settings_cmd.shortcut.as_deref(), Some("Ctrl+,"));
+
+        let about_cmd = commands.iter().find(|c| c.title == "Help: About xvw").expect("About command in palette");
+        assert!(about_cmd.is_executable(&state));
+    }
+
+    #[test]
+    fn test_diff_and_close_tab_menu_conditions() {
+        let menus = application_menus();
+        let commands = super::collect_palette_commands(&menus);
+
+        let empty = MenuEditorState::default();
+        let doc_only = MenuEditorState {
+            has_doc: true,
+            has_tab: true,
+            ..Default::default()
+        };
+        let diff_only = MenuEditorState {
+            has_diff: true,
+            has_tab: true,
+            ..Default::default()
+        };
+        let settings_tab_only = MenuEditorState {
+            has_tab: true,
+            ..Default::default()
+        };
+
+        for title in [
+            "Go: Next Difference",
+            "Go: Previous Difference",
+            "Analysis: Compare / Diff > Swap Diff Files",
+            "Analysis: Compare / Diff > Refresh Diff",
+            "Analysis: Compare / Diff > Next Difference",
+            "Analysis: Compare / Diff > Previous Difference",
+        ] {
+            let cmd = commands.iter().find(|c| c.title == title).unwrap_or_else(|| panic!("missing command {title}"));
+            assert!(cmd.is_executable(&diff_only), "{title} must be enabled for diff");
+            assert!(!cmd.is_executable(&doc_only), "{title} must be disabled for non-diff doc");
+            assert!(!cmd.is_executable(&empty), "{title} must be disabled when empty");
+        }
+
+        for title in ["File: Close Tab", "File: Close Other Tabs > Close All Tabs"] {
+            let cmd = commands.iter().find(|c| c.title == title).unwrap_or_else(|| panic!("missing command {title}"));
+            assert!(cmd.is_executable(&settings_tab_only), "{title} must be enabled for Settings/non-doc tab");
+            assert!(cmd.is_executable(&diff_only), "{title} must be enabled for Diff tab");
+            assert!(cmd.is_executable(&doc_only), "{title} must be enabled for Doc tab");
+            assert!(!cmd.is_executable(&empty), "{title} must be disabled when no tabs open");
+        }
+    }
+
+    #[test]
+    fn test_native_menu_state_propagation_and_macos_app_menu() {
+        use crate::core::encoding::Encoding;
+        use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
+        use gpui_kit::{MenuItem, OsAction};
+
+        let state = MenuEditorState {
+            has_doc: true,
+            has_tab: true,
+            is_read_only: false,
+            is_insert_mode: true,
+            can_undo: true,
+            can_redo: false,
+            can_copy: true,
+            encoding: Some(Encoding::Utf8),
+            radix: Some(DisplayRadix::Decimal),
+            group_size: Some(ByteGroupSize::Four),
+            byte_order: Some(ByteOrder::BigEndian),
+            inline_structure_view: true,
+            hide_unbookmarked: true,
+            ..Default::default()
+        };
+
+        let mac_menus = super::build_native_menus(&state, true);
+        assert_eq!(mac_menus[0].name.as_ref(), "xvw");
+        assert_eq!(mac_menus[1].name.as_ref(), "File");
+
+        let std_menus = super::build_native_menus(&state, false);
+        assert_eq!(std_menus[0].name.as_ref(), "File");
+
+        let edit_menu = std_menus.iter().find(|m| m.name.as_ref() == "Edit").expect("Edit menu");
+        let os_action_name = |os_action: Option<OsAction>| -> Option<&'static str> {
+            os_action.map(|action| match action {
+                OsAction::Cut => "Cut",
+                OsAction::Copy => "Copy",
+                OsAction::Paste => "Paste",
+                OsAction::SelectAll => "SelectAll",
+                OsAction::Undo => "Undo",
+                OsAction::Redo => "Redo",
+            })
+        };
+        let find_action = |items: &[MenuItem], name: &str| -> (bool, bool, Option<&'static str>) {
+            items
+                .iter()
+                .find_map(|item| match item {
+                    MenuItem::Action {
+                        name: item_name,
+                        disabled,
+                        checked,
+                        os_action,
+                        ..
+                    } if item_name.as_ref() == name => Some((*disabled, *checked, os_action_name(*os_action))),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing menu item {name}"))
+        };
+
+        assert_eq!(find_action(&edit_menu.items, "Undo"), (false, false, Some("Undo")));
+        assert_eq!(find_action(&edit_menu.items, "Redo"), (true, false, Some("Redo")));
+        assert_eq!(find_action(&edit_menu.items, "Copy"), (false, false, Some("Copy")));
+        assert_eq!(find_action(&edit_menu.items, "Toggle Insert Mode"), (false, true, None));
+        assert_eq!(find_action(&edit_menu.items, "Toggle Read-only"), (false, false, None));
+
+        let view_menu = std_menus.iter().find(|m| m.name.as_ref() == "View").expect("View menu");
+        fn submenu_items<'a>(items: &'a [MenuItem], name: &str) -> &'a [MenuItem] {
+            items
+                .iter()
+                .find_map(|item| match item {
+                    MenuItem::Submenu(sub) if sub.name.as_ref() == name => Some(sub.items.as_slice()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing submenu {name}"))
+        }
+
+        let radix_items = submenu_items(&view_menu.items, "Radix");
+        assert_eq!(find_action(radix_items, "Hexadecimal (16)"), (false, false, None));
+        assert_eq!(find_action(radix_items, "Decimal (10)"), (false, true, None));
+
+        let group_items = submenu_items(&view_menu.items, "Grouping");
+        assert_eq!(find_action(group_items, "4 Bytes (32-bit)"), (false, true, None));
+
+        let order_items = submenu_items(&view_menu.items, "Byte Order");
+        assert_eq!(find_action(order_items, "Big Endian"), (false, true, None));
+
+        let enc_items = submenu_items(&view_menu.items, "Encoding");
+        assert_eq!(find_action(enc_items, "UTF-8"), (false, true, None));
+        assert_eq!(find_action(enc_items, "ASCII"), (false, false, None));
     }
 }

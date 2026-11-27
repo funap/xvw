@@ -635,6 +635,7 @@ impl Render for HexView {
             .on_action(cx.listener(Self::add_custom_break))
             .on_action(cx.listener(Self::remove_custom_break_backward))
             .on_action(cx.listener(Self::remove_custom_break_forward))
+            .on_action(cx.listener(Self::remove_custom_breaks_in_range))
             .on_action(cx.listener(Self::join_line))
             .on_action(cx.listener(Self::clear_all_custom_breaks))
             .on_action(cx.listener(Self::show_all_bookmarks))

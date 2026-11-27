@@ -7,19 +7,12 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 pub fn init(cx: &mut App) {
-    crate::ui::dialogs::quick_open_modal::init(cx);
-    crate::ui::dialogs::command_palette_modal::init(cx);
-
     cx.bind_keys([
         KeyBinding::new("shift-escape", gpui_kit::component::dock::ToggleZoom, Some("Workspace")),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-s", crate::actions::Save, Some("Workspace")),
+        KeyBinding::new("cmd-shift-k", crate::actions::LoadStructureDefinition, Some("Workspace")),
         #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-s", crate::actions::Save, Some("Workspace")),
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-shift-s", crate::actions::LoadStructureDefinition, Some("Workspace")),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-shift-s", crate::actions::LoadStructureDefinition, Some("Workspace")),
+        KeyBinding::new("ctrl-shift-k", crate::actions::LoadStructureDefinition, Some("Workspace")),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-shift-v", crate::actions::ToggleInlineStructureView, Some("Workspace")),
         #[cfg(not(target_os = "macos"))]
@@ -32,7 +25,9 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-shift-d", crate::actions::SplitDown, Some("Workspace")),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-shift-d", crate::actions::SplitDown, Some("Workspace")),
-        KeyBinding::new("insert", crate::actions::ToggleInsertMode, Some("Workspace")),
+        KeyBinding::new("insert", crate::actions::ToggleInsertMode, Some("Workspace && !Input")),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-cmd-i", crate::actions::ToggleInsertMode, Some("Workspace && !Input")),
     ]);
 
     cx.on_action::<NewFile>(|_, cx| {
@@ -194,9 +189,163 @@ pub fn init(cx: &mut App) {
             workspace.on_action_open_folder(&OpenFolder, window, cx);
         });
     });
+    cx.on_action::<CloseFolder>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_close_folder(&CloseFolder, window, cx);
+        });
+    });
+    cx.on_action::<CloseActivePanel>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_close_active_panel(&CloseActivePanel, window, cx);
+        });
+    });
+    cx.on_action::<OpenSettings>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_open_settings(&OpenSettings, window, cx);
+        });
+    });
+    cx.on_action::<OpenAbout>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_open_about(&OpenAbout, window, cx);
+        });
+    });
+    cx.on_action::<Quit>(|_, cx| {
+        if cx.active_window().is_some() {
+            defer_in_active_workspace(cx, |workspace, window, cx| {
+                workspace.on_action_quit(&Quit, window, cx);
+            });
+        } else {
+            cx.quit();
+        }
+    });
+    cx.on_action::<ToggleLeftPanel>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_toggle_left_panel(&ToggleLeftPanel, window, cx);
+        });
+    });
+    cx.on_action::<ToggleSearchPanel>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_toggle_search_panel(&ToggleSearchPanel, window, cx);
+        });
+    });
+    cx.on_action::<SplitRight>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_split_right(&SplitRight, window, cx);
+        });
+    });
+    cx.on_action::<SplitDown>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_split_down(&SplitDown, window, cx);
+        });
+    });
+    cx.on_action::<ActivateNextTab>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_activate_next_tab(&ActivateNextTab, window, cx);
+        });
+    });
+    cx.on_action::<ActivatePreviousTab>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_activate_previous_tab(&ActivatePreviousTab, window, cx);
+        });
+    });
     cx.on_action::<LoadStructureDefinition>(|_, cx| {
         defer_in_active_workspace(cx, |workspace, window, cx| {
             workspace.on_action_load_structure_definition(&LoadStructureDefinition, window, cx);
+        });
+    });
+    cx.on_action::<ToggleInlineStructureView>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_toggle_inline_structure_view(&ToggleInlineStructureView, window, cx);
+        });
+    });
+    cx.on_action::<ExpandAllStructure>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_expand_all_structure(&ExpandAllStructure, window, cx);
+        });
+    });
+    cx.on_action::<CollapseAllStructure>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_collapse_all_structure(&CollapseAllStructure, window, cx);
+        });
+    });
+    cx.on_action::<CompareOpenFiles>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_compare_open_files(&CompareOpenFiles, window, cx);
+        });
+    });
+    cx.on_action::<CompareVisiblePanes>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_compare_visible_panes(&CompareVisiblePanes, window, cx);
+        });
+    });
+    cx.on_action::<SwapDiffFiles>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_swap_diff_files(&SwapDiffFiles, window, cx);
+        });
+    });
+    cx.on_action::<RefreshDiff>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_refresh_diff(&RefreshDiff, window, cx);
+        });
+    });
+    cx.on_action::<NextDifference>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_next_difference(&NextDifference, window, cx);
+        });
+    });
+    cx.on_action::<PrevDifference>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_prev_difference(&PrevDifference, window, cx);
+        });
+    });
+    cx.on_action::<ToggleSyncScroll>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_toggle_sync_scroll(&ToggleSyncScroll, window, cx);
+        });
+    });
+    cx.on_action::<OpenVisualMap>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_open_visual_map(&OpenVisualMap, window, cx);
+        });
+    });
+    cx.on_action::<ShowFilesTab>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_show_files_tab(&ShowFilesTab, window, cx);
+        });
+    });
+    cx.on_action::<ShowSearchTab>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_show_search_tab(&ShowSearchTab, window, cx);
+        });
+    });
+    cx.on_action::<ShowStringsTab>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_show_strings_tab(&ShowStringsTab, window, cx);
+        });
+    });
+    cx.on_action::<ShowZlibTab>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_show_zlib_tab(&ShowZlibTab, window, cx);
+        });
+    });
+    cx.on_action::<ShowStructureTab>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_show_structure_tab(&ShowStructureTab, window, cx);
+        });
+    });
+    cx.on_action::<ShowInspectorTab>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_show_inspector_tab(&ShowInspectorTab, window, cx);
+        });
+    });
+    cx.on_action::<ShowChecksumTab>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_show_checksum_tab(&ShowChecksumTab, window, cx);
+        });
+    });
+    cx.on_action::<ShowBookmarksTab>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_show_bookmarks_tab(&ShowBookmarksTab, window, cx);
         });
     });
     cx.on_action::<crate::actions::LoadStructureDefinitionFromHistory>(|action, cx| {

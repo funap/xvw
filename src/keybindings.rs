@@ -38,6 +38,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(primary_key!("shift-p"), crate::actions::CommandPalette, None),
         // Save
         KeyBinding::new(primary_key!("s"), crate::actions::Save, None),
+        KeyBinding::new(primary_key!("shift-s"), crate::actions::SaveAs, None),
         // Panels & Views
         KeyBinding::new(primary_key!("b"), crate::actions::ToggleLeftPanel, None),
         KeyBinding::new(alt_primary_key!("b"), crate::actions::ToggleRightPanel, None),

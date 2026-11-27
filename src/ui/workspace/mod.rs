@@ -95,6 +95,9 @@ pub struct Workspace {
     last_active_diff_id: Cell<Option<EntityId>>,
     last_active_editor: RefCell<Option<WeakEntity<Editor>>>,
     last_active_editor_view: RefCell<Option<WeakEntity<EditorView>>>,
+    last_native_menu_state: Cell<Option<crate::ui::menus::MenuEditorState>>,
+    active_editor_menu_subscription: RefCell<Option<Subscription>>,
+    active_diff_menu_subscription: RefCell<Option<Subscription>>,
 }
 
 impl Workspace {
@@ -364,6 +367,11 @@ impl Workspace {
         let left_panel_resizable_state = cx.new(|_| ResizableState::default());
         let workspace_resizable_state = cx.new(|_| ResizableState::default());
 
+        cx.observe_global::<crate::app_state::InsertModeState>(|this, cx| {
+            this.sync_native_menus(cx);
+        })
+        .detach();
+
         let workspace = Self {
             pane_tree,
             title_bar,
@@ -386,12 +394,16 @@ impl Workspace {
             last_active_diff_id: Cell::new(None),
             last_active_editor: RefCell::new(None),
             last_active_editor_view: RefCell::new(None),
+            last_native_menu_state: Cell::new(None),
+            active_editor_menu_subscription: RefCell::new(None),
+            active_diff_menu_subscription: RefCell::new(None),
         };
 
         workspace.left_panel.update(cx, |panel, cx| {
             panel.set_structure_definition_history(&recent_definition_paths, cx);
             panel.set_file_history(&recent_file_entries, cx);
         });
+        workspace.sync_native_menus(cx);
 
         workspace
     }
@@ -462,23 +474,28 @@ impl Workspace {
         use crate::ui::menus::MenuEditorState;
 
         let has_scratch = self.active_scratchpad(cx).is_some();
-        let has_diff = self.active_diff_view(cx).is_some();
+        let active_diff = self.active_diff_view(cx);
+        let has_diff = active_diff.is_some();
+        let is_insert_mode = crate::app_state::InsertModeState::is_enabled(cx);
+
+        let (has_tab, can_close_others, can_close_right, has_saved) = if let Some(group) = self.pane_tree.read(cx).active_group(cx) {
+            let g = group.read(cx);
+            let has_tab = !g.tabs.is_empty();
+            let can_close_others = g.tabs.len() > 1;
+            let active_ix = g.active_index;
+            let can_close_right = has_tab && active_ix + 1 < g.tabs.len();
+            let has_saved = g.tabs.iter().any(|t| !t.is_dirty(cx));
+            (has_tab, can_close_others, can_close_right, has_saved)
+        } else {
+            (false, false, false, false)
+        };
+
         if let Some(editor) = self.active_editor(cx) {
             let ed = editor.read(cx);
             let is_ro = ed.is_read_only();
             let can_u = !is_ro && ed.can_undo();
             let can_r = !is_ro && ed.can_redo();
             let has_sel = ed.has_selection();
-            let (can_o, can_r_tab, has_s) = if let Some(group) = self.pane_tree.read(cx).active_group(cx) {
-                let g = group.read(cx);
-                let can_o = g.tabs.len() > 1;
-                let active_ix = g.active_index;
-                let can_r_tab = active_ix + 1 < g.tabs.len();
-                let has_s = g.tabs.iter().any(|t| !t.is_dirty(cx));
-                (can_o, can_r_tab, has_s)
-            } else {
-                (false, false, false)
-            };
             let can_copy = if let Some(editor_view) = self.active_editor_view(cx) {
                 editor_view.read(cx).hex_view().read(cx).copy_range(cx).is_some()
             } else {
@@ -486,25 +503,53 @@ impl Workspace {
             };
             MenuEditorState {
                 has_doc: true,
+                has_tab,
                 has_diff,
                 is_read_only: is_ro,
+                is_insert_mode,
                 can_undo: can_u,
                 can_redo: can_r,
                 has_selection: has_sel,
                 can_copy,
-                can_close_others: can_o,
-                can_close_right: can_r_tab,
-                has_saved: has_s,
+                can_close_others,
+                can_close_right,
+                has_saved,
                 has_scratch,
+                encoding: Some(ed.options.encoding),
+                radix: Some(ed.options.radix),
+                group_size: Some(ed.options.group_size),
+                byte_order: Some(if ed.options.is_big_endian {
+                    crate::core::radix::ByteOrder::BigEndian
+                } else {
+                    crate::core::radix::ByteOrder::LittleEndian
+                }),
+                inline_structure_view: ed.structure.show_inline_structure_view,
+                hide_unbookmarked: ed.bookmarks().is_hide_unbookmarked(),
             }
         } else {
             MenuEditorState {
+                has_tab,
                 has_diff,
                 is_read_only: true,
+                is_insert_mode,
+                can_close_others,
+                can_close_right,
+                has_saved,
                 has_scratch,
+                encoding: active_diff.map(|diff| diff.read(cx).encoding()),
                 ..Default::default()
             }
         }
+    }
+
+    /// Synchronizes the native OS menu bar whenever the derived `MenuEditorState` changes.
+    pub(crate) fn sync_native_menus(&self, cx: &App) {
+        let state = self.menu_editor_state(cx);
+        if self.last_native_menu_state.get() == Some(state) {
+            return;
+        }
+        self.last_native_menu_state.set(Some(state));
+        crate::ui::menus::update_application_menus_with_state(&state, cx);
     }
 
     /// Finds any open EditorView across all pane groups, preferring the active group.
@@ -877,6 +922,7 @@ impl Workspace {
         let editor_changed = self.last_active_editor_id.get() != effective_editor_id;
         let diff_changed = self.last_active_diff_id.get() != active_diff_id;
         if !editor_changed && !diff_changed {
+            self.sync_native_menus(cx);
             if pane_tree_is_empty {
                 self.focus_handle.focus(window, cx);
             }
@@ -884,6 +930,17 @@ impl Workspace {
         }
         self.last_active_editor_id.set(effective_editor_id);
         self.last_active_diff_id.set(active_diff_id);
+
+        if editor_changed {
+            let sub = effective_editor
+                .as_ref()
+                .map(|editor| cx.observe(editor, |this, _, cx| this.sync_native_menus(cx)));
+            self.active_editor_menu_subscription.replace(sub);
+        }
+        if diff_changed {
+            let sub = active_diff_view.as_ref().map(|diff| cx.observe(diff, |this, _, cx| this.sync_native_menus(cx)));
+            self.active_diff_menu_subscription.replace(sub);
+        }
 
         self.status_bar.update(cx, |status_bar, cx| {
             if editor_changed {
@@ -899,6 +956,7 @@ impl Workspace {
             });
         }
         self.on_focus_changed(cx);
+        self.sync_native_menus(cx);
 
         if pane_tree_is_empty {
             self.focus_handle.focus(window, cx);
@@ -944,6 +1002,7 @@ impl Workspace {
                 self.restore_editor_focus(window, cx);
             }
 
+            self.sync_native_menus(cx);
             cx.notify();
         }
     }

@@ -182,7 +182,7 @@ xvw binary.bin --panel map
 | **選択範囲のカスタム改行を戻す** | `Shift + Enter` | `Shift + Enter` |
 | **行の結合** | `Cmd + J` | `Ctrl + J` |
 | **カスタム改行のリセット** | `Cmd + Shift + Backspace` | `Ctrl + Shift + Backspace` |
-| **挿入 / 上書きモード切り替え** | `Insert` | `Insert` |
+| **挿入 / 上書きモード切り替え** | `Option + Cmd + I` / `Insert` | `Insert` |
 
 ### 検索・ワークスペース
 
@@ -193,10 +193,11 @@ xvw binary.bin --panel map
 | **次 / 前の一致箇所** | `Cmd + G` / `Cmd + Shift + G` | `F3` / `Shift + F3` |
 | **ファイルのオープン（ダイアログ）** | `Cmd + O` | `Ctrl + O` |
 | **フォルダのオープン** | `Cmd + Shift + O` | `Ctrl + Shift + O` |
+| **保存 / 名前を付けて保存** | `Cmd + S` / `Cmd + Shift + S` | `Ctrl + S` / `Ctrl + Shift + S` |
 | **左サイドバーの表示切替** | `Cmd + B` | `Ctrl + B` |
 | **エディタの分割（右 / 下）** | `Cmd + \` / `Cmd + Shift + D` | `Ctrl + \` / `Ctrl + Shift + D` |
 | **タブの切り替え** | `Cmd + 1` .. `Cmd + 9` | `Ctrl + 1` .. `Ctrl + 9` |
-| **Kaitai Struct（`.ksy`）の読み込み** | `Cmd + Shift + S` | `Ctrl + Shift + S` |
+| **Kaitai Struct（`.ksy`）の読み込み** | `Cmd + Shift + K` | `Ctrl + Shift + K` |
 | **インライン構造体表示の切替** | `Cmd + Shift + V` | `Ctrl + Shift + V` |
 | **Hexダンプとしてコピー** | `Cmd + Shift + C` | `Ctrl + Shift + C` |
 | **設定** | `Cmd + ,` | `Ctrl + ,` |
