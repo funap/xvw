@@ -159,6 +159,52 @@ impl VisualMapGeometry {
             None
         }
     }
+
+    /// Maps an absolute byte range `[start_byte, end_byte)` (such as the HexView viewport)
+    /// into a half-open row span `(first_row, end_row_exclusive)` on the 2D visual map.
+    #[inline]
+    pub fn byte_range_to_row_span(
+        start_byte: usize,
+        end_byte: usize,
+        header_offset: usize,
+        cols: usize,
+        mode: VisualMapColorMode,
+        total_pixels: usize,
+    ) -> Option<(usize, usize)> {
+        if start_byte >= end_byte || end_byte <= header_offset || cols == 0 || total_pixels == 0 {
+            return None;
+        }
+        let total_rows = total_pixels.div_ceil(cols);
+        let rel_start = start_byte.saturating_sub(header_offset);
+        let rel_end = end_byte - header_offset;
+
+        if mode == VisualMapColorMode::Planar4bpp {
+            let tiles_per_row = (cols / 8).max(1);
+            let first_tile = rel_start / 32;
+            let last_tile = rel_end.saturating_sub(1) / 32;
+            let first_row = (first_tile / tiles_per_row) * 8;
+            let end_row = ((last_tile / tiles_per_row) + 1) * 8;
+            let clamped_start = first_row.min(total_rows);
+            let clamped_end = end_row.min(total_rows);
+            return (clamped_start < clamped_end).then_some((clamped_start, clamped_end));
+        }
+
+        let pix_start = mode.byte_offset_to_pixel(rel_start);
+        let pix_end = if mode.pixels_per_byte() > 1 {
+            mode.byte_offset_to_pixel(rel_end)
+        } else {
+            rel_end.div_ceil(mode.bytes_per_pixel())
+        }
+        .min(total_pixels);
+
+        if pix_start >= pix_end {
+            return None;
+        }
+
+        let first_row = pix_start / cols;
+        let last_row = (pix_end - 1) / cols;
+        Some((first_row, (last_row + 1).min(total_rows)))
+    }
 }
 
 #[cfg(test)]
@@ -245,5 +291,39 @@ mod tests {
         assert_eq!(VisualMapGeometry::selection_row_range(10, 25, 16, 1, mode, 100), Some((0, 9)));
         // Row 2 (32..48): no overlap
         assert_eq!(VisualMapGeometry::selection_row_range(10, 25, 16, 2, mode, 100), None);
+    }
+
+    #[test]
+    fn test_byte_range_to_row_span_modes_and_header_offset() {
+        // Linear 1 B/px: cols=64, 512 bytes -> 8 rows
+        assert_eq!(
+            VisualMapGeometry::byte_range_to_row_span(64, 192, 0, 64, VisualMapColorMode::DataCategory, 512),
+            Some((1, 3))
+        );
+        // Header offset clips start of range
+        assert_eq!(
+            VisualMapGeometry::byte_range_to_row_span(0, 80, 16, 64, VisualMapColorMode::DataCategory, 496),
+            Some((0, 1))
+        );
+        // Entire range before header offset -> None
+        assert_eq!(
+            VisualMapGeometry::byte_range_to_row_span(0, 16, 16, 64, VisualMapColorMode::DataCategory, 496),
+            None
+        );
+        // Multi-byte RGB888 (3 B/px): cols=16, 48 B/row -> bytes 48..96 => row 1..2
+        assert_eq!(
+            VisualMapGeometry::byte_range_to_row_span(48, 96, 0, 16, VisualMapColorMode::Rgb888, 128),
+            Some((1, 2))
+        );
+        // Sub-byte Mono1bpp (8 px/B): cols=16, 2 B/row -> bytes 2..6 => rows 1..3
+        assert_eq!(
+            VisualMapGeometry::byte_range_to_row_span(2, 6, 0, 16, VisualMapColorMode::Mono1bpp, 128),
+            Some((1, 3))
+        );
+        // Planar4bpp: cols=16 (2 tiles/row, 64 B per tile-row of 8 pixel rows) -> bytes 64..128 => rows 8..16
+        assert_eq!(
+            VisualMapGeometry::byte_range_to_row_span(64, 128, 0, 16, VisualMapColorMode::Planar4bpp, 512),
+            Some((8, 16))
+        );
     }
 }

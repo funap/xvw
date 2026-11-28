@@ -528,6 +528,27 @@ impl VisualMapPanel {
             cx.notify();
         }
     }
+
+    pub(crate) fn set_color_mode(&mut self, mode: ColorMode, cx: &mut Context<Self>) {
+        if self.color_mode == mode {
+            return;
+        }
+        self.color_mode = mode;
+        if mode == ColorMode::Planar4bpp && !self.cols.is_multiple_of(8) {
+            self.cols = (self.cols / 8).max(1) * 8;
+        }
+        let max_offset = self.max_header_offset();
+        if self.header_offset > max_offset {
+            self.header_offset = max_offset;
+        }
+        if self.editor.is_some() {
+            self.scroll_to_cursor(cx);
+        } else {
+            self.update_scrollbar(cx);
+        }
+        self.cached_image.borrow_mut().take();
+        cx.notify();
+    }
 }
 
 impl Focusable for VisualMapPanel {
@@ -710,6 +731,7 @@ impl Render for VisualMapPanel {
 
         let ed_ref = editor.read(cx);
         let cursor_offset = ed_ref.cursor.offset.checked_sub(self.header_offset);
+        let viewport_range = ed_ref.viewport_byte_range.clone();
         let selection_range = ed_ref.selection_range().and_then(|sel| {
             if sel.end > self.header_offset {
                 let start = sel.start.saturating_sub(self.header_offset);
@@ -756,6 +778,7 @@ impl Render for VisualMapPanel {
                 header_offset: self.header_offset,
                 state_id,
                 cursor_offset,
+                viewport_range,
                 selection_range,
                 hovered_pixel,
                 is_dragging_scrollbar: self.is_dragging_scrollbar,

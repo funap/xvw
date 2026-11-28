@@ -42,6 +42,7 @@ pub struct Editor {
     pub find_state: SearchState,
     pub structure: EditorStructureState,
     pub nav_history: NavigationHistory,
+    pub viewport_byte_range: Option<Range<usize>>,
 }
 
 /// Read-only session providing scoped queries into document bookmarks and visibility.
@@ -390,7 +391,17 @@ impl Editor {
             find_state: SearchState::default(),
             structure: EditorStructureState::default(),
             nav_history: NavigationHistory::new(),
+            viewport_byte_range: None,
         }
+    }
+
+    /// Updates the currently visible byte range reported by HexView. Returns `true` if changed.
+    pub fn set_viewport_byte_range(&mut self, range: Option<Range<usize>>) -> bool {
+        if self.viewport_byte_range == range {
+            return false;
+        }
+        self.viewport_byte_range = range;
+        true
     }
 
     /// Read-only session for querying bookmarks and bookmark visibility.
