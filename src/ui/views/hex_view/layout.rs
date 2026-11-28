@@ -6,9 +6,9 @@ use std::ops::Range;
 
 const HEX_METRIC_CHARS: &str = "0123456789abcdef.";
 
-pub fn ascii_byte_index_from_world_x(world_x: f32, column: ColumnLayout, scroll_x: f32) -> usize {
+pub fn ascii_byte_index_from_world_x(world_x: f32, column: ColumnLayout, scroll_x: f32, ascii_cell_width: f32) -> usize {
     let content_x = (world_x - column.start + scroll_x).max(0.0);
-    (content_x / ASCII_CELL_WIDTH) as usize
+    (content_x / ascii_cell_width.max(1.0)) as usize
 }
 
 /// Visits decoded ASCII/character entries for a single row (`[row_offset, row_offset + row_len)`)
@@ -169,7 +169,7 @@ pub fn build_hex_text_source(
     let group_bytes = group_size.byte_count();
     let group_count = chunk.len().div_ceil(group_bytes);
     let total_digits = digit_count(radix, group_size);
-    let mut text = String::with_capacity(group_count.saturating_mul(total_digits + 1));
+    let mut text = String::with_capacity(group_count.saturating_mul(total_digits + 1) + chunk.len() / 8);
     let mut groups = Vec::with_capacity(group_count);
     let mut chunk_idx = 0;
 
@@ -180,6 +180,9 @@ pub fn build_hex_text_source(
 
         if !text.is_empty() {
             text.push(' ');
+            if chunk_idx > 0 && chunk_idx % 8 == 0 {
+                text.push(' ');
+            }
         }
         let text_start = text.len();
         format_group_into(

@@ -61,6 +61,7 @@ pub struct CachedAsciiGlyphs {
 /// Cached description column layout and shaped text for one row.
 #[derive(Clone, Debug)]
 pub struct CachedRowDesc {
+    pub full_text: SharedString,
     pub indent_level: usize,
     pub indent_px: f32,
     pub chevron_icon_path: Option<SharedString>,
@@ -467,7 +468,6 @@ impl RowRenderCache {
         }
     }
 
-    #[cfg(test)]
     #[inline]
     pub fn get(&self, row_idx: usize) -> Option<&CachedRow> {
         let entry = self.rows.get(&row_idx)?;

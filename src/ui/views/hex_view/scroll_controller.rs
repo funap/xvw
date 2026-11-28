@@ -1,4 +1,4 @@
-use super::types::{HexViewLayout, HorizontalScrollTarget, ROW_HEIGHT, ScrollAxisLock, ScrollColumn};
+use super::types::{HexViewLayout, HorizontalScrollTarget, ScrollAxisLock, ScrollColumn};
 use gpui_kit::{ScrollHandle, point, px};
 use std::time::Instant;
 
@@ -114,12 +114,12 @@ impl ScrollController {
         self.outer_scroll_handle.set_offset(point(-px(self.outer_scroll_x), px(0.0)));
     }
 
-    pub fn update_scrollbar_drag(&mut self, current_y: f32, total_rows: usize, list_h: f32) -> Option<usize> {
+    pub fn update_scrollbar_drag(&mut self, current_y: f32, total_rows: usize, list_h: f32, row_height: f32) -> Option<usize> {
         if !self.is_dragging_scrollbar {
             return None;
         }
 
-        let geom = crate::ui::components::scrollbar::calculate_scrollbar_geometry(list_h, self.scroll_offset, total_rows, ROW_HEIGHT)?;
+        let geom = crate::ui::components::scrollbar::calculate_scrollbar_geometry(list_h, self.scroll_offset, total_rows, row_height)?;
         let delta_y = current_y - self.scrollbar_drag_start_y;
         let max_thumb_top = (list_h - geom.thumb_height).max(0.0);
 
@@ -160,11 +160,12 @@ impl ScrollController {
         changed
     }
 
-    pub fn handle_wheel_vertical(&mut self, delta_y: f32, max_top_row: usize) -> Option<usize> {
+    pub fn handle_wheel_vertical(&mut self, delta_y: f32, max_top_row: usize, row_height: f32) -> Option<usize> {
+        let row_height = row_height.max(1.0);
         self.accum_scroll_y += delta_y;
-        let rows_to_scroll = -(self.accum_scroll_y / ROW_HEIGHT) as isize;
+        let rows_to_scroll = -(self.accum_scroll_y / row_height) as isize;
         if rows_to_scroll != 0 {
-            self.accum_scroll_y += (rows_to_scroll as f32) * ROW_HEIGHT;
+            self.accum_scroll_y += (rows_to_scroll as f32) * row_height;
             let mut changed = false;
 
             if rows_to_scroll < 0 {
@@ -245,6 +246,7 @@ impl ScrollController {
 
 #[cfg(test)]
 mod tests {
+    use super::super::types::ROW_HEIGHT;
     use super::*;
 
     #[test]
@@ -253,7 +255,7 @@ mod tests {
         let max_top_row = 100;
 
         // 1. Without overlay, overscroll is disabled
-        controller.handle_wheel_vertical(ROW_HEIGHT * 2.0, max_top_row);
+        controller.handle_wheel_vertical(ROW_HEIGHT * 2.0, max_top_row, ROW_HEIGHT);
         assert_eq!(controller.scroll_offset, 0);
         assert_eq!(controller.top_overscroll_rows, 0);
 
@@ -262,27 +264,27 @@ mod tests {
         assert_eq!(controller.max_top_overscroll_rows, 3);
 
         // Scroll up by 1 row
-        controller.handle_wheel_vertical(ROW_HEIGHT, max_top_row);
+        controller.handle_wheel_vertical(ROW_HEIGHT, max_top_row, ROW_HEIGHT);
         assert_eq!(controller.scroll_offset, 0);
         assert_eq!(controller.top_overscroll_rows, 1);
 
         // Scroll up by 3 more rows (should clamp to max 3)
-        controller.handle_wheel_vertical(ROW_HEIGHT * 3.0, max_top_row);
+        controller.handle_wheel_vertical(ROW_HEIGHT * 3.0, max_top_row, ROW_HEIGHT);
         assert_eq!(controller.scroll_offset, 0);
         assert_eq!(controller.top_overscroll_rows, 3);
 
         // Scroll down by 1 row
-        controller.handle_wheel_vertical(-ROW_HEIGHT, max_top_row);
+        controller.handle_wheel_vertical(-ROW_HEIGHT, max_top_row, ROW_HEIGHT);
         assert_eq!(controller.scroll_offset, 0);
         assert_eq!(controller.top_overscroll_rows, 2);
 
         // Scroll down by 3 rows (2 consumes overscroll, 1 increases scroll_offset)
-        controller.handle_wheel_vertical(-ROW_HEIGHT * 3.0, max_top_row);
+        controller.handle_wheel_vertical(-ROW_HEIGHT * 3.0, max_top_row, ROW_HEIGHT);
         assert_eq!(controller.top_overscroll_rows, 0);
         assert_eq!(controller.scroll_offset, 1);
 
         // Scroll up by 2 rows: 1 decreases scroll_offset to 0, 1 enters overscroll to 1
-        controller.handle_wheel_vertical(ROW_HEIGHT * 2.0, max_top_row);
+        controller.handle_wheel_vertical(ROW_HEIGHT * 2.0, max_top_row, ROW_HEIGHT);
         assert_eq!(controller.scroll_offset, 0);
         assert_eq!(controller.top_overscroll_rows, 1);
 

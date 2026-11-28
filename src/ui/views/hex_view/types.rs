@@ -5,7 +5,6 @@ pub const CONTEXT: &str = "HexView";
 // HexView layout constants
 pub const HEADER_HEIGHT: f32 = 28.0;
 pub const ROW_HEIGHT: f32 = 22.0;
-pub const OFFSET_WIDTH: f32 = 80.0;
 pub const SECTION_GAP: f32 = 16.0;
 
 pub const ADDRESS_WIDTH: f32 = 80.0;
@@ -14,7 +13,6 @@ pub const COMMENT_WIDTH: f32 = 300.0;
 pub const VERTICAL_SCROLLBAR_WIDTH: f32 = 12.0;
 pub const HORIZONTAL_SCROLLBAR_HEIGHT: f32 = 12.0;
 pub const ASCII_CELL_WIDTH: f32 = 10.0;
-pub const ASCII_EXTRA_WIDTH: f32 = ASCII_CELL_WIDTH * 0.5;
 pub const CURSOR_BORDER_WIDTH: f32 = 1.0;
 pub const CURSOR_PADDING_X: f32 = 0.0;
 pub const CURSOR_PADDING_Y: f32 = 0.0;
@@ -22,6 +20,36 @@ pub const MIN_ASCII_COLUMN_WIDTH: f32 = 80.0;
 pub const AUTO_FIT_SCAN_BYTES: usize = 64 * 1024;
 pub const AUTO_FIT_MAX_ITEMS: usize = 16 * 1024;
 pub const AUTO_FIT_MAX_TEXT_CHARS: usize = 4096;
+
+/// Returns the scaled row height in pixels for the given font size (22px at 14px font).
+#[inline]
+pub fn row_height_for_font_size(font_size: f32) -> f32 {
+    (font_size * (ROW_HEIGHT / 14.0)).round().max(18.0)
+}
+
+/// Returns the scaled header height in pixels for the given font size (at least 28px).
+#[inline]
+pub fn header_height_for_font_size(font_size: f32) -> f32 {
+    row_height_for_font_size(font_size).max(HEADER_HEIGHT)
+}
+
+/// Returns the scaled ASCII cell width in pixels for the given font size (10px at 14px font).
+#[inline]
+pub fn ascii_cell_width_for_font_size(font_size: f32) -> f32 {
+    (font_size * (ASCII_CELL_WIDTH / 14.0)).round().max(7.0)
+}
+
+/// Returns the recommended Address column width in pixels for the given font size and maximum address.
+#[inline]
+pub fn address_col_width_for_font_size(font_size: f32, max_address: usize) -> f32 {
+    let digits = if max_address <= 0xFFFF_FFFF {
+        8
+    } else {
+        format!("{max_address:x}").len().max(8)
+    };
+    let char_w = font_size * 0.61;
+    (digits as f32 * char_w + 11.0).ceil().max(ADDRESS_WIDTH)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum EditColumn {
@@ -316,6 +344,7 @@ impl ByteCategoryPalette {
 #[derive(Clone, Copy, Debug)]
 pub struct RowThemeColors {
     pub selection_bg: Hsla,
+    pub active_row_bg: Hsla,
     pub caret_color: Hsla,
     pub muted_color: Hsla,
     pub fg_color: Hsla,
@@ -328,8 +357,13 @@ pub struct RowThemeColors {
 impl RowThemeColors {
     pub fn from_theme(theme: &Theme, is_focused: bool) -> Self {
         let is_dark = theme.mode.is_dark();
+        let active_row_bg = Hsla {
+            a: if is_dark { 0.35 } else { 0.50 },
+            ..theme.muted
+        };
         Self {
             selection_bg: crate::ui::views::hex_view::paint::selection_background_color(theme.selection, is_focused, is_dark),
+            active_row_bg,
             caret_color: theme.caret,
             muted_color: theme.muted_foreground,
             fg_color: theme.foreground,
