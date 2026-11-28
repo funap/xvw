@@ -1,5 +1,6 @@
 use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -12,8 +13,8 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 
 use crate::actions::{
-    Copy, Cut, GoToBeginning, GoToEnd, NextDifference, Paste, PrevDifference, Redo, RefreshDiff, SelectAll, SwapDiffFiles, ToggleEditColumn, ToggleSyncScroll,
-    Undo,
+    Copy, Cut, GoToBeginning, GoToEnd, NextDifference, Paste, PrevDifference, Redo, RefreshDiff, SearchNext, SearchPrev, SelectAll, SwapDiffFiles,
+    ToggleEditColumn, ToggleGoToAddress, ToggleReplace, ToggleSearch, ToggleSyncScroll, Undo,
 };
 use crate::app_state::{AppState, InsertModeState};
 use crate::core::appearance::Appearance;
@@ -23,14 +24,20 @@ use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
 use crate::core::format::{HexCase, format_size_friendly};
 use crate::core::radix::{ByteGroupSize, ByteOrder, DisplayRadix};
+use crate::core::search::{SearchMode, TextSearchFlags, compile_search, parse_replacement_bytes};
 use crate::service::DocumentService;
+use crate::service::search_service::LimitedSearchQuery;
 use crate::ui::icon::IconName;
 use crate::ui::notification;
+use crate::ui::views::editor_view::{
+    GotoBarEvent, GotoOffsetBar, SearchBar, SearchBarEvent, SearchMatchStatus, find_index_containing_offset, format_selection_for_find,
+};
 use crate::ui::views::hex_view::{HexView, HexViewEvent, HorizontalScrollTarget, ScrollColumn};
 
 const CONTEXT: &str = "DiffView";
 const LIVE_DIFF_DEBOUNCE_MS: u64 = 60;
 const PASSIVE_DIFF_BLEND_ALPHA: f32 = 0.35;
+const MAX_FIND_COUNT_RESULTS: usize = 10_000;
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -40,6 +47,21 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-l", ToggleSyncScroll, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-l", ToggleSyncScroll, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-f", ToggleSearch, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-f", ToggleSearch, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-cmd-f", ToggleReplace, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-h", ToggleReplace, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-g", SearchNext, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-shift-g", SearchPrev, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-g", SearchPrev, Some(CONTEXT)),
+        KeyBinding::new("ctrl-g", ToggleGoToAddress, Some(CONTEXT)),
     ]);
 }
 
@@ -161,6 +183,59 @@ fn document_state_id(doc: &Arc<RwLock<Document>>) -> usize {
     doc.read().map(|d| d.history.state_id()).unwrap_or(0)
 }
 
+/// Overlays `search_highlights` on top of `diff_highlights`, splitting overlapping diff
+/// intervals so search matches always remain visually prominent.
+pub(crate) fn merge_diff_and_search_highlights(
+    diff_highlights: &[(Range<usize>, Hsla)],
+    search_highlights: &[(Range<usize>, Hsla)],
+) -> Vec<(Range<usize>, Hsla)> {
+    if search_highlights.is_empty() {
+        return diff_highlights.to_vec();
+    }
+
+    let mut search_intervals: Vec<Range<usize>> = search_highlights.iter().filter(|(r, _)| r.start < r.end).map(|(r, _)| r.clone()).collect();
+    search_intervals.sort_by_key(|r| (r.start, r.end));
+
+    let mut covered: Vec<Range<usize>> = Vec::with_capacity(search_intervals.len());
+    for interval in search_intervals {
+        if let Some(last) = covered.last_mut()
+            && interval.start <= last.end
+        {
+            last.end = last.end.max(interval.end);
+        } else {
+            covered.push(interval);
+        }
+    }
+
+    let mut merged = Vec::with_capacity(diff_highlights.len() + search_highlights.len());
+    for (diff_range, diff_color) in diff_highlights {
+        if diff_range.start >= diff_range.end {
+            continue;
+        }
+        let mut cursor = diff_range.start;
+        let start_idx = covered.partition_point(|r| r.end <= diff_range.start);
+        for cov in &covered[start_idx..] {
+            if cov.start >= diff_range.end {
+                break;
+            }
+            if cov.start > cursor {
+                merged.push((cursor..cov.start, *diff_color));
+            }
+            cursor = cursor.max(cov.end);
+            if cursor >= diff_range.end {
+                break;
+            }
+        }
+        if cursor < diff_range.end {
+            merged.push((cursor..diff_range.end, *diff_color));
+        }
+    }
+
+    merged.extend(search_highlights.iter().filter(|(r, _)| r.start < r.end).cloned());
+    merged.sort_by_key(|(r, _)| r.start);
+    merged
+}
+
 #[cfg(target_os = "macos")]
 const SYNC_SHORTCUT_HINT: &str = "⌘L";
 #[cfg(not(target_os = "macos"))]
@@ -170,6 +245,11 @@ const SYNC_SHORTCUT_HINT: &str = "Ctrl+L";
 const SAVE_SHORTCUT_HINT: &str = "⌘S";
 #[cfg(not(target_os = "macos"))]
 const SAVE_SHORTCUT_HINT: &str = "Ctrl+S";
+
+#[cfg(target_os = "macos")]
+const FIND_SHORTCUT_HINT: &str = "⌘F";
+#[cfg(not(target_os = "macos"))]
+const FIND_SHORTCUT_HINT: &str = "Ctrl+F";
 
 pub struct DiffView {
     pub left_document: Arc<RwLock<Document>>,
@@ -188,6 +268,14 @@ pub struct DiffView {
     diff_generation: u64,
     is_computing: bool,
     diff_task: Option<Task<()>>,
+    is_search_visible: bool,
+    search_bar: Entity<SearchBar>,
+    is_goto_visible: bool,
+    goto_bar: Entity<GotoOffsetBar>,
+    find_count_task: Option<Task<()>>,
+    find_count_cancel: Option<Arc<AtomicBool>>,
+    find_count_ranges: Vec<Range<usize>>,
+    find_count_truncated: bool,
     focus_handle: FocusHandle,
     sync_scroll: bool,
     is_syncing: bool,
@@ -250,6 +338,8 @@ impl DiffView {
                 .font_size(px(appearance.font_size))
         });
 
+        let search_bar = cx.new(|cx| SearchBar::new(window, cx));
+        let goto_bar = cx.new(|cx| GotoOffsetBar::new(window, cx));
         let focus_handle = cx.focus_handle();
 
         let left_focus_handle = left_view.read(cx).focus_handle(cx);
@@ -260,16 +350,95 @@ impl DiffView {
 
         let mut subscriptions = Vec::new();
 
+        subscriptions.push(cx.subscribe_in(&search_bar, window, |this, _, event: &SearchBarEvent, window, cx| match event {
+            SearchBarEvent::IncrementalSearch { query, mode, flags } => {
+                this.perform_incremental_search(query, *mode, *flags, cx);
+            }
+            SearchBarEvent::Next { query, mode, flags } => {
+                this.sync_find_query_from_bar(query, *mode, *flags, cx);
+                this.perform_search_next(cx);
+            }
+            SearchBarEvent::Prev { query, mode, flags } => {
+                this.sync_find_query_from_bar(query, *mode, *flags, cx);
+                this.perform_search_prev(cx);
+            }
+            SearchBarEvent::Replace {
+                query,
+                mode,
+                flags,
+                replacement,
+            } => {
+                this.perform_replace(query, *mode, *flags, replacement, window, cx);
+            }
+            SearchBarEvent::ReplaceAll {
+                query,
+                mode,
+                flags,
+                replacement,
+            } => {
+                this.perform_replace_all(query, *mode, *flags, replacement, window, cx);
+            }
+            SearchBarEvent::Dismiss => {
+                this.dismiss_search(cx);
+                this.focus_active_side(window, cx);
+                cx.notify();
+            }
+        }));
+
+        subscriptions.push(cx.subscribe_in(&goto_bar, window, |this, _, event: &GotoBarEvent, window, cx| match event {
+            GotoBarEvent::Jump { offset, extend_selection } => {
+                let target = *offset;
+                let extend = *extend_selection;
+                this.is_goto_visible = false;
+                this.update_top_overlay_state(cx);
+                let editor = this.active_side_editor();
+                editor.update(cx, |editor, cx| {
+                    editor.go_to_offset(target, extend);
+                    cx.notify();
+                });
+                let cursor_offset = editor.read(cx).cursor.offset;
+                let hex_view = this.active_side_hex_view();
+                hex_view.update(cx, |view, cx| {
+                    view.scroll_to_byte_if_needed(cursor_offset, cx);
+                });
+                this.focus_active_side(window, cx);
+                cx.notify();
+            }
+            GotoBarEvent::SelectRange { range } => {
+                let r = range.clone();
+                this.is_goto_visible = false;
+                this.update_top_overlay_state(cx);
+                let editor = this.active_side_editor();
+                editor.update(cx, |editor, cx| {
+                    editor.go_to_range(r);
+                    cx.notify();
+                });
+                let cursor_offset = editor.read(cx).cursor.offset;
+                let hex_view = this.active_side_hex_view();
+                hex_view.update(cx, |view, cx| {
+                    view.scroll_to_byte_if_needed(cursor_offset, cx);
+                });
+                this.focus_active_side(window, cx);
+                cx.notify();
+            }
+            GotoBarEvent::Dismiss => {
+                this.is_goto_visible = false;
+                this.update_top_overlay_state(cx);
+                this.focus_active_side(window, cx);
+                cx.notify();
+            }
+        }));
+
         subscriptions.push(cx.on_focus_in(&left_focus_handle, window, move |this, _, cx| {
             if this.last_focused_view_id != left_view_id {
                 this.last_focused_view_id = left_view_id;
-                cx.notify();
+                this.on_active_side_changed(cx);
             }
         }));
         subscriptions.push(cx.on_focus_in(&right_focus_handle, window, move |this, _, cx| {
             if this.last_focused_view_id != right_view_id {
                 this.last_focused_view_id = right_view_id;
-                cx.notify();
+                this.on_active_side_changed(cx);
             }
         }));
         subscriptions.push(cx.on_focus_in(&focus_handle, window, {
@@ -289,6 +458,10 @@ impl DiffView {
         }));
 
         subscriptions.push(cx.subscribe_in(&left_view, window, |this, _left_view, event, _window, cx| {
+            if matches!(event, HexViewEvent::EscapePressed) {
+                this.dismiss_active_overlay(cx);
+                return;
+            }
             if this.sync_scroll && !this.is_syncing {
                 this.is_syncing = true;
                 match event {
@@ -314,6 +487,10 @@ impl DiffView {
         }));
 
         subscriptions.push(cx.subscribe_in(&right_view, window, |this, _right_view, event, _window, cx| {
+            if matches!(event, HexViewEvent::EscapePressed) {
+                this.dismiss_active_overlay(cx);
+                return;
+            }
             if this.sync_scroll && !this.is_syncing {
                 this.is_syncing = true;
                 match event {
@@ -376,6 +553,9 @@ impl DiffView {
                     cx.notify();
                 }
             });
+            this.goto_bar.update(cx, |bar, cx| {
+                bar.set_bytes_per_row(bytes_per_row, cx);
+            });
             this.left_view.update(cx, |_, cx| cx.notify());
             this.right_view.update(cx, |_, cx| cx.notify());
             this.update_highlights(cx);
@@ -399,6 +579,14 @@ impl DiffView {
             diff_generation: 0,
             is_computing: true,
             diff_task: None,
+            is_search_visible: false,
+            search_bar,
+            is_goto_visible: false,
+            goto_bar,
+            find_count_task: None,
+            find_count_cancel: None,
+            find_count_ranges: Vec::new(),
+            find_count_truncated: false,
             focus_handle,
             sync_scroll: true,
             is_syncing: false,
@@ -411,7 +599,17 @@ impl DiffView {
         if current_states != self.last_state_ids {
             self.last_state_ids = current_states;
             self.schedule_diff_recompute(true, true, cx);
+            if self.is_search_visible {
+                let is_read_only = self.is_active_side_read_only();
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.set_read_only(is_read_only, cx);
+                });
+                self.schedule_find_match_count(cx);
+            }
         } else {
+            if self.is_search_visible && !self.find_count_ranges.is_empty() {
+                self.refresh_find_match_status(cx);
+            }
             cx.notify();
         }
     }
@@ -595,10 +793,15 @@ impl DiffView {
     /// Focuses either the left (`is_left = true`) or right (`is_left = false`) pane.
     pub fn focus_side(&mut self, is_left: bool, window: &mut Window, cx: &mut Context<Self>) {
         let target_view = if is_left { &self.left_view } else { &self.right_view };
+        let changed = self.last_focused_view_id != target_view.entity_id();
         self.last_focused_view_id = target_view.entity_id();
         let handle = target_view.read(cx).focus_handle(cx);
         handle.focus(window, cx);
-        cx.notify();
+        if changed {
+            self.on_active_side_changed(cx);
+        } else {
+            cx.notify();
+        }
     }
 
     /// Saves the document on the specified side (`is_left = true` for left, `false` for right).
@@ -772,6 +975,621 @@ impl DiffView {
         hv.update(cx, |hv, cx| hv.redo(action, window, cx));
     }
 
+    fn on_active_side_changed(&mut self, cx: &mut Context<Self>) {
+        self.update_top_overlay_state(cx);
+        if self.is_search_visible {
+            let is_read_only = self.is_active_side_read_only();
+            let (query, mode, flags) = {
+                let bar = self.search_bar.read(cx);
+                (bar.query(cx), bar.mode(), bar.flags())
+            };
+            self.search_bar.update(cx, |bar, cx| {
+                bar.set_read_only(is_read_only, cx);
+                bar.set_wrapped_notice(None, cx);
+                bar.set_replace_error(None, cx);
+            });
+            self.perform_incremental_search(&query, mode, flags, cx);
+        } else if self.is_goto_visible {
+            let editor = self.active_side_editor();
+            let (cursor_offset, total_size, bytes_per_row, address_map) = {
+                let ed = editor.read(cx);
+                let map = ed.document.read().expect("doc read").address_map.clone();
+                (ed.cursor.offset, ed.total_size(), ed.bytes_per_row(), map)
+            };
+            self.goto_bar.update(cx, |bar, cx| {
+                bar.set_context_info(cursor_offset, total_size, bytes_per_row, address_map, cx);
+            });
+        }
+        self.update_highlights(cx);
+        cx.notify();
+    }
+
+    fn update_top_overlay_state(&self, cx: &mut Context<Self>) {
+        let overlay_visible = self.is_search_visible || self.is_goto_visible;
+        let is_left = self.is_left_focused();
+        self.left_view.update(cx, |view, cx| {
+            view.set_top_overlay_visible(overlay_visible && is_left, cx);
+        });
+        self.right_view.update(cx, |view, cx| {
+            view.set_top_overlay_visible(overlay_visible && !is_left, cx);
+        });
+    }
+
+    fn cancel_find_count(&mut self) {
+        if let Some(flag) = self.find_count_cancel.take() {
+            flag.store(true, Ordering::Relaxed);
+        }
+        self.find_count_task = None;
+    }
+
+    fn dismiss_search(&mut self, cx: &mut Context<Self>) {
+        self.cancel_find_count();
+        self.find_count_ranges.clear();
+        self.find_count_truncated = false;
+        self.is_search_visible = false;
+        self.search_bar.update(cx, |bar, cx| {
+            bar.set_wrapped_notice(None, cx);
+            bar.set_replace_error(None, cx);
+        });
+        self.update_top_overlay_state(cx);
+        self.update_highlights(cx);
+    }
+
+    fn dismiss_active_overlay(&mut self, cx: &mut Context<Self>) {
+        let mut changed = false;
+        if self.is_search_visible {
+            self.dismiss_search(cx);
+            changed = true;
+        }
+        if self.is_goto_visible {
+            self.is_goto_visible = false;
+            self.update_top_overlay_state(cx);
+            changed = true;
+        }
+        if changed {
+            cx.notify();
+        }
+    }
+
+    fn prefill_search_from_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let mode = self.search_bar.read(cx).mode();
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
+        let active_editor = self.active_side_editor();
+        let prefill = {
+            let editor = active_editor.read(cx);
+            let encoding = editor.options.encoding;
+            editor.selection_range().and_then(|range| {
+                let doc = editor.document.read().ok()?;
+                let data = doc.buffer.data();
+                let end = range.end.min(data.len());
+                if range.start >= end {
+                    return None;
+                }
+                format_selection_for_find(&data[range.start..end], mode, encoding, hex_case)
+            })
+        };
+        if let Some(query) = prefill {
+            self.search_bar.update(cx, |bar, cx| {
+                bar.set_query_and_select_all(&query, window, cx);
+            });
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn toggle_search(&mut self, _: &ToggleSearch, window: &mut Window, cx: &mut Context<Self>) {
+        let is_read_only = self.is_active_side_read_only();
+        self.search_bar.update(cx, |bar, cx| {
+            bar.set_read_only(is_read_only, cx);
+        });
+
+        if !self.is_search_visible {
+            self.is_search_visible = true;
+            self.is_goto_visible = false;
+            if !self.prefill_search_from_selection(window, cx) {
+                let (query, mode, flags) = {
+                    let bar = self.search_bar.read(cx);
+                    (bar.query(cx), bar.mode(), bar.flags())
+                };
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.focus_and_select_all(window, cx);
+                });
+                if !query.is_empty() {
+                    self.perform_incremental_search(&query, mode, flags, cx);
+                }
+            }
+        } else if !self.search_bar.read(cx).is_find_focused(window, cx) {
+            if !self.prefill_search_from_selection(window, cx) {
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.focus_and_select_all(window, cx);
+                });
+            }
+        } else {
+            self.search_bar.update(cx, |bar, cx| {
+                bar.focus_and_select_all(window, cx);
+            });
+        }
+        self.update_top_overlay_state(cx);
+        self.update_highlights(cx);
+        cx.notify();
+    }
+
+    pub fn toggle_replace(&mut self, _: &ToggleReplace, window: &mut Window, cx: &mut Context<Self>) {
+        let is_read_only = self.is_active_side_read_only();
+        self.search_bar.update(cx, |bar, cx| {
+            bar.set_read_only(is_read_only, cx);
+        });
+
+        if !self.is_search_visible {
+            self.is_search_visible = true;
+            self.is_goto_visible = false;
+            self.search_bar.update(cx, |bar, cx| {
+                bar.set_replace_visible(true, cx);
+            });
+            let prefilled = self.prefill_search_from_selection(window, cx);
+            let (query, mode, flags) = {
+                let bar = self.search_bar.read(cx);
+                (bar.query(cx), bar.mode(), bar.flags())
+            };
+            if prefilled || !query.is_empty() {
+                if !prefilled {
+                    self.perform_incremental_search(&query, mode, flags, cx);
+                }
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.focus_replace_and_select_all(window, cx);
+                });
+            } else {
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.focus_and_select_all(window, cx);
+                });
+            }
+        } else {
+            let (replace_visible, replace_focused, has_query) = {
+                let bar = self.search_bar.read(cx);
+                (bar.replace_visible(), bar.is_replace_focused(window, cx), !bar.query(cx).is_empty())
+            };
+            if !replace_visible {
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.set_replace_visible(true, cx);
+                    if has_query {
+                        bar.focus_replace_and_select_all(window, cx);
+                    } else {
+                        bar.focus_and_select_all(window, cx);
+                    }
+                });
+            } else if !replace_focused {
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.focus_replace_and_select_all(window, cx);
+                });
+            } else {
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.set_replace_visible(false, cx);
+                    bar.focus_and_select_all(window, cx);
+                });
+            }
+        }
+        self.update_top_overlay_state(cx);
+        self.update_highlights(cx);
+        cx.notify();
+    }
+
+    pub fn toggle_goto_address(&mut self, _: &ToggleGoToAddress, window: &mut Window, cx: &mut Context<Self>) {
+        self.is_goto_visible = !self.is_goto_visible;
+        if self.is_goto_visible {
+            if self.is_search_visible {
+                self.dismiss_search(cx);
+            }
+            let active_editor = self.active_side_editor();
+            let (cursor_offset, total_size, bytes_per_row, address_map) = {
+                let editor = active_editor.read(cx);
+                let map = editor.document.read().expect("doc read").address_map.clone();
+                (editor.cursor.offset, editor.total_size(), editor.bytes_per_row(), map)
+            };
+            self.goto_bar.update(cx, |bar, cx| {
+                bar.set_context_info(cursor_offset, total_size, bytes_per_row, address_map, cx);
+                bar.focus(window, cx);
+            });
+        } else {
+            self.focus_active_side(window, cx);
+        }
+        self.update_top_overlay_state(cx);
+        cx.notify();
+    }
+
+    fn sync_find_query_from_bar(&mut self, query: &str, mode: SearchMode, flags: TextSearchFlags, cx: &mut Context<Self>) {
+        let active_editor = self.active_side_editor();
+        let changed = active_editor.update(cx, |editor: &mut Editor, cx| {
+            let before = editor.find_state.generation;
+            if query.is_empty() {
+                if !editor.find_state.query.is_empty() {
+                    editor.find_state_mut().clear();
+                }
+            } else {
+                editor.find_state_mut().set_query_mode_and_flags(query.to_string(), mode, flags);
+            }
+            let changed = editor.find_state.generation != before;
+            if changed {
+                cx.notify();
+            }
+            changed
+        });
+        if changed {
+            self.schedule_find_match_count(cx);
+            self.update_highlights(cx);
+        }
+    }
+
+    fn perform_incremental_search(&mut self, query: &str, mode: SearchMode, flags: TextSearchFlags, cx: &mut Context<Self>) {
+        let active_editor = self.active_side_editor();
+        if query.is_empty() {
+            self.cancel_find_count();
+            self.find_count_ranges.clear();
+            self.find_count_truncated = false;
+            active_editor.update(cx, |editor: &mut Editor, cx| {
+                editor.find_state_mut().clear();
+                cx.notify();
+            });
+            self.search_bar.update(cx, |bar, cx| {
+                bar.set_match_status(SearchMatchStatus::None, cx);
+                bar.set_wrapped_notice(None, cx);
+            });
+            self.update_highlights(cx);
+            return;
+        }
+
+        active_editor.update(cx, |editor: &mut Editor, cx| {
+            editor.find_state_mut().set_query_mode_and_flags(query.to_string(), mode, flags);
+            cx.notify();
+        });
+
+        self.schedule_find_match_count(cx);
+        self.update_highlights(cx);
+    }
+
+    fn schedule_find_match_count(&mut self, cx: &mut Context<Self>) {
+        self.cancel_find_count();
+        if !self.is_search_visible {
+            self.find_count_ranges.clear();
+            self.find_count_truncated = false;
+            return;
+        }
+
+        let active_editor = self.active_side_editor();
+        let active_editor_id = active_editor.entity_id();
+        let (query, mode, flags, encoding, generation, buffer_and_segments) = {
+            let ed = active_editor.read(cx);
+            let q = ed.find_state.query.clone();
+            let m = ed.find_state.mode;
+            let f = ed.find_state.flags;
+            let enc = ed.options.encoding;
+            let find_gen = ed.find_state.generation;
+            let data = if q.is_empty() {
+                None
+            } else {
+                ed.document.read().ok().map(|doc| (doc.buffer.clone(), doc.address_map.segment_ranges()))
+            };
+            (q, m, f, enc, find_gen, data)
+        };
+
+        if query.is_empty() {
+            self.find_count_ranges.clear();
+            self.find_count_truncated = false;
+            self.search_bar.update(cx, |bar, cx| {
+                bar.set_match_status(SearchMatchStatus::None, cx);
+            });
+            self.update_highlights(cx);
+            return;
+        }
+
+        if let Err(err) = compile_search(&query, mode, encoding, flags) {
+            self.find_count_ranges.clear();
+            self.find_count_truncated = false;
+            self.search_bar.update(cx, |bar, cx| {
+                bar.set_match_status(SearchMatchStatus::Error(err.to_string()), cx);
+            });
+            self.update_highlights(cx);
+            return;
+        }
+
+        let Some((buffer, segments)) = buffer_and_segments else {
+            return;
+        };
+
+        self.search_bar.update(cx, |bar, cx| {
+            bar.set_match_status(SearchMatchStatus::Scanning, cx);
+        });
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.find_count_cancel = Some(cancel.clone());
+        let cancel_check = cancel.clone();
+
+        let task = cx.spawn(async move |this, cx| {
+            let search_task = cx.update(|cx| {
+                let service = AppState::global(cx).search_service.clone();
+                service.search_with_limit(
+                    LimitedSearchQuery {
+                        buffer,
+                        query,
+                        mode,
+                        encoding,
+                        flags,
+                        segments,
+                        max_results: MAX_FIND_COUNT_RESULTS,
+                        cancel: Some(cancel),
+                    },
+                    cx,
+                )
+            });
+
+            let result = search_task.await;
+            if cancel_check.load(Ordering::Relaxed) {
+                return;
+            }
+
+            if let Some(this) = this.upgrade() {
+                this.update(cx, |this, cx| {
+                    let current_editor = this.active_side_editor();
+                    if !this.is_search_visible || current_editor.entity_id() != active_editor_id || current_editor.read(cx).find_state.generation != generation
+                    {
+                        return;
+                    }
+                    this.find_count_cancel = None;
+                    match result {
+                        Ok((ranges, truncated)) => {
+                            this.find_count_ranges = ranges;
+                            this.find_count_truncated = truncated;
+                            this.refresh_find_match_status(cx);
+                            this.update_highlights(cx);
+                        }
+                        Err(err) => {
+                            this.find_count_ranges.clear();
+                            this.find_count_truncated = false;
+                            this.search_bar.update(cx, |bar, cx| {
+                                bar.set_match_status(SearchMatchStatus::Error(err.to_string()), cx);
+                            });
+                            this.update_highlights(cx);
+                        }
+                    }
+                });
+            }
+        });
+        self.find_count_task = Some(task);
+    }
+
+    fn refresh_find_match_status(&mut self, cx: &mut Context<Self>) {
+        if !self.is_search_visible {
+            return;
+        }
+        let active_editor = self.active_side_editor();
+        let anchor = {
+            let ed = active_editor.read(cx);
+            ed.selection_range().map(|r| r.start).unwrap_or(ed.cursor.offset)
+        };
+        let current = find_index_containing_offset(&self.find_count_ranges, anchor);
+        let status = SearchMatchStatus::Count {
+            current,
+            total: self.find_count_ranges.len(),
+            truncated: self.find_count_truncated,
+        };
+        self.search_bar.update(cx, |bar, cx| {
+            bar.set_match_status(status, cx);
+        });
+    }
+
+    pub fn search_next(&mut self, _: &SearchNext, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_search_visible {
+            let (query, mode, flags) = {
+                let bar = self.search_bar.read(cx);
+                (bar.query(cx), bar.mode(), bar.flags())
+            };
+            self.sync_find_query_from_bar(&query, mode, flags, cx);
+        }
+        self.perform_search_next(cx);
+        if !self.is_search_visible {
+            self.focus_active_side(window, cx);
+        }
+    }
+
+    fn perform_search_next(&mut self, cx: &mut Context<Self>) {
+        let is_search_visible = self.is_search_visible;
+        let active_editor = self.active_side_editor();
+        let (target_range, wrapped) = active_editor.update(cx, |editor: &mut Editor, cx| {
+            let res = match editor.next_find_result_range() {
+                Some((range, wrapped)) => (Some(range), wrapped),
+                None => (None, false),
+            };
+            cx.notify();
+            res
+        });
+
+        if is_search_visible {
+            self.search_bar.update(cx, |bar, cx| {
+                bar.set_wrapped_notice(wrapped.then_some("Wrapped to top"), cx);
+            });
+            self.refresh_find_match_status(cx);
+        }
+
+        if let Some(range) = target_range {
+            let hex_view = self.active_side_hex_view();
+            hex_view.update(cx, |view, cx| {
+                view.scroll_to_range_if_needed(range, cx);
+            });
+        }
+        self.update_highlights(cx);
+        cx.notify();
+    }
+
+    pub fn search_prev(&mut self, _: &SearchPrev, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_search_visible {
+            let (query, mode, flags) = {
+                let bar = self.search_bar.read(cx);
+                (bar.query(cx), bar.mode(), bar.flags())
+            };
+            self.sync_find_query_from_bar(&query, mode, flags, cx);
+        }
+        self.perform_search_prev(cx);
+        if !self.is_search_visible {
+            self.focus_active_side(window, cx);
+        }
+    }
+
+    fn perform_search_prev(&mut self, cx: &mut Context<Self>) {
+        let is_search_visible = self.is_search_visible;
+        let active_editor = self.active_side_editor();
+        let (target_range, wrapped) = active_editor.update(cx, |editor: &mut Editor, cx| {
+            let res = match editor.prev_find_result_range() {
+                Some((range, wrapped)) => (Some(range), wrapped),
+                None => (None, false),
+            };
+            cx.notify();
+            res
+        });
+
+        if is_search_visible {
+            self.search_bar.update(cx, |bar, cx| {
+                bar.set_wrapped_notice(wrapped.then_some("Wrapped to bottom"), cx);
+            });
+            self.refresh_find_match_status(cx);
+        }
+
+        if let Some(range) = target_range {
+            let hex_view = self.active_side_hex_view();
+            hex_view.update(cx, |view, cx| {
+                view.scroll_to_range_if_needed(range, cx);
+            });
+        }
+        self.update_highlights(cx);
+        cx.notify();
+    }
+
+    fn perform_replace(&mut self, query: &str, mode: SearchMode, flags: TextSearchFlags, replacement: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_find_query_from_bar(query, mode, flags, cx);
+        let active_editor = self.active_side_editor();
+        let (is_read_only, encoding, doc_path) = {
+            let ed = active_editor.read(cx);
+            let path = ed.document.read().ok().map(|d| d.path().to_path_buf());
+            (ed.is_read_only(), ed.options.encoding, path)
+        };
+        if is_read_only {
+            self.search_bar.update(cx, |bar, cx| {
+                bar.set_read_only(true, cx);
+            });
+            window.push_notification(notification::warning("File is read-only. Disable read-only mode to replace bytes."), cx);
+            return;
+        }
+        let replacement_bytes = match parse_replacement_bytes(replacement, mode, encoding) {
+            Ok(bytes) => {
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.set_replace_error(None, cx);
+                });
+                bytes
+            }
+            Err(err) => {
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.set_replace_error(Some(err.to_string()), cx);
+                });
+                return;
+            }
+        };
+
+        let result = active_editor.update(cx, |editor: &mut Editor, cx| {
+            let res = editor.replace_current_find_match(&replacement_bytes);
+            if res.is_some() {
+                cx.notify();
+            }
+            res
+        });
+
+        match result {
+            Some((_replaced, next_range, wrapped)) => {
+                if let Some(path) = doc_path {
+                    let service = AppState::global(cx).document_service.clone();
+                    service.notify_document_changed(&path, cx);
+                }
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.set_wrapped_notice(wrapped.then_some("Wrapped to top"), cx);
+                });
+                if let Some(range) = next_range {
+                    let hex_view = self.active_side_hex_view();
+                    hex_view.update(cx, |view, cx| {
+                        view.scroll_to_range_if_needed(range, cx);
+                    });
+                }
+                self.schedule_find_match_count(cx);
+                self.update_highlights(cx);
+            }
+            None => {
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.set_wrapped_notice(None, cx);
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    fn perform_replace_all(&mut self, query: &str, mode: SearchMode, flags: TextSearchFlags, replacement: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_find_query_from_bar(query, mode, flags, cx);
+        let active_editor = self.active_side_editor();
+        let (is_read_only, encoding, doc_path) = {
+            let ed = active_editor.read(cx);
+            let path = ed.document.read().ok().map(|d| d.path().to_path_buf());
+            (ed.is_read_only(), ed.options.encoding, path)
+        };
+        if is_read_only {
+            self.search_bar.update(cx, |bar, cx| {
+                bar.set_read_only(true, cx);
+            });
+            window.push_notification(notification::warning("File is read-only. Disable read-only mode to replace bytes."), cx);
+            return;
+        }
+        let replacement_bytes = match parse_replacement_bytes(replacement, mode, encoding) {
+            Ok(bytes) => {
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.set_replace_error(None, cx);
+                });
+                bytes
+            }
+            Err(err) => {
+                self.search_bar.update(cx, |bar, cx| {
+                    bar.set_replace_error(Some(err.to_string()), cx);
+                });
+                return;
+            }
+        };
+
+        let replaced_count = active_editor.update(cx, |editor: &mut Editor, cx| {
+            let count = editor.replace_all_find_matches(&replacement_bytes);
+            if count > 0 {
+                cx.notify();
+            }
+            count
+        });
+
+        if replaced_count > 0 {
+            if let Some(path) = doc_path {
+                let service = AppState::global(cx).document_service.clone();
+                service.notify_document_changed(&path, cx);
+            }
+            let cursor_offset = active_editor.read(cx).cursor.offset;
+            let hex_view = self.active_side_hex_view();
+            hex_view.update(cx, |view, cx| {
+                view.scroll_to_byte_if_needed(cursor_offset, cx);
+            });
+            let word = if replaced_count == 1 { "occurrence" } else { "occurrences" };
+            window.push_notification(notification::info(format!("Replaced {replaced_count} {word}")), cx);
+        } else {
+            window.push_notification(notification::info("No matches replaced"), cx);
+        }
+
+        self.search_bar.update(cx, |bar, cx| {
+            bar.set_wrapped_notice(None, cx);
+        });
+        self.schedule_find_match_count(cx);
+        self.update_highlights(cx);
+        cx.notify();
+    }
+
     pub fn set_diff_result(&mut self, result: DiffResult, cx: &mut Context<Self>) {
         self.is_computing = false;
         self.apply_diff_result(result, false, cx);
@@ -789,22 +1607,71 @@ impl DiffView {
         cx.notify();
     }
 
-    fn update_highlights(&mut self, cx: &mut Context<Self>) {
-        let Some(diff_result) = &self.diff_result else {
-            return;
-        };
+    fn active_side_search_highlights(&self, cx: &App) -> Vec<(Range<usize>, Hsla)> {
+        if !self.is_search_visible {
+            return Vec::new();
+        }
+        let theme = cx.theme();
+        let active_editor = self.active_side_editor();
+        let current_range = active_editor.read(cx).find_state.current_result_range();
 
+        let mut highlights = Vec::with_capacity(self.find_count_ranges.len() + 1);
+        let mut saw_current = false;
+        for range in &self.find_count_ranges {
+            let is_current = current_range.as_ref() == Some(range);
+            if is_current {
+                saw_current = true;
+            }
+            let color = if is_current { theme.warning_active } else { theme.warning };
+            highlights.push((range.clone(), color));
+        }
+        if let Some(current) = current_range
+            && !saw_current
+            && current.start < current.end
+        {
+            highlights.push((current, theme.warning_active));
+        }
+        highlights
+    }
+
+    fn update_highlights(&mut self, cx: &mut Context<Self>) {
         let theme = cx.theme();
         let active_color = theme.danger;
         let passive_color = blend_opaque(theme.background, theme.danger, PASSIVE_DIFF_BLEND_ALPHA);
-        let highlights = Arc::new(collect_diff_highlights(diff_result, self.current_diff_index, passive_color, active_color));
+        let diff_highlights = self
+            .diff_result
+            .as_ref()
+            .map(|result| collect_diff_highlights(result, self.current_diff_index, passive_color, active_color))
+            .unwrap_or_default();
 
-        self.left_view.update(cx, |view, cx| {
-            view.set_highlights_arc(highlights.clone(), cx);
-        });
-        self.right_view.update(cx, |view, cx| {
-            view.set_highlights_arc(highlights, cx);
-        });
+        let search_highlights = self.active_side_search_highlights(cx);
+        if search_highlights.is_empty() {
+            let shared = Arc::new(diff_highlights);
+            self.left_view.update(cx, |view, cx| {
+                view.set_highlights_arc(shared.clone(), cx);
+            });
+            self.right_view.update(cx, |view, cx| {
+                view.set_highlights_arc(shared, cx);
+            });
+        } else {
+            let merged_active = Arc::new(merge_diff_and_search_highlights(&diff_highlights, &search_highlights));
+            let passive_diff = Arc::new(diff_highlights);
+            if self.is_left_focused() {
+                self.left_view.update(cx, |view, cx| {
+                    view.set_highlights_arc(merged_active, cx);
+                });
+                self.right_view.update(cx, |view, cx| {
+                    view.set_highlights_arc(passive_diff, cx);
+                });
+            } else {
+                self.left_view.update(cx, |view, cx| {
+                    view.set_highlights_arc(passive_diff, cx);
+                });
+                self.right_view.update(cx, |view, cx| {
+                    view.set_highlights_arc(merged_active, cx);
+                });
+            }
+        }
     }
 
     pub(crate) fn next_difference(&mut self, _: &NextDifference, _window: &mut Window, cx: &mut Context<Self>) {
@@ -844,6 +1711,7 @@ impl DiffView {
         std::mem::swap(&mut self.left_view, &mut self.right_view);
         std::mem::swap(&mut self._left_lease, &mut self._right_lease);
         self.last_state_ids = (self.last_state_ids.1, self.last_state_ids.0);
+        self.update_top_overlay_state(cx);
         self.schedule_diff_recompute(false, true, cx);
     }
 
@@ -906,7 +1774,6 @@ impl DiffView {
 
         let size_label = format_size_friendly(this_len);
         let size_delta = format_size_delta(this_len, other_len);
-        let side_label = if is_left { "LEFT" } else { "RIGHT" };
         let header_id: SharedString = if is_left { "diff-header-left" } else { "diff-header-right" }.into();
         let save_id: SharedString = if is_left { "diff-save-left" } else { "diff-save-right" }.into();
         let name_id: SharedString = if is_left { "diff-name-left" } else { "diff-name-right" }.into();
@@ -937,18 +1804,6 @@ impl DiffView {
                 cx.listener(move |this, _, window, cx| {
                     this.focus_side(is_left, window, cx);
                 }),
-            )
-            .child(
-                div()
-                    .px_1p5()
-                    .py(px(1.0))
-                    .rounded_sm()
-                    .flex_shrink_0()
-                    .text_size(px(10.0))
-                    .font_semibold()
-                    .bg(if is_active { theme.primary.opacity(0.18) } else { theme.muted.opacity(0.7) })
-                    .text_color(if is_active { theme.primary } else { theme.muted_foreground })
-                    .child(side_label),
             )
             .child(
                 div()
@@ -1209,6 +2064,18 @@ impl Render for DiffView {
                                 })
                             }),
                     )
+                    .child(div().w_px().h_4().bg(theme.border))
+                    .child(
+                        if self.is_search_visible {
+                            Button::new("diff-find").icon(IconName::Search).primary().small().label("Find")
+                        } else {
+                            Button::new("diff-find").icon(IconName::Search).ghost().small().label("Find")
+                        }
+                        .tooltip(format!("Find in active pane ({FIND_SHORTCUT_HINT})"))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_search(&ToggleSearch, window, cx);
+                        })),
+                    )
                     .child(div().flex_1().min_w_0())
                     .child(if is_computing {
                         div()
@@ -1328,7 +2195,21 @@ impl Render for DiffView {
                             .border_r_1()
                             .border_color(theme.border)
                             .child(left_header)
-                            .child(div().flex_1().min_w_0().min_h_0().overflow_hidden().child(self.left_view.clone())),
+                            .child(
+                                div()
+                                    .relative()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .min_h_0()
+                                    .overflow_hidden()
+                                    .child(self.left_view.clone())
+                                    .when(self.is_left_focused() && self.is_search_visible, |el| {
+                                        el.child(div().absolute().top(px(8.0)).right(px(20.0)).child(self.search_bar.clone()))
+                                    })
+                                    .when(self.is_left_focused() && self.is_goto_visible, |el| {
+                                        el.child(div().absolute().top(px(8.0)).right(px(20.0)).child(self.goto_bar.clone()))
+                                    }),
+                            ),
                     )
                     .child(
                         div()
@@ -1340,9 +2221,28 @@ impl Render for DiffView {
                             .h_full()
                             .overflow_hidden()
                             .child(right_header)
-                            .child(div().flex_1().min_w_0().min_h_0().overflow_hidden().child(self.right_view.clone())),
+                            .child(
+                                div()
+                                    .relative()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .min_h_0()
+                                    .overflow_hidden()
+                                    .child(self.right_view.clone())
+                                    .when(!self.is_left_focused() && self.is_search_visible, |el| {
+                                        el.child(div().absolute().top(px(8.0)).right(px(20.0)).child(self.search_bar.clone()))
+                                    })
+                                    .when(!self.is_left_focused() && self.is_goto_visible, |el| {
+                                        el.child(div().absolute().top(px(8.0)).right(px(20.0)).child(self.goto_bar.clone()))
+                                    }),
+                            ),
                     ),
             )
+            .on_action(cx.listener(Self::toggle_search))
+            .on_action(cx.listener(Self::toggle_replace))
+            .on_action(cx.listener(Self::toggle_goto_address))
+            .on_action(cx.listener(Self::search_next))
+            .on_action(cx.listener(Self::search_prev))
             .on_action(cx.listener(Self::next_difference))
             .on_action(cx.listener(Self::prev_difference))
             .on_action(cx.listener(Self::toggle_sync_scroll))
@@ -1420,8 +2320,8 @@ impl crate::ui::pane::WorkspaceTab for Entity<DiffView> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Hsla, Rgba, blend_opaque, clamp_diff_index, collect_diff_highlights, format_diff_bytes_summary, format_size_delta, hsla, modified_chunk_at,
-        modified_chunk_count, step_diff_index,
+        Hsla, Rgba, blend_opaque, clamp_diff_index, collect_diff_highlights, format_diff_bytes_summary, format_size_delta, hsla,
+        merge_diff_and_search_highlights, modified_chunk_at, modified_chunk_count, step_diff_index,
     };
     use crate::core::diff::compute_simple_diff;
 
@@ -1455,6 +2355,26 @@ mod tests {
         let highlights = collect_diff_highlights(&result, 1, passive, active);
 
         assert_eq!(highlights, vec![(1..2, passive), (3..4, active), (5..6, passive)]);
+    }
+
+    #[test]
+    fn test_merge_diff_and_search_highlights_overlays_cleanly() {
+        let diff_color = hsla(0.0, 0.8, 0.4, 1.0);
+        let search_color = hsla(0.15, 0.9, 0.5, 1.0);
+        let diff = vec![(0..10, diff_color), (20..25, diff_color)];
+        let search = vec![(3..6, search_color), (22..28, search_color)];
+
+        let merged = merge_diff_and_search_highlights(&diff, &search);
+        assert_eq!(
+            merged,
+            vec![
+                (0..3, diff_color),
+                (3..6, search_color),
+                (6..10, diff_color),
+                (20..22, diff_color),
+                (22..28, search_color),
+            ]
+        );
     }
 
     #[test]

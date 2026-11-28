@@ -34,7 +34,6 @@ use highlights::compose_search_highlights;
 #[cfg(test)]
 pub(crate) use highlights::compose_search_highlights;
 use highlights::{CachedSearchPattern, HighlightSyncState, scan_viewport_ranges, viewport_match_slice, viewport_range_slice};
-use search_bar::{SearchMatchStatus, format_selection_for_find};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -50,6 +49,7 @@ mod tests;
 
 pub use goto_offset_bar::{GotoBarEvent, GotoOffsetBar};
 pub use search_bar::{SearchBar, SearchBarEvent};
+pub(crate) use search_bar::{SearchMatchStatus, format_selection_for_find};
 
 const CONTEXT: &str = "EditorView";
 const MAX_FIND_COUNT_RESULTS: usize = 10_000;
@@ -1652,7 +1652,7 @@ impl gpui_kit::base::dock::Panel for EditorView {
     }
 }
 
-fn find_index_containing_offset(ranges: &[Range<usize>], offset: usize) -> Option<usize> {
+pub(crate) fn find_index_containing_offset(ranges: &[Range<usize>], offset: usize) -> Option<usize> {
     if ranges.is_empty() {
         return None;
     }

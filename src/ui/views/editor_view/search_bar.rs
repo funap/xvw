@@ -67,7 +67,7 @@ pub enum SearchBarEvent {
 }
 
 /// Formats selected document bytes for pre-filling the Find input (capped at `MAX_PREFILL_SELECTION_BYTES`).
-pub(super) fn format_selection_for_find(bytes: &[u8], mode: SearchMode, encoding: Encoding, hex_case: HexCase) -> Option<String> {
+pub(crate) fn format_selection_for_find(bytes: &[u8], mode: SearchMode, encoding: Encoding, hex_case: HexCase) -> Option<String> {
     if bytes.is_empty() || bytes.len() > MAX_PREFILL_SELECTION_BYTES {
         return None;
     }

@@ -105,6 +105,10 @@ impl Workspace {
             panel.update(cx, |panel, cx| {
                 panel.toggle_search(action, window, cx);
             });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.toggle_search(action, window, cx);
+            });
         }
     }
 
@@ -112,6 +116,10 @@ impl Workspace {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.toggle_replace(action, window, cx);
+            });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.toggle_replace(action, window, cx);
             });
         }
     }
@@ -121,6 +129,10 @@ impl Workspace {
             panel.update(cx, |panel, cx| {
                 panel.toggle_goto_address(action, window, cx);
             });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.toggle_goto_address(action, window, cx);
+            });
         }
     }
 
@@ -129,6 +141,10 @@ impl Workspace {
             panel.update(cx, |panel, cx| {
                 panel.search_next(action, window, cx);
             });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.search_next(action, window, cx);
+            });
         }
     }
 
@@ -136,6 +152,10 @@ impl Workspace {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.search_prev(action, window, cx);
+            });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.search_prev(action, window, cx);
             });
         }
     }
