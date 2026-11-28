@@ -2,7 +2,7 @@
 name = "xvw"
 version = "0.13.1"
 edition = "2024"
-description = "The modern hex editor for deep binary analysis."
+description = "Built for curious minds and raw bytes."
 readme = "README.md"
 license = "MIT"
 repository = "https://github.com/funap/xvw"

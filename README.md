@@ -3,7 +3,9 @@
 
 # xvw
 
-### **The modern, cross-platform hex editor powered by Zed's GPUI.**
+### Built for curious minds and raw bytes.
+
+A cross-platform hex editor powered by Zed's GPUI.
 
 [English](README.md) | [日本語](README.ja.md)
 
@@ -28,8 +30,8 @@ Engineered to be snappy, intuitive, and versatile for reverse engineering, firmw
 ---
 
 > [!NOTE]
-> **Alpha Software Notice**  
-> `xvw` is currently in alpha and under active development. Features, specifications, UI, keybindings, and settings are subject to change without prior notice.  
+> **Under Active Development**  
+> `xvw` is under active development, and features, specifications, UI, keybindings, and settings may undergo significant changes without prior notice.  
 > We actively welcome feedback, bug reports, and contributions! Feel free to [open an issue](https://github.com/funap/xvw/issues) or submit a pull request.
 
 ---

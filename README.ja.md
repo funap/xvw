@@ -3,7 +3,9 @@
 
 # xvw
 
-### **ZedのGPUIフレームワークで構築された、モダンで高速なクロスプラットフォーム・バイナリエディタ**
+### Built for curious minds and raw bytes.
+
+Zed の GPUI で構築された、クロスプラットフォーム対応のバイナリエディタ。
 
 [English](README.md) | [日本語](README.ja.md)
 
@@ -28,9 +30,9 @@
 ---
 
 > [!NOTE]
-> **アルファ版に関する注意事項**  
-> `xvw` は現在アルファ版として開発中。機能・仕様・UI・キーバインド・設定などは、今後の開発に伴い予告なく変更される可能性あり。  
-> フィードバック、バグ報告、コントリビューションを歓迎。[Issue の作成](https://github.com/funap/xvw/issues) や Pull Request の送信はお気軽に。
+> **開発中のお知らせ**  
+> `xvw` は現在開発中のため、機能・仕様・UI・キーバインド・設定などが予告なく大きく変更される場合があります。  
+> フィードバック、バグ報告、コントリビューションを歓迎しています。[Issue の作成](https://github.com/funap/xvw/issues) や Pull Request の送信はお気軽にどうぞ。
 
 ---
 

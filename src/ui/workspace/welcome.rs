@@ -303,28 +303,7 @@ pub(crate) fn render_welcome_screen(recent_files: &[RecentFileEntry], cx: &Conte
                     // Prevent double-clicking cards/rows from creating an unintended empty buffer.
                     cx.stop_propagation();
                 })
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .w(px(48.0))
-                                .h(px(48.0))
-                                .rounded_xl()
-                                .bg(theme.primary.opacity(0.12))
-                                .border_1()
-                                .border_color(theme.primary.opacity(0.25))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(Icon::new(IconName::Binary).size(px(26.0)).text_color(theme.primary)),
-                        )
-                        .child(div().text_2xl().font_bold().text_color(theme.foreground).child("XVW"))
-                        .child(div().text_sm().text_color(theme.muted_foreground).child("Binary & Hex Editor")),
-                )
+                .child(div().text_2xl().font_bold().text_color(theme.foreground).child("XVW"))
                 .child(quick_actions)
                 .children(recent_section)
                 .child(
