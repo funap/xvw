@@ -2740,31 +2740,33 @@ fn test_finalizing_live_parse_keeps_standard_layout_and_unfolded_state() {
 
 #[test]
 fn test_editor_zero_fill_preserves_size_and_supports_undo() {
-    let mut editor = create_editor_with_content(&[0x11, 0x22, 0x33, 0x44, 0x55]);
-    editor.set_cursor_offset_exact(1);
+    let mut editor = create_editor_with_content(&[0x11, 0x00, 0x33, 0x44, 0x55]);
+    editor.set_cursor_offset_exact(0);
 
-    // Forward zero-fill overwrites byte at cursor and advances
+    // Zero-fill at offset 0 overwrites byte 0 with 0x00 and advances to offset 1
     assert!(editor.zero_fill_forward());
     assert_eq!(editor.total_size(), 5);
-    assert_eq!(editor.document.read().unwrap().buffer.data(), &[0x11, 0x00, 0x33, 0x44, 0x55]);
+    assert_eq!(editor.document.read().unwrap().buffer.data(), &[0x00, 0x00, 0x33, 0x44, 0x55]);
+    assert_eq!(editor.cursor.offset, 1);
+
+    // Zero-fill on an already-zero byte advances cursor (+1) without pushing a redundant edit
+    assert!(!editor.zero_fill_forward());
     assert_eq!(editor.cursor.offset, 2);
 
-    // Backward zero-fill overwrites preceding byte and moves left
-    editor.set_cursor_offset_exact(4);
-    assert!(editor.zero_fill_backward());
-    assert_eq!(editor.total_size(), 5);
-    assert_eq!(editor.document.read().unwrap().buffer.data(), &[0x11, 0x00, 0x33, 0x00, 0x55]);
+    // Zero-fill at offset 2 overwrites 0x33 -> 0x00 and advances to offset 3
+    assert!(editor.zero_fill_forward());
+    assert_eq!(editor.document.read().unwrap().buffer.data(), &[0x00, 0x00, 0x00, 0x44, 0x55]);
     assert_eq!(editor.cursor.offset, 3);
 
     // Selection zero-fill (e.g. Cut in Overwrite + ZeroFill mode)
-    assert!(editor.zero_fill_range(2..5));
+    assert!(editor.zero_fill_range(3..5));
     assert_eq!(editor.total_size(), 5);
-    assert_eq!(editor.document.read().unwrap().buffer.data(), &[0x11, 0x00, 0x00, 0x00, 0x00]);
-    assert_eq!(editor.cursor.offset, 2);
+    assert_eq!(editor.document.read().unwrap().buffer.data(), &[0x00, 0x00, 0x00, 0x00, 0x00]);
+    assert_eq!(editor.cursor.offset, 3);
 
     // Undo restores previous bytes cleanly
     assert!(editor.undo());
-    assert_eq!(editor.document.read().unwrap().buffer.data(), &[0x11, 0x00, 0x33, 0x00, 0x55]);
+    assert_eq!(editor.document.read().unwrap().buffer.data(), &[0x00, 0x00, 0x00, 0x44, 0x55]);
 }
 
 #[test]

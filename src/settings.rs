@@ -966,6 +966,11 @@ panel_width = "wide"
         let loaded = Settings::load_from(&file.path).expect("load settings");
         assert_eq!(loaded.overwrite_delete_behavior, OverwriteDeleteBehavior::ZeroFill);
 
+        settings.overwrite_delete_behavior = OverwriteDeleteBehavior::DeleteBytes;
+        settings.save_to(&file.path).expect("save settings");
+        let loaded_delete = Settings::load_from(&file.path).expect("load settings");
+        assert_eq!(loaded_delete.overwrite_delete_behavior, OverwriteDeleteBehavior::DeleteBytes);
+
         fs::write(&file.path, "overwrite_delete_behavior = \"UnknownMode\"\n").expect("write invalid behavior");
         let fallback = Settings::load_from(&file.path).expect("load fallback settings");
         assert_eq!(fallback.overwrite_delete_behavior, OverwriteDeleteBehavior::Disallow);

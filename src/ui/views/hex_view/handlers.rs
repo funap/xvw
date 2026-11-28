@@ -184,18 +184,30 @@ impl HexView {
         let overwrite_behavior = cx.try_global::<OverwriteDeleteBehavior>().copied().unwrap_or_default();
         if !insert_mode && overwrite_behavior == OverwriteDeleteBehavior::Disallow {
             window.push_notification(
-                Notification::warning("Overwrite mode protects file size — switch to Insert mode or enable Zero-Fill in Settings"),
+                Notification::warning("Overwrite mode protects file size — switch to Insert mode or change Overwrite Delete / Cut in Settings"),
                 cx,
             );
             return;
         }
-        let changed = self.editor.update(cx, |ed, editor_cx| {
-            let changed = if insert_mode { ed.delete_backward() } else { ed.zero_fill_backward() };
-            if changed {
+        let (changed, cursor_moved, cursor_offset) = self.editor.update(cx, |ed, editor_cx| {
+            let before = ed.cursor.offset;
+            let changed = if insert_mode || overwrite_behavior == OverwriteDeleteBehavior::DeleteBytes {
+                ed.delete_backward()
+            } else {
+                // In Overwrite + ZeroFill mode, the block cursor sits on the target byte:
+                // zero-fill the current byte (or selection) and advance to the next offset (+1),
+                // so Delete works at offset 0 (including macOS Delete key which emits "backspace").
+                ed.zero_fill_forward()
+            };
+            let moved = ed.cursor.offset != before;
+            if changed || moved {
                 editor_cx.notify();
             }
-            changed
+            (changed, moved, ed.cursor.offset)
         });
+        if cursor_moved {
+            cx.emit(HexViewEvent::CursorMoved(cursor_offset));
+        }
         self.edit_changed(changed, cx);
     }
 
@@ -213,18 +225,27 @@ impl HexView {
         let overwrite_behavior = cx.try_global::<OverwriteDeleteBehavior>().copied().unwrap_or_default();
         if !insert_mode && overwrite_behavior == OverwriteDeleteBehavior::Disallow {
             window.push_notification(
-                Notification::warning("Overwrite mode protects file size — switch to Insert mode or enable Zero-Fill in Settings"),
+                Notification::warning("Overwrite mode protects file size — switch to Insert mode or change Overwrite Delete / Cut in Settings"),
                 cx,
             );
             return;
         }
-        let changed = self.editor.update(cx, |ed, editor_cx| {
-            let changed = if insert_mode { ed.delete_forward() } else { ed.zero_fill_forward() };
-            if changed {
+        let (changed, cursor_moved, cursor_offset) = self.editor.update(cx, |ed, editor_cx| {
+            let before = ed.cursor.offset;
+            let changed = if insert_mode || overwrite_behavior == OverwriteDeleteBehavior::DeleteBytes {
+                ed.delete_forward()
+            } else {
+                ed.zero_fill_forward()
+            };
+            let moved = ed.cursor.offset != before;
+            if changed || moved {
                 editor_cx.notify();
             }
-            changed
+            (changed, moved, ed.cursor.offset)
         });
+        if cursor_moved {
+            cx.emit(HexViewEvent::CursorMoved(cursor_offset));
+        }
         self.edit_changed(changed, cx);
     }
 

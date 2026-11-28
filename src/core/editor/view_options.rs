@@ -10,15 +10,18 @@ pub enum OverwriteDeleteBehavior {
     Disallow,
     /// Overwrite the target byte(s) with `0x00` in Overwrite mode, keeping file size fixed.
     ZeroFill,
+    /// Remove the target byte(s) in Overwrite mode, reducing file size.
+    DeleteBytes,
 }
 
 impl OverwriteDeleteBehavior {
-    pub const ALL: [Self; 2] = [Self::Disallow, Self::ZeroFill];
+    pub const ALL: [Self; 3] = [Self::Disallow, Self::ZeroFill, Self::DeleteBytes];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Disallow => "Disallow (Protect Size)",
             Self::ZeroFill => "Zero-Fill (0x00)",
+            Self::DeleteBytes => "Delete Bytes (Resize)",
         }
     }
 }

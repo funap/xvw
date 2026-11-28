@@ -171,7 +171,7 @@ impl ClipboardHandler {
         let overwrite_behavior = cx.try_global::<OverwriteDeleteBehavior>().copied().unwrap_or_default();
         if !insert_mode && overwrite_behavior == OverwriteDeleteBehavior::Disallow {
             window.push_notification(
-                Notification::warning("Overwrite mode protects file size — use Copy, switch to Insert mode, or enable Zero-Fill in Settings"),
+                Notification::warning("Overwrite mode protects file size — use Copy, switch to Insert mode, or change Overwrite Delete / Cut in Settings"),
                 cx,
             );
             return false;
@@ -203,7 +203,7 @@ impl ClipboardHandler {
         ));
 
         editor.update(cx, |editor, editor_cx| {
-            let changed = if insert_mode {
+            let changed = if insert_mode || overwrite_behavior == OverwriteDeleteBehavior::DeleteBytes {
                 let remaining = editor.total_size().saturating_sub(range.len());
                 let cursor_after = range.start.min(remaining.saturating_sub(1));
                 editor.replace_range_with_cursor(range, Vec::new(), cursor_after)
