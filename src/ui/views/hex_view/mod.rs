@@ -45,6 +45,8 @@ use std::sync::Arc;
 
 use cursor_blink::HexCursorBlink;
 
+pub(super) const COLUMN_FOCUS_FLASH_DURATION: std::time::Duration = std::time::Duration::from_millis(800);
+
 type CachedDescPalette = std::rc::Rc<std::cell::Cell<Option<(gpui_kit::component::ThemeMode, Hsla, Hsla, DescriptionPalette)>>>;
 
 struct CachedHeaderProbe {
@@ -358,7 +360,7 @@ impl HexView {
         self.column_focus_flash_epoch = self.column_focus_flash_epoch.wrapping_add(1);
         let epoch = self.column_focus_flash_epoch;
         self._column_focus_flash_task = cx.spawn(async move |this, cx| {
-            tokio::time::sleep(crate::ui::panels::FOCUS_FLASH_DURATION + std::time::Duration::from_millis(50)).await;
+            tokio::time::sleep(COLUMN_FOCUS_FLASH_DURATION + std::time::Duration::from_millis(50)).await;
             if let Some(this) = this.upgrade() {
                 this.update(cx, |this, cx| {
                     if this.column_focus_flash_epoch == epoch && this.column_focus_flash.is_some() {

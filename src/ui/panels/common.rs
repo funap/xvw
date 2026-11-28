@@ -1,39 +1,6 @@
 use crate::ui::icon::IconName;
 use gpui_kit::component::{Icon, StyledExt as _, h_flex, theme::Theme, v_flex};
-use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::{Animation, AnimationExt as _, AnyElement, Div, ElementId, Hsla, IntoElement, ParentElement, SharedString, Styled, div, px};
-use std::time::Duration;
-
-/// Duration for the transient header highlight flash when focus moves to a panel or column.
-pub const FOCUS_FLASH_DURATION: Duration = Duration::from_millis(800);
-
-/// Maps normalized focus-flash animation progress (`0.0..=1.0`) to highlight opacity (`1.0..=0.0`).
-/// Holds briefly at full opacity so the focus move registers clearly, then smoothly fades out.
-#[inline]
-pub fn focus_flash_alpha(progress: f32) -> f32 {
-    let p = progress.clamp(0.0, 1.0);
-    const HOLD_PORTION: f32 = 0.2;
-    if p <= HOLD_PORTION {
-        1.0
-    } else {
-        let fade_t = (p - HOLD_PORTION) / (1.0 - HOLD_PORTION);
-        let remaining = 1.0 - fade_t;
-        remaining * remaining
-    }
-}
-
-/// Creates an absolute header overlay that briefly highlights the title area and its bottom bar
-/// when focus arrives, then smoothly fades out to transparent.
-pub fn header_focus_flash_overlay(id: impl Into<ElementId>, primary: Hsla) -> impl IntoElement {
-    div()
-        .absolute()
-        .inset_0()
-        .with_animation(id, Animation::new(FOCUS_FLASH_DURATION), move |el, progress| {
-            let alpha = focus_flash_alpha(progress);
-            el.bg(primary.opacity(alpha * 0.10))
-                .child(div().absolute().left_0().right_0().bottom_0().h(px(2.0)).bg(primary.opacity(alpha)))
-        })
-}
+use gpui_kit::{AnyElement, Div, Hsla, ParentElement, SharedString, Styled, div, px};
 
 /// Returns the header text color based on the focus state.
 /// When focused, it returns `theme.foreground`. When not focused, it returns `theme.muted_foreground`.
@@ -46,7 +13,7 @@ pub fn panel_container(_is_focused: bool, theme: &Theme) -> Div {
     v_flex().size_full().min_w_0().min_h_0().overflow_hidden().bg(theme.sidebar)
 }
 
-/// Creates a standardized panel header toolbar with fixed height, border, focus flash indicator, and truncating title.
+/// Creates a standardized panel header toolbar with fixed height, border, and truncating title.
 pub fn panel_header(title: impl Into<SharedString>, is_focused: bool, theme: &Theme, badge: Option<AnyElement>, actions: Option<AnyElement>) -> Div {
     let mut title_part = h_flex().flex_1().min_w_0().items_center().gap_2().child(
         div()
@@ -64,7 +31,6 @@ pub fn panel_header(title: impl Into<SharedString>, is_focused: bool, theme: &Th
     }
 
     let mut header = h_flex()
-        .relative()
         .justify_between()
         .items_center()
         .gap_2()
@@ -74,7 +40,6 @@ pub fn panel_header(title: impl Into<SharedString>, is_focused: bool, theme: &Th
         .border_b_1()
         .border_color(theme.border)
         .bg(theme.sidebar)
-        .when(is_focused, |el| el.child(header_focus_flash_overlay("panel-focus-flash", theme.primary)))
         .child(title_part);
 
     if let Some(act) = actions {
@@ -135,21 +100,4 @@ pub fn panel_section_header(label: impl Into<SharedString>, theme: &Theme) -> Di
         .font_semibold()
         .text_color(theme.muted_foreground)
         .child(label.into())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::focus_flash_alpha;
-
-    #[test]
-    fn test_focus_flash_alpha_holds_then_fades_smoothly() {
-        assert_eq!(focus_flash_alpha(-0.1), 1.0);
-        assert_eq!(focus_flash_alpha(0.0), 1.0);
-        assert_eq!(focus_flash_alpha(0.2), 1.0);
-        let mid = focus_flash_alpha(0.6);
-        assert!(mid > 0.0 && mid < 1.0);
-        assert!(focus_flash_alpha(0.8) < mid);
-        assert_eq!(focus_flash_alpha(1.0), 0.0);
-        assert_eq!(focus_flash_alpha(1.5), 0.0);
-    }
 }
