@@ -201,44 +201,30 @@ impl Render for GotoOffsetBar {
             Some(Err(err)) => div().px_1().text_xs().text_color(theme.danger).child(format!("{}", err)),
         };
 
-        div()
+        let header_strip = div()
             .flex()
-            .flex_col()
-            .gap_1p5()
-            .p_2()
-            .w(px(460.0))
-            .max_w_full()
-            .bg(theme.background)
-            .border_1()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .bg(theme.secondary.opacity(0.35))
+            .border_b_1()
             .border_color(theme.border)
-            .rounded_lg()
-            .shadow_xl()
-            .key_context("GotoOffsetBar")
-            .occlude_and_block_input()
-            .on_action(cx.listener(|this, _: &GotoJump, _, cx| {
-                this.execute_jump(false, cx);
-            }))
-            .on_action(cx.listener(|this, _: &GotoJumpExtend, _, cx| {
-                this.execute_jump(true, cx);
-            }))
-            .on_action(cx.listener(|_, _: &GotoDismiss, _, cx| {
-                cx.emit(GotoBarEvent::Dismiss);
-            }))
-            .on_action(cx.listener(|this, _: &GotoHistoryPrev, window, cx| {
-                this.navigate_history(true, window, cx);
-            }))
-            .on_action(cx.listener(|this, _: &GotoHistoryNext, window, cx| {
-                this.navigate_history(false, window, cx);
-            }))
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap_1p5()
+                    .gap_2()
                     .child(
                         div()
                             .flex()
                             .items_center()
+                            .p(px(2.0))
+                            .rounded_md()
+                            .bg(theme.background)
+                            .border_1()
+                            .border_color(theme.border)
                             .child(
                                 if self.radix == GotoRadix::Hex {
                                     Button::new("goto_radix_hex").label("Hex").primary().with_size(Size::XSmall)
@@ -262,32 +248,85 @@ impl Render for GotoOffsetBar {
                                 })),
                             ),
                     )
+                    .child(div().text_xs().text_color(theme.muted_foreground).child("Go to Address")),
+            )
+            .child(
+                Button::new("close")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Close)
+                    .tooltip("Close (Esc)")
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.emit(GotoBarEvent::Dismiss);
+                    })),
+            );
+
+        div()
+            .flex()
+            .flex_col()
+            .w(px(460.0))
+            .max_w_full()
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .rounded_lg()
+            .shadow_xl()
+            .overflow_hidden()
+            .key_context("GotoOffsetBar")
+            .occlude_and_block_input()
+            .on_action(cx.listener(|this, _: &GotoJump, _, cx| {
+                this.execute_jump(false, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GotoJumpExtend, _, cx| {
+                this.execute_jump(true, cx);
+            }))
+            .on_action(cx.listener(|_, _: &GotoDismiss, _, cx| {
+                cx.emit(GotoBarEvent::Dismiss);
+            }))
+            .on_action(cx.listener(|this, _: &GotoHistoryPrev, window, cx| {
+                this.navigate_history(true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GotoHistoryNext, window, cx| {
+                this.navigate_history(false, window, cx);
+            }))
+            .child(header_strip)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1p5()
+                    .p_2()
                     .child(
                         div()
-                            .flex_1()
-                            .child(Input::new(&self.input).prefix(Icon::new(IconName::Hash).size_3p5()).cleanable(true)),
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .child(
+                                div().flex_1().min_w_0().child(
+                                    Input::new(&self.input)
+                                        .small()
+                                        .prefix(Icon::new(IconName::Hash).size_3p5().text_color(theme.muted_foreground))
+                                        .cleanable(true),
+                                ),
+                            )
+                            .child(
+                                div()
+                                    .w(px(56.0))
+                                    .flex_shrink_0()
+                                    .child(
+                                        Button::new("go_jump")
+                                            .w_full()
+                                            .label("Go")
+                                            .primary()
+                                            .small()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.execute_jump(false, cx);
+                                            })),
+                                    ),
+                            ),
                     )
-                    .child(
-                        Button::new("go_jump")
-                            .label("Go")
-                            .primary()
-                            .with_size(Size::XSmall)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.execute_jump(false, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("close")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Close)
-                            .tooltip("Close (Esc)")
-                            .on_click(cx.listener(|_, _, _, cx| {
-                                cx.emit(GotoBarEvent::Dismiss);
-                            })),
-                    ),
+                    .child(bottom_info),
             )
-            .child(bottom_info)
     }
 }
 

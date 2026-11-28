@@ -8,7 +8,6 @@ use gpui_kit::component::{
     ActiveTheme, Disableable, Icon, Sizable, Size,
     button::{Button, ButtonVariants},
     input::{self, Input, InputState},
-    toolbar::Toolbar,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{App, Context, Entity, EventEmitter, Focusable, IntoElement, KeyBinding, Render, Task, Window, actions, div, px};
@@ -467,6 +466,11 @@ impl SearchBar {
     }
 }
 
+const GUTTER_WIDTH: f32 = 24.0;
+const ACTION_COL_WIDTH: f32 = 128.0;
+const REPLACE_ALL_WIDTH: f32 = 44.0;
+const COL_GAP: f32 = 6.0;
+
 impl Render for SearchBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
@@ -484,123 +488,114 @@ impl Render for SearchBar {
             "Toggle Replace (Ctrl+H)"
         };
 
-        let find_row = div()
+        let header_strip = div()
             .flex()
             .items_center()
-            .gap_1p5()
+            .justify_between()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .bg(theme.secondary.opacity(0.35))
+            .border_b_1()
+            .border_color(theme.border)
             .child(
-                Button::new("toggle_replace")
-                    .ghost()
-                    .xsmall()
-                    .icon(if self.replace_visible {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronRight
-                    })
-                    .tooltip(replace_toggle_tooltip)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        let next = !this.replace_visible;
-                        this.set_replace_visible(next, cx);
-                        if next {
-                            this.focus_replace_and_select_all(window, cx);
-                        } else {
-                            this.focus_and_select_all(window, cx);
-                        }
-                    })),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .p(px(2.0))
+                            .rounded_md()
+                            .bg(theme.background)
+                            .border_1()
+                            .border_color(theme.border)
+                            .child(
+                                if self.mode == SearchMode::Hex {
+                                    Button::new("hex_mode").label("Hex").primary().with_size(Size::XSmall)
+                                } else {
+                                    Button::new("hex_mode").label("Hex").ghost().with_size(Size::XSmall)
+                                }
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.on_mode_change(SearchMode::Hex, window, cx);
+                                })),
+                            )
+                            .child(
+                                if self.mode == SearchMode::Text {
+                                    Button::new("text_mode").label("Text").primary().with_size(Size::XSmall)
+                                } else {
+                                    Button::new("text_mode").label("Text").ghost().with_size(Size::XSmall)
+                                }
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.on_mode_change(SearchMode::Text, window, cx);
+                                })),
+                            ),
+                    )
+                    .when(self.mode == SearchMode::Text, |el| {
+                        let match_case = !self.flags.case_insensitive;
+                        let regex_enabled = self.flags.regex;
+                        el.child(div().w(px(1.0)).h(px(14.0)).bg(theme.border))
+                            .child(
+                                if match_case {
+                                    Button::new("match_case").label("Aa").primary().with_size(Size::XSmall)
+                                } else {
+                                    Button::new("match_case").label("Aa").ghost().with_size(Size::XSmall)
+                                }
+                                .tooltip(if match_case {
+                                    "Match Case: On (click for case-insensitive)"
+                                } else {
+                                    "Match Case: Off (click for case-sensitive)"
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.toggle_case_insensitive(cx);
+                                })),
+                            )
+                            .child(
+                                if regex_enabled {
+                                    Button::new("regex_mode").label(".*").primary().with_size(Size::XSmall)
+                                } else {
+                                    Button::new("regex_mode").label(".*").ghost().with_size(Size::XSmall)
+                                }
+                                .tooltip("Use Regular Expression (bytes)")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.toggle_regex(cx);
+                                })),
+                            )
+                    }),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .child(
-                        if self.mode == SearchMode::Hex {
-                            Button::new("hex_mode").label("Hex").primary().with_size(Size::XSmall)
-                        } else {
-                            Button::new("hex_mode").label("Hex").ghost().with_size(Size::XSmall)
-                        }
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.on_mode_change(SearchMode::Hex, window, cx);
-                        })),
-                    )
-                    .child(
-                        if self.mode == SearchMode::Text {
-                            Button::new("text_mode").label("Text").primary().with_size(Size::XSmall)
-                        } else {
-                            Button::new("text_mode").label("Text").ghost().with_size(Size::XSmall)
-                        }
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.on_mode_change(SearchMode::Text, window, cx);
-                        })),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(140.0))
-                    .child(Input::new(&self.input).prefix(Icon::new(IconName::Search).size_3p5()).cleanable(true)),
-            )
-            .when(self.mode == SearchMode::Text, |el| {
-                let match_case = !self.flags.case_insensitive;
-                let regex_enabled = self.flags.regex;
-                el.child(
-                    if match_case {
-                        Button::new("match_case").label("Aa").primary().with_size(Size::XSmall)
-                    } else {
-                        Button::new("match_case").label("Aa").ghost().with_size(Size::XSmall)
-                    }
-                    .tooltip(if match_case {
-                        "Match Case: On (click for case-insensitive)"
-                    } else {
-                        "Match Case: Off (click for case-sensitive)"
+                    .gap_1p5()
+                    .when_some(self.wrapped_notice, |el, notice| {
+                        el.child(
+                            div()
+                                .px_1p5()
+                                .py(px(1.0))
+                                .rounded_sm()
+                                .bg(theme.secondary)
+                                .text_xs()
+                                .whitespace_nowrap()
+                                .text_color(theme.muted_foreground)
+                                .child(notice),
+                        )
                     })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.toggle_case_insensitive(cx);
-                    })),
-                )
-                .child(
-                    if regex_enabled {
-                        Button::new("regex_mode").label(".*").primary().with_size(Size::XSmall)
-                    } else {
-                        Button::new("regex_mode").label(".*").ghost().with_size(Size::XSmall)
-                    }
-                    .tooltip("Use Regular Expression (bytes)")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.toggle_regex(cx);
-                    })),
-                )
-            })
-            .when_some(match_label, |el, label| {
-                el.child(
-                    div()
-                        .px_1()
-                        .text_xs()
-                        .whitespace_nowrap()
-                        .text_color(if is_zero_matches { theme.danger } else { theme.muted_foreground })
-                        .child(label),
-                )
-            })
-            .child(
-                Toolbar::new("search-actions")
-                    .child(
-                        Button::new("prev")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::ChevronUp)
-                            .tooltip("Previous match (Shift+Enter)")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.emit_prev(cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("next")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::ChevronDown)
-                            .tooltip("Next match (Enter)")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.emit_next(cx);
-                            })),
-                    )
+                    .when_some(match_label, |el, label| {
+                        el.child(
+                            div()
+                                .px_1p5()
+                                .py(px(1.0))
+                                .rounded_sm()
+                                .when(is_zero_matches, |d| d.bg(theme.danger.opacity(0.12)))
+                                .text_xs()
+                                .whitespace_nowrap()
+                                .text_color(if is_zero_matches { theme.danger } else { theme.muted_foreground })
+                                .child(label),
+                        )
+                    })
                     .child(
                         Button::new("close")
                             .ghost()
@@ -613,75 +608,170 @@ impl Render for SearchBar {
                     ),
             );
 
+        let find_row = div()
+            .flex()
+            .items_center()
+            .gap(px(COL_GAP))
+            .child(
+                div().w(px(GUTTER_WIDTH)).flex_shrink_0().flex().items_center().justify_center().child(
+                    Button::new("toggle_replace")
+                        .ghost()
+                        .xsmall()
+                        .icon(if self.replace_visible {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .tooltip(replace_toggle_tooltip)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            let next = !this.replace_visible;
+                            this.set_replace_visible(next, cx);
+                            if next {
+                                this.focus_replace_and_select_all(window, cx);
+                            } else {
+                                this.focus_and_select_all(window, cx);
+                            }
+                        })),
+                ),
+            )
+            .child(
+                div().flex_1().min_w_0().child(
+                    Input::new(&self.input)
+                        .small()
+                        .prefix(Icon::new(IconName::Search).size_3p5().text_color(theme.muted_foreground))
+                        .cleanable(true),
+                ),
+            )
+            .child(
+                div()
+                    .w(px(ACTION_COL_WIDTH))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div().flex_1().child(
+                            Button::new("prev")
+                                .w_full()
+                                .small()
+                                .icon(IconName::ChevronUp)
+                                .tooltip("Previous match (Shift+Enter)")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.emit_prev(cx);
+                                })),
+                        ),
+                    )
+                    .child(
+                        div().flex_1().child(
+                            Button::new("next")
+                                .w_full()
+                                .small()
+                                .icon(IconName::ChevronDown)
+                                .tooltip("Next match (Enter)")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.emit_next(cx);
+                                })),
+                        ),
+                    ),
+            );
+
         let replace_row = self.replace_visible.then(|| {
             div()
                 .flex()
                 .items_center()
-                .gap_1p5()
-                .pl(px(28.0))
+                .gap(px(COL_GAP))
+                .child(div().w(px(GUTTER_WIDTH)).flex_shrink_0())
+                .child(
+                    div().flex_1().min_w_0().child(
+                        Input::new(&self.replace_input)
+                            .small()
+                            .prefix(Icon::new(IconName::Replace).size_3p5().text_color(theme.muted_foreground))
+                            .cleanable(true),
+                    ),
+                )
                 .child(
                     div()
-                        .flex_1()
-                        .min_w(px(140.0))
-                        .child(Input::new(&self.replace_input).prefix(Icon::new(IconName::Replace).size_3p5()).cleanable(true)),
-                )
-                .child(
-                    Button::new("replace_one")
-                        .label("Replace")
-                        .with_size(Size::XSmall)
-                        .disabled(replace_disabled)
-                        .tooltip(if self.is_read_only {
-                            "File is read-only"
-                        } else {
-                            "Replace current match (Enter in replace field)"
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.emit_replace(cx);
-                        })),
-                )
-                .child(
-                    Button::new("replace_all")
-                        .label("All")
-                        .with_size(Size::XSmall)
-                        .disabled(replace_disabled)
-                        .tooltip(if self.is_read_only {
-                            "File is read-only"
-                        } else {
-                            "Replace all matches (single Undo step)"
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.emit_replace_all(cx);
-                        })),
+                        .w(px(ACTION_COL_WIDTH))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            div().flex_1().child(
+                                Button::new("replace_one")
+                                    .w_full()
+                                    .label("Replace")
+                                    .small()
+                                    .disabled(replace_disabled)
+                                    .tooltip(if self.is_read_only {
+                                        "File is read-only"
+                                    } else {
+                                        "Replace current match (Enter in replace field)"
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.emit_replace(cx);
+                                    })),
+                            ),
+                        )
+                        .child(
+                            div().w(px(REPLACE_ALL_WIDTH)).flex_shrink_0().child(
+                                Button::new("replace_all")
+                                    .w_full()
+                                    .label("All")
+                                    .small()
+                                    .disabled(replace_disabled)
+                                    .tooltip(if self.is_read_only {
+                                        "File is read-only"
+                                    } else {
+                                        "Replace all matches (single Undo step)"
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.emit_replace_all(cx);
+                                    })),
+                            ),
+                        ),
                 )
         });
 
         let feedback_row = if let Some(err) = query_error.or_else(|| self.replace_error.clone()) {
-            Some(div().px_1().text_xs().text_color(theme.danger).child(err))
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .pl(px(GUTTER_WIDTH + COL_GAP))
+                    .text_xs()
+                    .text_color(theme.danger)
+                    .child(Icon::new(IconName::CircleAlert).size_3().text_color(theme.danger))
+                    .child(err),
+            )
         } else if self.replace_visible && self.is_read_only {
             Some(
                 div()
-                    .px_1()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .pl(px(GUTTER_WIDTH + COL_GAP))
                     .text_xs()
                     .text_color(theme.warning)
+                    .child(Icon::new(IconName::TriangleAlert).size_3().text_color(theme.warning))
                     .child("Read-only mode is enabled — unlock read-only to replace bytes"),
             )
         } else {
-            self.wrapped_notice
-                .map(|notice| div().px_1().text_xs().text_color(theme.muted_foreground).child(notice))
+            None
         };
 
         div()
             .flex()
             .flex_col()
-            .gap_1p5()
-            .p_2()
-            .w(px(540.0))
+            .w(px(500.0))
             .max_w_full()
             .bg(theme.background)
             .border_1()
             .border_color(theme.border)
             .rounded_lg()
             .shadow_xl()
+            .overflow_hidden()
             .key_context("SearchBar")
             .occlude_and_block_input()
             .on_action(cx.listener(|this, _: &SearchBarEnter, window, cx| {
@@ -709,9 +799,17 @@ impl Render for SearchBar {
             .on_action(cx.listener(|this, _: &SearchHistoryNext, window, cx| {
                 this.navigate_history(false, window, cx);
             }))
-            .child(find_row)
-            .children(replace_row)
-            .children(feedback_row)
+            .child(header_strip)
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1p5()
+                    .p_2()
+                    .child(find_row)
+                    .children(replace_row)
+                    .children(feedback_row),
+            )
     }
 }
 
