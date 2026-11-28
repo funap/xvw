@@ -13,6 +13,7 @@ use gpui_kit::component::input::{self, Input, InputState};
 use gpui_kit::component::menu::ContextMenuExt as _;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, button::Button, button::ButtonVariants, h_flex, v_flex};
 use gpui_kit::component::{Disableable, Icon, Selectable, Sizable, Size, StyledExt as _, WindowExt as _};
 use gpui_kit::prelude::*;
@@ -90,6 +91,7 @@ pub struct ChecksumPanel {
     cached_states: HashMap<EntityId, CachedChecksumState>,
     _editor_subscription: Option<Subscription>,
     _compare_subscription: Option<Subscription>,
+    _hex_case_subscription: Subscription,
     calculation_task: Option<Task<()>>,
 }
 
@@ -102,6 +104,10 @@ impl ChecksumPanel {
             if matches!(event, input::InputEvent::Change | input::InputEvent::Focus | input::InputEvent::Blur) {
                 cx.notify();
             }
+        });
+
+        let hex_case_subscription = cx.observe_global::<HexCase>(|_this, cx| {
+            cx.notify();
         });
 
         let mut this = Self {
@@ -121,6 +127,7 @@ impl ChecksumPanel {
             cached_states: HashMap::new(),
             _editor_subscription: None,
             _compare_subscription: Some(compare_subscription),
+            _hex_case_subscription: hex_case_subscription,
             calculation_task: None,
         };
         this.set_editor(editor, cx);
@@ -957,6 +964,7 @@ impl ChecksumPanel {
                 .gap_2()
                 .cursor_pointer()
                 .hover(|style| style.bg(theme.muted))
+                .tooltip(|window, cx| Tooltip::new("Click to jump to range in hex view").build(window, cx))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.navigate_to_range(nav_range.clone(), false, cx);
                 }))
@@ -1024,6 +1032,7 @@ impl ChecksumPanel {
                     .gap_1p5()
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.secondary_hover))
+                    .tooltip(|window, cx| Tooltip::new("Click to jump to and select the pinned range").build(window, cx))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.navigate_to_range(res_range.clone(), true, cx);
                     }))
@@ -1212,9 +1221,11 @@ impl Render for ChecksumPanel {
 
         let top_toolbar = h_flex()
             .w_full()
+            .flex_wrap()
             .justify_between()
             .items_center()
-            .gap_2()
+            .gap_x_2()
+            .gap_y_1p5()
             .child(self.render_segmented_control(&theme, cx))
             .child(self.render_action_controls(data_len, cx));
 
@@ -1248,7 +1259,7 @@ impl Render for ChecksumPanel {
                 _ => &[],
             };
 
-            let mut rows = v_flex().flex_1().min_w_0().py_2().pl_2().pr_1().gap_0p5();
+            let mut rows = v_flex().flex_1().min_h_0().min_w_0().py_2().pl_2().pr_1().gap_0p5();
 
             for &cat in ChecksumCategory::ALL {
                 let cat_algos: Vec<ChecksumAlgorithm> = ChecksumAlgorithm::ALL.iter().copied().filter(|a| a.category() == cat).collect();
