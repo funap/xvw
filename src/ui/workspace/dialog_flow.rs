@@ -72,7 +72,7 @@ impl Workspace {
                     self.sync_active_editor(window, cx);
                     if let Some(editor_view) = self.effective_editor_view(cx) {
                         editor_view.update(cx, |view, cx| {
-                            view.hex_view().read(cx).focus_handle(cx).focus(window, cx);
+                            view.focus_editor(window, cx);
                         });
                     }
                     if action.record_recent {

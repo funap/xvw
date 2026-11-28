@@ -24,7 +24,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Action, Anchor, AnyElement, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, KeyDownEvent, ParentElement, Render,
+    Anchor, AnyElement, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, KeyDownEvent, ParentElement, Render,
     SharedString, Subscription, Window, div, px,
 };
 
@@ -35,9 +35,6 @@ use theme_selector::{ThemeListDelegate, ThemePreviewState, cycle_theme_index};
 
 const CONTROL_WIDTH: f32 = 220.0;
 const RESET_SLOT_WIDTH: f32 = 28.0;
-
-#[derive(Clone, PartialEq, Action)]
-pub struct UpdateSettingInput;
 
 pub(crate) fn validate_font_family(value: &str) -> Result<String, String> {
     let trimmed = value.trim();
@@ -172,12 +169,12 @@ impl SettingsView {
             }
         }));
 
-        subscriptions.push(cx.observe_global::<Appearance>(|_, cx| {
-            cx.dispatch_action(&UpdateSettingInput);
+        subscriptions.push(cx.observe_global_in::<Appearance>(window, |this, window, cx| {
+            this.sync_inputs_from_globals(window, cx);
         }));
 
-        subscriptions.push(cx.observe_global::<BytesPerRow>(|_, cx| {
-            cx.dispatch_action(&UpdateSettingInput);
+        subscriptions.push(cx.observe_global_in::<BytesPerRow>(window, |this, window, cx| {
+            this.sync_inputs_from_globals(window, cx);
         }));
 
         subscriptions.push(cx.observe_global::<Theme>(|_, cx| {
@@ -212,8 +209,8 @@ impl SettingsView {
             cx.notify();
         }));
 
-        subscriptions.push(cx.observe_global::<StructureYamlShaThreshold>(|_, cx| {
-            cx.dispatch_action(&UpdateSettingInput);
+        subscriptions.push(cx.observe_global_in::<StructureYamlShaThreshold>(window, |this, window, cx| {
+            this.sync_inputs_from_globals(window, cx);
         }));
 
         subscriptions.push(cx.observe_global::<StructureYamlIncludeOffsets>(|_, cx| {
@@ -318,11 +315,11 @@ impl SettingsView {
             }
         }));
 
-        subscriptions.push(cx.subscribe(&theme_select, |this, _, _event: &DismissEvent, cx| {
+        subscriptions.push(cx.subscribe_in(&theme_select, window, |this, _, _event: &DismissEvent, window, cx| {
             let origin = this.theme_preview_state.borrow_mut().cancel();
             if let Some(origin) = origin {
                 crate::theme::apply_theme_by_name(&origin, None, cx);
-                cx.dispatch_action(&UpdateSettingInput);
+                this.sync_inputs_from_globals(window, cx);
                 cx.notify();
             }
         }));
@@ -372,7 +369,7 @@ impl SettingsView {
         }
     }
 
-    fn on_action_update_setting_input(&mut self, _action: &UpdateSettingInput, window: &mut Window, cx: &mut Context<Self>) {
+    fn sync_inputs_from_globals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let appearance = cx.global::<Appearance>();
         let family = appearance.font_family.clone();
         let size_str = appearance.font_size.to_string();
@@ -1539,7 +1536,6 @@ impl Render for SettingsView {
             .overflow_y_scroll()
             .bg(theme.background)
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(Self::on_action_update_setting_input))
             .child(
                 div()
                     .w_full()

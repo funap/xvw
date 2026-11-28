@@ -569,3 +569,89 @@ fn test_filter_dirty_documents_still_open_matches_same_path_and_keeps_unmatched(
     assert_eq!(filtered[0].1, "other.bin");
     assert!(Arc::ptr_eq(&filtered[0].0, &closing_b));
 }
+
+#[test]
+fn test_resolve_focus_restore_target_priority() {
+    use super::{FocusRestoreContext, FocusRestoreTarget, resolve_focus_restore_target};
+
+    // Active EditorView wins even when other surfaces exist.
+    assert_eq!(
+        resolve_focus_restore_target(FocusRestoreContext {
+            has_active_editor_view: true,
+            has_active_diff_view: true,
+            has_active_tab_scratchpad: true,
+            has_any_active_tab: true,
+            is_right_panel_visible: true,
+        }),
+        FocusRestoreTarget::ActiveEditorView
+    );
+
+    // Active DiffView is next.
+    assert_eq!(
+        resolve_focus_restore_target(FocusRestoreContext {
+            has_active_editor_view: false,
+            has_active_diff_view: true,
+            has_active_tab_scratchpad: false,
+            has_any_active_tab: true,
+            is_right_panel_visible: true,
+        }),
+        FocusRestoreTarget::ActiveDiffView
+    );
+
+    // Active Scratchpad tab takes precedence over generic active tab and right panel.
+    assert_eq!(
+        resolve_focus_restore_target(FocusRestoreContext {
+            has_active_editor_view: false,
+            has_active_diff_view: false,
+            has_active_tab_scratchpad: true,
+            has_any_active_tab: true,
+            is_right_panel_visible: true,
+        }),
+        FocusRestoreTarget::ActiveTabScratchpad
+    );
+
+    // Other rendered active tabs (e.g. SettingsView, VisualMapPanel) receive focus
+    // rather than trying to focus an unmounted background editor tab.
+    assert_eq!(
+        resolve_focus_restore_target(FocusRestoreContext {
+            has_active_editor_view: false,
+            has_active_diff_view: false,
+            has_active_tab_scratchpad: false,
+            has_any_active_tab: true,
+            is_right_panel_visible: true,
+        }),
+        FocusRestoreTarget::ActiveOtherTab
+    );
+
+    // When no tabs are open, fall back to the visible right scratchpad panel, then WorkspaceRoot.
+    assert_eq!(
+        resolve_focus_restore_target(FocusRestoreContext {
+            has_active_editor_view: false,
+            has_active_diff_view: false,
+            has_active_tab_scratchpad: false,
+            has_any_active_tab: false,
+            is_right_panel_visible: true,
+        }),
+        FocusRestoreTarget::RightPanelScratchpad
+    );
+    assert_eq!(
+        resolve_focus_restore_target(FocusRestoreContext {
+            has_active_editor_view: false,
+            has_active_diff_view: false,
+            has_active_tab_scratchpad: false,
+            has_any_active_tab: false,
+            is_right_panel_visible: false,
+        }),
+        FocusRestoreTarget::WorkspaceRoot
+    );
+}
+
+#[test]
+fn test_should_restore_focus_on_focus_lost_guards_overlays() {
+    use super::should_restore_focus_on_focus_lost;
+
+    assert!(should_restore_focus_on_focus_lost(false, false));
+    assert!(!should_restore_focus_on_focus_lost(true, false));
+    assert!(!should_restore_focus_on_focus_lost(false, true));
+    assert!(!should_restore_focus_on_focus_lost(true, true));
+}

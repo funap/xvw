@@ -102,6 +102,54 @@ pub struct Workspace {
     active_diff_menu_subscription: RefCell<Option<Subscription>>,
 }
 
+/// Focus target selected when restoring workspace focus (e.g. after dismissing a side panel,
+/// palette, or recovering from focus loss).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FocusRestoreTarget {
+    ActiveEditorView,
+    ActiveDiffView,
+    ActiveTabScratchpad,
+    ActiveOtherTab,
+    RightPanelScratchpad,
+    WorkspaceRoot,
+}
+
+/// Snapshot of workspace surface availability used to pick a focus restoration target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FocusRestoreContext {
+    pub has_active_editor_view: bool,
+    pub has_active_diff_view: bool,
+    pub has_active_tab_scratchpad: bool,
+    pub has_any_active_tab: bool,
+    pub is_right_panel_visible: bool,
+}
+
+/// Resolves the highest-priority rendered surface that should receive focus.
+///
+/// Always prefers the currently active (rendered) tab over background tabs so
+/// focus is never directed to an unmounted view.
+pub(crate) fn resolve_focus_restore_target(ctx: FocusRestoreContext) -> FocusRestoreTarget {
+    if ctx.has_active_editor_view {
+        FocusRestoreTarget::ActiveEditorView
+    } else if ctx.has_active_diff_view {
+        FocusRestoreTarget::ActiveDiffView
+    } else if ctx.has_active_tab_scratchpad {
+        FocusRestoreTarget::ActiveTabScratchpad
+    } else if ctx.has_any_active_tab {
+        FocusRestoreTarget::ActiveOtherTab
+    } else if ctx.is_right_panel_visible {
+        FocusRestoreTarget::RightPanelScratchpad
+    } else {
+        FocusRestoreTarget::WorkspaceRoot
+    }
+}
+
+/// Returns whether the window-level `on_focus_lost` handler should restore focus
+/// to the workspace's active surface.
+pub(crate) fn should_restore_focus_on_focus_lost(has_active_dialog: bool, has_active_palette: bool) -> bool {
+    !has_active_dialog && !has_active_palette
+}
+
 impl Workspace {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let pane_tree = cx.new(|_| PaneTree::new());
@@ -331,14 +379,21 @@ impl Workspace {
         )
         .detach();
 
-        cx.subscribe(&left_panel, |_, _, event: &FileTreePanelEvent, cx| match event {
+        cx.subscribe_in(&left_panel, window, |this, _, event: &FileTreePanelEvent, window, cx| match event {
             FileTreePanelEvent::OpenFile { path, format, record_recent } => {
                 let action = if *record_recent {
                     crate::actions::OpenFile::with_format(path.to_string_lossy().to_string(), *format)
                 } else {
                     crate::actions::OpenFile::without_recording(path.to_string_lossy().to_string(), *format)
                 };
-                cx.dispatch_action(&action);
+                this.on_action_open_file(&action, window, cx);
+            }
+        })
+        .detach();
+
+        cx.on_focus_lost(window, |this, window, cx| {
+            if should_restore_focus_on_focus_lost(window.has_active_dialog(cx), this.active_palette.is_some()) {
+                this.restore_editor_focus(window, cx);
             }
         })
         .detach();
@@ -1215,31 +1270,62 @@ impl Workspace {
     }
 
     pub(crate) fn restore_editor_focus(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(editor_view) = self.active_editor_view(cx) {
-            editor_view.update(cx, |view, cx| {
-                view.hex_view().read(cx).focus_handle(cx).focus(window, cx);
-            });
-        } else if let Some(diff_view) = self.active_diff_view(cx) {
-            let handle = diff_view.read(cx).active_side_focus_handle(cx);
-            handle.focus(window, cx);
-        } else if let Some(scratchpad) = self
+        let active_editor_view = self.active_editor_view(cx);
+        let active_diff_view = self.active_diff_view(cx);
+        let active_tab_scratchpad = self
             .pane_tree
             .read(cx)
-            .active_tab_as::<Entity<crate::ui::views::scratchpad_view::ScratchpadView>>(cx)
-        {
-            scratchpad.update(cx, |sp, cx| {
-                sp.focus(window, cx);
-            });
-        } else if let Some(editor_view) = self.effective_editor_view(cx) {
-            editor_view.update(cx, |view, cx| {
-                view.hex_view().read(cx).focus_handle(cx).focus(window, cx);
-            });
-        } else if let Some(scratchpad) = self.active_scratchpad(cx) {
-            scratchpad.update(cx, |sp, cx| {
-                sp.focus(window, cx);
-            });
-        } else {
-            self.focus_handle.focus(window, cx);
+            .active_tab_as::<Entity<crate::ui::views::scratchpad_view::ScratchpadView>>(cx);
+        let active_tab_focus_handle = self
+            .pane_tree
+            .read(cx)
+            .active_group(cx)
+            .and_then(|group| group.read(cx).active_tab().map(|tab| tab.focus_handle(cx)));
+
+        let target = resolve_focus_restore_target(FocusRestoreContext {
+            has_active_editor_view: active_editor_view.is_some(),
+            has_active_diff_view: active_diff_view.is_some(),
+            has_active_tab_scratchpad: active_tab_scratchpad.is_some(),
+            has_any_active_tab: active_tab_focus_handle.is_some(),
+            is_right_panel_visible: self.is_right_panel_visible,
+        });
+
+        match target {
+            FocusRestoreTarget::ActiveEditorView => {
+                if let Some(editor_view) = active_editor_view {
+                    editor_view.update(cx, |view, cx| {
+                        view.focus_editor(window, cx);
+                    });
+                }
+            }
+            FocusRestoreTarget::ActiveDiffView => {
+                if let Some(diff_view) = active_diff_view {
+                    let handle = diff_view.read(cx).active_side_focus_handle(cx);
+                    handle.focus(window, cx);
+                }
+            }
+            FocusRestoreTarget::ActiveTabScratchpad => {
+                if let Some(scratchpad) = active_tab_scratchpad {
+                    scratchpad.update(cx, |sp, cx| {
+                        sp.focus(window, cx);
+                    });
+                }
+            }
+            FocusRestoreTarget::ActiveOtherTab => {
+                if let Some(handle) = active_tab_focus_handle {
+                    handle.focus(window, cx);
+                } else {
+                    self.focus_handle.focus(window, cx);
+                }
+            }
+            FocusRestoreTarget::RightPanelScratchpad => {
+                self.scratchpad_panel.update(cx, |sp, cx| {
+                    sp.focus(window, cx);
+                });
+            }
+            FocusRestoreTarget::WorkspaceRoot => {
+                self.focus_handle.focus(window, cx);
+            }
         }
     }
 

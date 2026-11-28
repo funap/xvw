@@ -11,7 +11,7 @@ use gpui_kit::component::{
     input::{self, Input, InputState},
 };
 use gpui_kit::prelude::*;
-use gpui_kit::{App, Context, Entity, EventEmitter, IntoElement, KeyBinding, Render, Window, actions, div, px};
+use gpui_kit::{App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, KeyBinding, Render, Window, actions, div, px};
 
 use super::history::InputHistory;
 
@@ -26,6 +26,7 @@ pub enum GotoBarEvent {
 }
 
 pub struct GotoOffsetBar {
+    focus_handle: FocusHandle,
     input: Entity<InputState>,
     radix: GotoRadix,
     current_cursor: usize,
@@ -41,6 +42,7 @@ impl EventEmitter<GotoBarEvent> for GotoOffsetBar {}
 
 impl GotoOffsetBar {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let focus_handle = cx.focus_handle();
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Go to address or range..."));
 
         // Subscribe to input changes
@@ -56,6 +58,7 @@ impl GotoOffsetBar {
         .detach();
 
         Self {
+            focus_handle,
             input,
             radix: GotoRadix::Hex,
             current_cursor: 0,
@@ -145,6 +148,12 @@ impl GotoOffsetBar {
                 });
             }
         }
+    }
+}
+
+impl Focusable for GotoOffsetBar {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
     }
 }
 
@@ -272,6 +281,7 @@ impl Render for GotoOffsetBar {
             .rounded_lg()
             .shadow_xl()
             .overflow_hidden()
+            .track_focus(&self.focus_handle)
             .key_context("GotoOffsetBar")
             .occlude_and_block_input()
             .on_action(cx.listener(|this, _: &GotoJump, _, cx| {

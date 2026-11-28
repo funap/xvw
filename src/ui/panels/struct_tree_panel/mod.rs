@@ -921,9 +921,8 @@ impl StructTreePanel {
         cx.notify();
     }
 
-    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+    fn dismiss(&mut self, _: &Dismiss, _window: &mut Window, cx: &mut Context<Self>) {
         cx.emit(StructTreePanelEvent::FocusEditor);
-        window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
     fn on_action_expand_all(&mut self, _: &crate::actions::ExpandAllStructure, _window: &mut Window, cx: &mut Context<Self>) {

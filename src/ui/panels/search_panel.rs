@@ -250,7 +250,7 @@ impl SearchPanel {
                 .loop_selection(false)
         });
 
-        let table_subscription = cx.subscribe_in(&table_state, window, |this, _, event: &TableEvent, window, cx| match event {
+        let table_subscription = cx.subscribe_in(&table_state, window, |this, _, event: &TableEvent, _window, cx| match event {
             TableEvent::SelectRow(row_ix) => {
                 if this.selected_index != Some(*row_ix) {
                     this.select_item(*row_ix, cx);
@@ -259,7 +259,6 @@ impl SearchPanel {
             TableEvent::DoubleClickedRow(row_ix) => {
                 this.select_item(*row_ix, cx);
                 cx.emit(SearchPanelEvent::FocusEditor);
-                window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
             }
             _ => {}
         });
@@ -574,17 +573,15 @@ impl SearchPanel {
         }
     }
 
-    fn confirm_select(&mut self, _: &ConfirmSelect, window: &mut Window, cx: &mut Context<Self>) {
+    fn confirm_select(&mut self, _: &ConfirmSelect, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(idx) = self.selected_index {
             self.select_item(idx, cx);
             cx.emit(SearchPanelEvent::FocusEditor);
-            window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
         }
     }
 
-    fn dismiss_table(&mut self, _: &DismissTable, window: &mut Window, cx: &mut Context<Self>) {
+    fn dismiss_table(&mut self, _: &DismissTable, _window: &mut Window, cx: &mut Context<Self>) {
         cx.emit(SearchPanelEvent::FocusEditor);
-        window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
     fn clear_results_action(&mut self, _: &ClearResults, _: &mut Window, cx: &mut Context<Self>) {

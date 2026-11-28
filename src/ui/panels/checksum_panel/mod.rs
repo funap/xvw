@@ -253,9 +253,8 @@ impl ChecksumPanel {
         self.last_observed_signature = self.current_signature(cx);
     }
 
-    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+    fn dismiss(&mut self, _: &Dismiss, _window: &mut Window, cx: &mut Context<Self>) {
         cx.emit(ChecksumPanelEvent::FocusEditor);
-        window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
     fn focus_panel(&mut self, _: &FocusPanel, window: &mut Window, cx: &mut Context<Self>) {

@@ -403,6 +403,11 @@ pub fn init(cx: &mut App) {
             workspace.on_action_toggle_edit_column(&ToggleEditColumn, window, cx);
         });
     });
+    cx.on_action::<FocusHexView>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_focus_hex_view(&FocusHexView, window, cx);
+        });
+    });
 
     cx.activate(true);
 }

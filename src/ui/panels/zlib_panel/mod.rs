@@ -119,7 +119,7 @@ impl ZlibPanel {
                 .loop_selection(false)
         });
 
-        let table_subscription = cx.subscribe_in(&table_state, window, |this, _, event: &TableEvent, window, cx| match event {
+        let table_subscription = cx.subscribe_in(&table_state, window, |this, _, event: &TableEvent, _window, cx| match event {
             TableEvent::SelectRow(row_ix) => {
                 if let Some(index) = this.resolve_visible_row_index(*row_ix, cx)
                     && this.selected_index != Some(index)
@@ -131,7 +131,6 @@ impl ZlibPanel {
                 if let Some(index) = this.resolve_visible_row_index(*row_ix, cx) {
                     this.select_item_at_row(index, Some(*row_ix), false, cx);
                     cx.emit(ZlibPanelEvent::FocusEditor);
-                    window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
                 }
             }
             _ => {}
@@ -581,7 +580,7 @@ impl ZlibPanel {
         self.decompress_index(action.index, window, cx);
     }
 
-    fn confirm_select(&mut self, _: &ConfirmSelect, window: &mut Window, cx: &mut Context<Self>) {
+    fn confirm_select(&mut self, _: &ConfirmSelect, _window: &mut Window, cx: &mut Context<Self>) {
         let target = {
             let table = self.table_state.read(cx);
             let visible_indices = table.delegate().visible_indices();
@@ -593,12 +592,10 @@ impl ZlibPanel {
             self.select_item_at_row(index, Some(row_ix), false, cx);
         }
         cx.emit(ZlibPanelEvent::FocusEditor);
-        window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
-    fn dismiss_table(&mut self, _: &DismissTable, window: &mut Window, cx: &mut Context<Self>) {
+    fn dismiss_table(&mut self, _: &DismissTable, _window: &mut Window, cx: &mut Context<Self>) {
         cx.emit(ZlibPanelEvent::FocusEditor);
-        window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
     fn clear_results(&mut self, _: &ClearResults, _: &mut Window, cx: &mut Context<Self>) {

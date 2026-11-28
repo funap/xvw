@@ -165,13 +165,13 @@ impl EditorView {
             }
             SearchBarEvent::Dismiss => {
                 this.dismiss_search(cx);
-                cx.dispatch_action(&FocusHexView);
+                this.focus_editor(window, cx);
                 cx.notify();
             }
         })
         .detach();
 
-        cx.subscribe(&goto_bar, |this, _, event: &GotoBarEvent, cx| match event {
+        cx.subscribe_in(&goto_bar, window, |this, _, event: &GotoBarEvent, window, cx| match event {
             GotoBarEvent::Jump { offset, extend_selection } => {
                 let target = *offset;
                 let extend = *extend_selection;
@@ -185,7 +185,7 @@ impl EditorView {
                 this.hex_view.update(cx, |view, cx| {
                     view.scroll_to_byte_if_needed(cursor_offset, cx);
                 });
-                cx.dispatch_action(&FocusHexView);
+                this.focus_editor(window, cx);
                 cx.notify();
             }
             GotoBarEvent::SelectRange { range } => {
@@ -200,13 +200,13 @@ impl EditorView {
                 this.hex_view.update(cx, |view, cx| {
                     view.scroll_to_byte_if_needed(cursor_offset, cx);
                 });
-                cx.dispatch_action(&FocusHexView);
+                this.focus_editor(window, cx);
                 cx.notify();
             }
             GotoBarEvent::Dismiss => {
                 this.is_goto_visible = false;
                 this.update_top_overlay_state(cx);
-                cx.dispatch_action(&FocusHexView);
+                this.focus_editor(window, cx);
                 cx.notify();
             }
         })
@@ -633,7 +633,7 @@ impl EditorView {
                 bar.focus(window, cx);
             });
         } else {
-            self.hex_view.read(cx).focus_handle(cx).focus(window, cx);
+            self.focus_editor(window, cx);
         }
         self.update_top_overlay_state(cx);
         cx.notify();
@@ -941,7 +941,7 @@ impl EditorView {
         }
         self.perform_search_next(cx);
         if !self.is_search_visible {
-            self.hex_view.read(cx).focus_handle(cx).focus(window, cx);
+            self.focus_editor(window, cx);
         }
     }
 
@@ -993,7 +993,7 @@ impl EditorView {
         }
         self.perform_search_prev(cx);
         if !self.is_search_visible {
-            self.hex_view.read(cx).focus_handle(cx).focus(window, cx);
+            self.focus_editor(window, cx);
         }
     }
 
@@ -1148,15 +1148,20 @@ impl EditorView {
         cx.notify();
     }
 
-    pub fn focus_hex_view(&mut self, _: &FocusHexView, window: &mut Window, cx: &mut Context<Self>) {
+    /// Focuses this editor view's underlying `HexView` directly.
+    pub fn focus_editor(&self, window: &mut Window, cx: &mut App) {
         self.hex_view.read(cx).focus_handle(cx).focus(window, cx);
+    }
+
+    pub fn focus_hex_view(&mut self, _: &FocusHexView, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_editor(window, cx);
     }
 
     pub fn select_all(&mut self, _: &SelectAll, window: &mut Window, cx: &mut Context<Self>) {
         self.editor.update(cx, |editor: &mut Editor, _| {
             editor.select_all();
         });
-        self.hex_view.read(cx).focus_handle(cx).focus(window, cx);
+        self.focus_editor(window, cx);
         cx.notify();
     }
 

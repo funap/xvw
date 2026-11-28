@@ -10,7 +10,7 @@ use gpui_kit::component::{
     input::{self, Input, InputState},
 };
 use gpui_kit::prelude::*;
-use gpui_kit::{App, Context, Entity, EventEmitter, Focusable, IntoElement, KeyBinding, Render, Task, Window, actions, div, px};
+use gpui_kit::{App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, KeyBinding, Render, Task, Window, actions, div, px};
 
 use super::history::InputHistory;
 
@@ -137,6 +137,7 @@ fn replace_placeholder(mode: SearchMode) -> &'static str {
 }
 
 pub struct SearchBar {
+    focus_handle: FocusHandle,
     input: Entity<InputState>,
     replace_input: Entity<InputState>,
     mode: SearchMode,
@@ -157,6 +158,7 @@ impl EventEmitter<SearchBarEvent> for SearchBar {}
 
 impl SearchBar {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let focus_handle = cx.focus_handle();
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(SearchMode::Hex.placeholder()));
         let replace_input = cx.new(|cx| InputState::new(window, cx).placeholder(replace_placeholder(SearchMode::Hex)));
 
@@ -211,6 +213,7 @@ impl SearchBar {
         .detach();
 
         Self {
+            focus_handle,
             input,
             replace_input,
             mode: SearchMode::Hex,
@@ -463,6 +466,12 @@ impl SearchBar {
                 cx.notify();
             }
         }
+    }
+}
+
+impl Focusable for SearchBar {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
     }
 }
 
@@ -772,6 +781,7 @@ impl Render for SearchBar {
             .rounded_lg()
             .shadow_xl()
             .overflow_hidden()
+            .track_focus(&self.focus_handle)
             .key_context("SearchBar")
             .occlude_and_block_input()
             .on_action(cx.listener(|this, _: &SearchBarEnter, window, cx| {

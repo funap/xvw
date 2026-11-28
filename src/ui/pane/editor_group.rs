@@ -483,13 +483,11 @@ impl Render for EditorGroup {
                                 let title = tab.title(cx);
                                 let title_for_drag = title.clone();
                                 let close_group = format!("tab-close-hover-{tab_id}");
-                                let tab_focus_handle = tab.focus_handle(cx);
                                 let is_workspace_active = self.is_workspace_active_tab(idx);
                                 let menu_action_context = group_focus_handle.clone();
 
                                 div()
                                     .id(ElementId::NamedInteger("tab-item".into(), tab_id as u64))
-                                    .track_focus(&tab_focus_handle)
                                     .relative()
                                     .flex()
                                     .flex_row()
