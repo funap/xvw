@@ -111,7 +111,7 @@ impl Render for ActivityBar {
                     .child(self.render_icon(Activity::Files, IconName::Files, activity_tooltip(Activity::Files, is_macos), cx))
                     .child(self.render_icon(Activity::Search, IconName::Search, activity_tooltip(Activity::Search, is_macos), cx))
                     .child(self.render_icon(Activity::Strings, IconName::SearchText, activity_tooltip(Activity::Strings, is_macos), cx))
-                    .child(self.render_icon(Activity::Zlib, IconName::Boxes, activity_tooltip(Activity::Zlib, is_macos), cx))
+                    .child(self.render_icon(Activity::Zlib, IconName::PackageSearch, activity_tooltip(Activity::Zlib, is_macos), cx))
                     .child(self.render_icon(Activity::Structure, IconName::Braces, activity_tooltip(Activity::Structure, is_macos), cx))
                     .child(self.render_icon(Activity::Inspector, IconName::Binary, activity_tooltip(Activity::Inspector, is_macos), cx))
                     .child(self.render_icon(Activity::Map, IconName::Map, activity_tooltip(Activity::Map, is_macos), cx))
