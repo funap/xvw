@@ -28,13 +28,14 @@ pub mod status_bar;
 #[cfg(test)]
 mod tests;
 pub mod title_bar;
+mod welcome;
 mod window;
 
 pub use window::init;
 
 pub use activity_bar::{Activity, ActivityBar, ActivityBarEvent};
 pub use status_bar::{StatusBar, StatusBarEvent};
-pub use title_bar::{AppTitleBar, AppTitleBarEvent};
+pub use title_bar::{AppTitleBar, AppTitleBarEvent, TitleBarState};
 
 /// Kind of palette currently supported in the workspace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -939,6 +940,7 @@ impl Workspace {
         let diff_changed = self.last_active_diff_id.get() != active_diff_id;
         if !editor_changed && !diff_changed {
             self.sync_native_menus(cx);
+            self.sync_title_bar(cx);
             if pane_tree_is_empty {
                 self.focus_handle.focus(window, cx);
             }
@@ -948,13 +950,21 @@ impl Workspace {
         self.last_active_diff_id.set(active_diff_id);
 
         if editor_changed {
-            let sub = effective_editor
-                .as_ref()
-                .map(|editor| cx.observe(editor, |this, _, cx| this.sync_native_menus(cx)));
+            let sub = effective_editor.as_ref().map(|editor| {
+                cx.observe(editor, |this, _, cx| {
+                    this.sync_native_menus(cx);
+                    this.sync_title_bar(cx);
+                })
+            });
             self.active_editor_menu_subscription.replace(sub);
         }
         if diff_changed {
-            let sub = active_diff_view.as_ref().map(|diff| cx.observe(diff, |this, _, cx| this.sync_native_menus(cx)));
+            let sub = active_diff_view.as_ref().map(|diff| {
+                cx.observe(diff, |this, _, cx| {
+                    this.sync_native_menus(cx);
+                    this.sync_title_bar(cx);
+                })
+            });
             self.active_diff_menu_subscription.replace(sub);
         }
 
@@ -973,10 +983,34 @@ impl Workspace {
         }
         self.on_focus_changed(cx);
         self.sync_native_menus(cx);
+        self.sync_title_bar(cx);
 
         if pane_tree_is_empty {
             self.focus_handle.focus(window, cx);
         }
+    }
+
+    pub(crate) fn sync_title_bar(&self, cx: &mut Context<Self>) {
+        let (document_title, is_dirty, is_read_only) = self
+            .pane_tree
+            .read(cx)
+            .active_group(cx)
+            .and_then(|group| {
+                let g = group.read(cx);
+                g.active_tab().map(|tab| (Some(tab.title(cx)), tab.is_dirty(cx), tab.is_read_only(cx)))
+            })
+            .unwrap_or((None, false, false));
+
+        let state = TitleBarState {
+            document_title,
+            is_dirty,
+            is_read_only,
+            is_left_panel_visible: self.is_left_panel_visible,
+            is_right_panel_visible: self.is_right_panel_visible,
+        };
+        self.title_bar.update(cx, |tb, cx| {
+            tb.set_state(state, cx);
+        });
     }
 
     pub(crate) fn set_left_panel_visible(&mut self, visible: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -998,6 +1032,7 @@ impl Workspace {
             }
 
             self.sync_activity_bar(cx);
+            self.sync_title_bar(cx);
             cx.notify();
         }
     }
@@ -1019,6 +1054,7 @@ impl Workspace {
             }
 
             self.sync_native_menus(cx);
+            self.sync_title_bar(cx);
             cx.notify();
         }
     }
