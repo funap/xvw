@@ -205,9 +205,80 @@ impl Command for DeleteCharCommand {
     }
 }
 
+/// Atomically replaces multiple non-overlapping byte ranges as a single undoable step.
+///
+/// Edits must be sorted in strictly ascending order of `position` with no overlap.
+/// Execution applies edits from highest offset to lowest so earlier offsets stay valid;
+/// undo restores edits from lowest offset to highest (exact inverse).
+pub struct BatchReplaceCommand {
+    /// Sorted ascending `(offset, old_bytes, new_bytes)`.
+    edits: Vec<(usize, Vec<u8>, Vec<u8>)>,
+    noop: bool,
+}
+
+impl BatchReplaceCommand {
+    pub fn new(edits: Vec<(usize, Vec<u8>, Vec<u8>)>) -> Self {
+        let filtered: Vec<_> = edits.into_iter().filter(|(_, old, new)| old != new).collect();
+        let noop = filtered.is_empty();
+        Self { edits: filtered, noop }
+    }
+}
+
+impl Command for BatchReplaceCommand {
+    fn execute(&mut self, doc: &mut Document) -> Option<EditDelta> {
+        if self.noop || doc.is_read_only() {
+            return None;
+        }
+        let first_offset = self.edits.first()?.0;
+        let orig_total_len = doc.buffer.len();
+        let mut applied = false;
+        for (offset, old, new) in self.edits.iter().rev() {
+            if doc.replace_bytes(*offset, old.len(), new) {
+                applied = true;
+            }
+        }
+        if !applied {
+            return None;
+        }
+        let new_total_len = doc.buffer.len();
+        Some(EditDelta {
+            offset: first_offset,
+            old_len: orig_total_len.saturating_sub(first_offset),
+            new_len: new_total_len.saturating_sub(first_offset),
+        })
+    }
+
+    fn undo(&mut self, doc: &mut Document) -> Option<EditDelta> {
+        if self.noop || doc.is_read_only() {
+            return None;
+        }
+        let first_offset = self.edits.first()?.0;
+        let orig_total_len = doc.buffer.len();
+        let mut applied = false;
+        for (offset, old, new) in &self.edits {
+            if doc.replace_bytes(*offset, new.len(), old) {
+                applied = true;
+            }
+        }
+        if !applied {
+            return None;
+        }
+        let new_total_len = doc.buffer.len();
+        Some(EditDelta {
+            offset: first_offset,
+            old_len: orig_total_len.saturating_sub(first_offset),
+            new_len: new_total_len.saturating_sub(first_offset),
+        })
+    }
+
+    fn is_noop(&self) -> bool {
+        self.noop
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DeleteCharCommand, EditDelta, InsertCharCommand, ReplaceRangeCommand};
+    use super::{BatchReplaceCommand, DeleteCharCommand, EditDelta, InsertCharCommand, ReplaceRangeCommand};
     use crate::core::buffer::Buffer;
     use crate::core::document::Document;
     use std::path::PathBuf;
@@ -318,5 +389,37 @@ mod tests {
         assert_eq!(doc.buffer.data(), b"abc");
         assert!(!doc.can_undo());
         assert!(!doc.is_dirty());
+    }
+
+    #[test]
+    fn batch_replace_command_round_trips_growing_and_shrinking() {
+        // Growing: "aa..aa..aa" -> "XXX..XXX..XXX"
+        let mut doc = document_with_content(b"aa..aa..aa");
+        let cmd = BatchReplaceCommand::new(vec![
+            (0, b"aa".to_vec(), b"XXX".to_vec()),
+            (4, b"aa".to_vec(), b"XXX".to_vec()),
+            (8, b"aa".to_vec(), b"XXX".to_vec()),
+        ]);
+        assert!(doc.execute_command(Box::new(cmd)).is_some());
+        assert_eq!(doc.buffer.data(), b"XXX..XXX..XXX");
+        assert!(doc.can_undo());
+
+        doc.undo();
+        assert_eq!(doc.buffer.data(), b"aa..aa..aa");
+
+        doc.redo();
+        assert_eq!(doc.buffer.data(), b"XXX..XXX..XXX");
+
+        // Shrinking to empty (deletion)
+        let cmd_del = BatchReplaceCommand::new(vec![
+            (0, b"XXX".to_vec(), Vec::new()),
+            (5, b"XXX".to_vec(), Vec::new()),
+            (10, b"XXX".to_vec(), Vec::new()),
+        ]);
+        assert!(doc.execute_command(Box::new(cmd_del)).is_some());
+        assert_eq!(doc.buffer.data(), b"....");
+
+        doc.undo();
+        assert_eq!(doc.buffer.data(), b"XXX..XXX..XXX");
     }
 }

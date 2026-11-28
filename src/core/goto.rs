@@ -181,7 +181,8 @@ fn detect_range_split(input: &str) -> Option<(&str, &str)> {
 /// - Line / Row syntax (`L10`, `line 10`, `:10`)
 /// - Range selection (`0xC6..0x119`, `0xC6..=0x119`, `0x100..0x200`, `..0x50`, `0x100..`, `0xC6 - 0x119`)
 ///
-/// Parses a goto offset expression from user input using an AddressMap to resolve physical memory addresses.
+/// Parses a goto offset expression from user input using an AddressMap to resolve physical memory addresses
+/// (assuming 16 bytes per row for line/row jumps).
 pub fn parse_goto_offset_with_map(
     input: &str,
     current_cursor: usize,
@@ -189,6 +190,20 @@ pub fn parse_goto_offset_with_map(
     default_radix: GotoRadix,
     address_map: &crate::core::address_map::AddressMap,
 ) -> Result<ParsedGotoOffset, GotoParseError> {
+    parse_goto_offset_with_context(input, current_cursor, total_size, default_radix, address_map, 16)
+}
+
+/// Parses a goto offset expression from user input using an AddressMap and actual `bytes_per_row`
+/// for `L<n>` / `line <n>` / `:<n>` row jumps.
+pub fn parse_goto_offset_with_context(
+    input: &str,
+    current_cursor: usize,
+    total_size: usize,
+    default_radix: GotoRadix,
+    address_map: &crate::core::address_map::AddressMap,
+    bytes_per_row: usize,
+) -> Result<ParsedGotoOffset, GotoParseError> {
+    let bytes_per_row = bytes_per_row.max(1);
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(GotoParseError::Empty);
@@ -212,7 +227,7 @@ pub fn parse_goto_offset_with_map(
                 selection_range: None,
             }
         } else {
-            parse_goto_offset_with_map(left_trimmed, current_cursor, total_size, default_radix, address_map)?
+            parse_goto_offset_with_context(left_trimmed, current_cursor, total_size, default_radix, address_map, bytes_per_row)?
         };
 
         // Relative forward length: "+2", "+10", "+0x20" specifies length from start offset
@@ -255,7 +270,7 @@ pub fn parse_goto_offset_with_map(
                 selection_range: None,
             }
         } else {
-            parse_goto_offset_with_map(right_trimmed, current_cursor, total_size, default_radix, address_map)?
+            parse_goto_offset_with_context(right_trimmed, current_cursor, total_size, default_radix, address_map, bytes_per_row)?
         };
 
         let min_offset = left_parsed.target_offset.min(right_parsed.target_offset);
@@ -333,9 +348,9 @@ pub fn parse_goto_offset_with_map(
         && !line_num_str.is_empty()
     {
         let line_num = parse_number_with_base(line_num_str, GotoRadix::Dec)?;
-        // 1-indexed row: L1 = row 0 (offset 0), L2 = row 1 (offset 16)
+        // 1-indexed row: L1 = row 0 (offset 0), L2 = row 1 (offset bytes_per_row)
         let row = line_num.saturating_sub(1);
-        let raw = row.saturating_mul(16);
+        let raw = row.saturating_mul(bytes_per_row);
         let clamped = if total_size == 0 { 0 } else { raw.min(total_size.saturating_sub(1)) };
         let is_out_of_bounds = raw >= total_size && total_size > 0;
         return Ok(ParsedGotoOffset {
@@ -783,5 +798,19 @@ mod tests {
             parse_goto_offset("0x100..0xZZ", cursor, total, GotoRadix::Hex),
             Err(GotoParseError::InvalidFormat(_))
         ));
+    }
+
+    #[test]
+    fn test_parse_line_uses_actual_bytes_per_row() {
+        let map = crate::core::address_map::AddressMap::default();
+        let res_32 = parse_goto_offset_with_context("L10", 0, 1000, GotoRadix::Hex, &map, 32).unwrap();
+        assert_eq!(res_32.target_offset, 9 * 32);
+        assert_eq!(res_32.origin, GotoOrigin::Line);
+
+        let res_8 = parse_goto_offset_with_context(":5", 0, 1000, GotoRadix::Hex, &map, 8).unwrap();
+        assert_eq!(res_8.target_offset, 4 * 8);
+
+        let res_range = parse_goto_offset_with_context("L2..L3", 0, 1000, GotoRadix::Hex, &map, 24).unwrap();
+        assert_eq!(res_range.selection_range, Some(24..49));
     }
 }

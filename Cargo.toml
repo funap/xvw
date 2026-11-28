@@ -30,6 +30,7 @@ sha2 = "0.11.1"
 encoding_rs = "0.8.44"
 getrandom = "0.4.3"
 lsp-types = "0.97.0"
+regex = "1"
 
 [profile.test]
 # Keep test builds fast enough for IDE test-runner timeouts. The tests cover

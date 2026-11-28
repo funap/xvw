@@ -1,12 +1,15 @@
 use crate::core::encoding::Encoding;
-use crate::core::search::{PatternByte, SearchMode, parse_hex_pattern, parse_text_pattern};
+use crate::core::search::{CompiledSearch, PatternByte, SearchMode, SearchParseError, TextSearchFlags, compile_search, parse_hex_pattern, parse_text_pattern};
+use std::ops::Range;
 
 /// Encapsulates search query, active match collection, and result navigation state.
 #[derive(Default, Clone, Debug)]
 pub struct SearchState {
     pub query: String,
     pub mode: SearchMode,
+    pub flags: TextSearchFlags,
     pub results: Vec<usize>,
+    pub result_ranges: Vec<Range<usize>>,
     pub current_result_index: Option<usize>,
     pub is_full_search_complete: bool,
     pub generation: usize,
@@ -27,10 +30,15 @@ impl SearchState {
         }
     }
 
+    pub fn compiled_search(&self, encoding: Encoding) -> Result<CompiledSearch, SearchParseError> {
+        compile_search(&self.query, self.mode, encoding, self.flags)
+    }
+
     pub fn set_query(&mut self, query: String) {
         if self.query != query {
             self.query = query;
             self.results.clear();
+            self.result_ranges.clear();
             self.current_result_index = None;
             self.is_full_search_complete = false;
             self.generation = self.generation.wrapping_add(1);
@@ -38,10 +46,17 @@ impl SearchState {
     }
 
     pub fn set_query_and_mode(&mut self, query: String, mode: SearchMode) {
-        if self.query != query || self.mode != mode {
+        self.set_query_mode_and_flags(query, mode, self.flags);
+    }
+
+    pub fn set_query_mode_and_flags(&mut self, query: String, mode: SearchMode, flags: TextSearchFlags) {
+        let effective_flags = if mode == SearchMode::Text { flags } else { TextSearchFlags::default() };
+        if self.query != query || self.mode != mode || self.flags != effective_flags {
             self.query = query;
             self.mode = mode;
+            self.flags = effective_flags;
             self.results.clear();
+            self.result_ranges.clear();
             self.current_result_index = None;
             self.is_full_search_complete = false;
             self.generation = self.generation.wrapping_add(1);
@@ -59,6 +74,27 @@ impl SearchState {
             return;
         }
         self.results = results;
+        self.result_ranges.clear();
+        if is_full {
+            self.is_full_search_complete = true;
+        }
+        if !self.results.is_empty() && self.current_result_index.is_none() {
+            self.current_result_index = Some(0);
+        }
+    }
+
+    pub fn set_result_ranges(&mut self, ranges: Vec<Range<usize>>, generation: usize, is_full: bool) {
+        if generation < self.generation {
+            return;
+        }
+        if generation > self.generation {
+            self.generation = generation;
+        }
+        if self.is_full_search_complete && !is_full {
+            return;
+        }
+        self.results = ranges.iter().map(|r| r.start).collect();
+        self.result_ranges = ranges;
         if is_full {
             self.is_full_search_complete = true;
         }
@@ -70,6 +106,7 @@ impl SearchState {
     pub fn clear(&mut self) {
         self.query.clear();
         self.results.clear();
+        self.result_ranges.clear();
         self.current_result_index = None;
         self.is_full_search_complete = false;
         self.generation = self.generation.wrapping_add(1);
@@ -109,9 +146,15 @@ impl SearchState {
         }
     }
 
+    pub fn current_result_range(&self) -> Option<Range<usize>> {
+        let i = self.current_result_index?;
+        self.result_ranges.get(i).cloned()
+    }
+
     pub fn on_encoding_changed(&mut self) {
         if self.mode == SearchMode::Text && !self.query.is_empty() {
             self.results.clear();
+            self.result_ranges.clear();
             self.current_result_index = None;
             self.is_full_search_complete = false;
             self.generation = self.generation.wrapping_add(1);
@@ -120,6 +163,7 @@ impl SearchState {
 
     pub fn on_document_changed(&mut self) {
         self.results.clear();
+        self.result_ranges.clear();
         self.current_result_index = None;
         self.is_full_search_complete = false;
         self.generation = self.generation.wrapping_add(1);

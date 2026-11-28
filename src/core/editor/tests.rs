@@ -2789,3 +2789,48 @@ fn test_editor_navigation_history_back_and_forward() {
     assert_eq!(editor.cursor.offset, 48);
     assert_eq!(editor.navigate_forward(), None);
 }
+
+#[test]
+fn test_editor_replace_current_and_replace_all_with_atomic_undo_and_readonly_guard() {
+    use crate::core::search::{SearchMode, TextSearchFlags};
+
+    let mut editor = create_editor_with_content(b"foo BAR foo baz FOO");
+    editor.find_state_mut().set_query_mode_and_flags(
+        "foo".to_string(),
+        SearchMode::Text,
+        TextSearchFlags {
+            case_insensitive: true,
+            regex: false,
+        },
+    );
+
+    // Read-only guard blocks both Replace and Replace All
+    editor.set_read_only(true);
+    assert_eq!(editor.replace_current_find_match(b"QUX"), None);
+    assert_eq!(editor.replace_all_find_matches(b"QUX"), 0);
+    assert_eq!(editor.document.read().unwrap().buffer.data(), b"foo BAR foo baz FOO");
+
+    // Unlock read-only and step through Replace
+    editor.set_read_only(false);
+    editor.set_cursor_offset(0);
+    // Replaces offset 0..3 ("foo" -> "X") and selects next match at 6..9 ("foo")
+    let res1 = editor.replace_current_find_match(b"X");
+    assert_eq!(res1, Some((true, Some(6..9), false)));
+    assert_eq!(editor.document.read().unwrap().buffer.data(), b"X BAR foo baz FOO");
+    assert_eq!(editor.selection_range(), Some(6..9));
+
+    // Undo restores original bytes
+    assert!(editor.undo());
+    assert_eq!(editor.document.read().unwrap().buffer.data(), b"foo BAR foo baz FOO");
+
+    // Replace All replaces all 3 case-insensitive occurrences with longer bytes as one atomic Undo step
+    let replaced = editor.replace_all_find_matches(b"ALPHA");
+    assert_eq!(replaced, 3);
+    assert_eq!(editor.document.read().unwrap().buffer.data(), b"ALPHA BAR ALPHA baz ALPHA");
+
+    // Single undo reverts all 3 replacements cleanly
+    assert!(editor.undo());
+    assert_eq!(editor.document.read().unwrap().buffer.data(), b"foo BAR foo baz FOO");
+    assert!(editor.redo());
+    assert_eq!(editor.document.read().unwrap().buffer.data(), b"ALPHA BAR ALPHA baz ALPHA");
+}
