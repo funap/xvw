@@ -764,7 +764,7 @@ impl HexView {
         }
         self.commit_pending_hex_with_zero(cx);
         let next = if self.input.is_hex() { EditColumn::Ascii } else { EditColumn::Hex };
-        self.input.set_active_column(next);
+        self.set_active_column_with_flash(next, cx);
         self.pause_cursor_blink(cx);
         cx.notify();
     }

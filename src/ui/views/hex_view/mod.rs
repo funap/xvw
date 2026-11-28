@@ -45,6 +45,8 @@ use std::sync::Arc;
 
 use cursor_blink::HexCursorBlink;
 
+const COLUMN_FOCUS_FLASH_DURATION: std::time::Duration = std::time::Duration::from_millis(650);
+
 type CachedDescPalette = std::rc::Rc<std::cell::Cell<Option<(gpui_kit::component::ThemeMode, Hsla, Hsla, DescriptionPalette)>>>;
 
 struct CachedHeaderProbe {
@@ -103,6 +105,9 @@ pub struct HexView {
     paint_row_scratch: std::rc::Rc<std::cell::RefCell<PaintRowScratch>>,
     cursor_reveal_pending: bool,
     hovered_desc_tooltip: Option<(usize, SharedString, Point<Pixels>)>,
+    column_focus_flash: Option<EditColumn>,
+    column_focus_flash_epoch: usize,
+    _column_focus_flash_task: Task<()>,
     pub category_palette: Option<ByteCategoryPalette>,
     _editor_subscription: Subscription,
     _insert_mode_subscription: Subscription,
@@ -165,13 +170,14 @@ impl HexView {
                     cursor.stop(cx);
                 }
             });
-            cx.notify();
+            this.flash_active_column_header(cx);
         })
         .detach();
         cx.on_focus_out(&focus_handle, window, |this, _, _, cx| {
             this.cursor_blink.update(cx, |cursor, cx| {
                 cursor.stop(cx);
             });
+            this.clear_column_focus_flash();
             cx.notify();
         })
         .detach();
@@ -325,6 +331,9 @@ impl HexView {
             paint_row_scratch,
             cursor_reveal_pending: true,
             hovered_desc_tooltip: None,
+            column_focus_flash: None,
+            column_focus_flash_epoch: 0,
+            _column_focus_flash_task: Task::ready(()),
             category_palette: None,
             _editor_subscription,
             _insert_mode_subscription,
@@ -333,6 +342,48 @@ impl HexView {
             _byte_coloring_subscription,
             _byte_category_colors_subscription,
             _hex_case_subscription,
+        }
+    }
+
+    /// Briefly highlights the active Hex/ASCII column header after focus moves.
+    pub(super) fn flash_active_column_header(&mut self, cx: &mut Context<Self>) {
+        let is_struct_mode = {
+            let ed = self.editor.read(cx);
+            ed.structure.show_inline_structure_view && ed.parse_result().is_some()
+        };
+        if !self.show_ascii || is_struct_mode {
+            self.clear_column_focus_flash();
+            cx.notify();
+            return;
+        }
+        self.column_focus_flash = Some(self.input.active_column());
+        self.column_focus_flash_epoch = self.column_focus_flash_epoch.wrapping_add(1);
+        let epoch = self.column_focus_flash_epoch;
+        self._column_focus_flash_task = cx.spawn(async move |this, cx| {
+            tokio::time::sleep(COLUMN_FOCUS_FLASH_DURATION).await;
+            if let Some(this) = this.upgrade() {
+                this.update(cx, |this, cx| {
+                    if this.column_focus_flash_epoch == epoch && this.column_focus_flash.is_some() {
+                        this.column_focus_flash = None;
+                        cx.notify();
+                    }
+                });
+            }
+        });
+        cx.notify();
+    }
+
+    pub(super) fn clear_column_focus_flash(&mut self) {
+        self.column_focus_flash = None;
+        self.column_focus_flash_epoch = self.column_focus_flash_epoch.wrapping_add(1);
+        self._column_focus_flash_task = Task::ready(());
+    }
+
+    pub(super) fn set_active_column_with_flash(&mut self, column: EditColumn, cx: &mut Context<Self>) {
+        let changed = self.input.active_column() != column;
+        self.input.set_active_column(column);
+        if changed {
+            self.flash_active_column_header(cx);
         }
     }
 

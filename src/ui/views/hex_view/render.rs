@@ -217,8 +217,8 @@ impl Render for HexView {
             }
 
             let can_switch_edit_col = self.show_ascii && !is_struct_mode;
-            let active_is_hex = self.input.is_hex();
-            let active_is_ascii = self.input.is_ascii();
+            let flash_is_hex = can_switch_edit_col && self.column_focus_flash == Some(EditColumn::Hex);
+            let flash_is_ascii = can_switch_edit_col && self.column_focus_flash == Some(EditColumn::Ascii);
 
             let comment_header_el = |width: f32, can_scroll_left: bool, can_scroll_right: bool, theme: &gpui_kit::component::Theme| {
                 h_flex()
@@ -356,7 +356,7 @@ impl Render for HexView {
                                             .relative()
                                             .when(can_switch_edit_col, |el| el.cursor_pointer())
                                             .children(hex_cols)
-                                            .when(can_switch_edit_col && active_is_hex, |el| {
+                                            .when(flash_is_hex, |el| {
                                                 el.child(div().absolute().left_0().right_0().bottom_0().h(px(2.0)).bg(theme.primary))
                                             })
                                             .on_mouse_down(
@@ -367,7 +367,7 @@ impl Render for HexView {
                                                     } else if can_switch_edit_col && !this.input.is_hex() {
                                                         this.focus_handle.focus(window, cx);
                                                         this.commit_pending_hex_with_zero(cx);
-                                                        this.input.set_active_column(EditColumn::Hex);
+                                                        this.set_active_column_with_flash(EditColumn::Hex, cx);
                                                         this.pause_cursor_blink(cx);
                                                         cx.notify();
                                                     }
@@ -402,11 +402,7 @@ impl Render for HexView {
                             )
                             .when(self.show_ascii, |el| {
                                 let label = self.encoding.label();
-                                let ascii_label_color = if can_switch_edit_col && active_is_ascii {
-                                    theme.foreground
-                                } else {
-                                    theme.muted_foreground
-                                };
+                                let ascii_label_color = if flash_is_ascii { theme.foreground } else { theme.muted_foreground };
                                 el.child(
                                     h_flex()
                                         .h(px(header_height))
@@ -421,11 +417,11 @@ impl Render for HexView {
                                                 .relative()
                                                 .text_xs()
                                                 .text_color(ascii_label_color)
-                                                .when(can_switch_edit_col && active_is_ascii, |el| el.font_semibold())
+                                                .when(flash_is_ascii, |el| el.font_semibold())
                                                 .when(can_switch_edit_col, |el| el.cursor_pointer())
                                                 .when(is_ascii_clipped_left, |el| el.pl(px(16.0)))
                                                 .child(label)
-                                                .when(can_switch_edit_col && active_is_ascii, |el| {
+                                                .when(flash_is_ascii, |el| {
                                                     el.child(div().absolute().left_0().right_0().bottom_0().h(px(2.0)).bg(theme.primary))
                                                 })
                                                 .when(is_ascii_clipped_left, |el| el.child(header_clip_indicator(true, theme)))
@@ -438,7 +434,7 @@ impl Render for HexView {
                                                         } else if can_switch_edit_col && !this.input.is_ascii() {
                                                             this.focus_handle.focus(window, cx);
                                                             this.commit_pending_hex_with_zero(cx);
-                                                            this.input.set_active_column(EditColumn::Ascii);
+                                                            this.set_active_column_with_flash(EditColumn::Ascii, cx);
                                                             this.pause_cursor_blink(cx);
                                                             cx.notify();
                                                         }
@@ -732,7 +728,7 @@ impl Render for HexView {
 
                     if let Some(edit_target) = this.edit_target_from_point(event.position, window, cx) {
                         this.commit_pending_hex_with_zero(cx);
-                        this.input.set_active_column(edit_target.column());
+                        this.set_active_column_with_flash(edit_target.column(), cx);
                         let target_pos = edit_target.offset();
                         let is_ascii = matches!(edit_target, EditTarget::Ascii { .. });
                         let insert_mode = InsertModeState::is_enabled(cx);
@@ -1010,7 +1006,7 @@ impl Render for HexView {
                     }
                     if let Some(edit_target) = this.edit_target_from_point(event.position, window, cx) {
                         this.commit_pending_hex_with_zero(cx);
-                        this.input.set_active_column(edit_target.column());
+                        this.set_active_column_with_flash(edit_target.column(), cx);
                         let target_pos = edit_target.offset();
                         let is_ascii = matches!(edit_target, EditTarget::Ascii { .. });
                         let (char_start, char_end) = if is_ascii {
