@@ -157,31 +157,51 @@ impl EditorGroup {
     }
 
     fn observe_tab_dirty_state(&mut self, tab: &TabItem, cx: &mut Context<Self>) {
-        let Some(editor) = tab.content.editor(cx) else {
-            return;
-        };
-
         let tab_id = tab.id;
-        let is_dirty = tab.is_dirty(cx);
-        let is_read_only = tab.is_read_only(cx);
-        self.dirty_states.insert(tab_id, is_dirty);
-        self.read_only_states.insert(tab_id, is_read_only);
-        let subscription = cx.observe(&editor, move |this, editor, cx| {
-            let (is_dirty, is_read_only) = {
-                let editor = editor.read(cx);
-                let document = editor.document.read();
-                (
-                    document.as_ref().map(|document| document.is_dirty()).unwrap_or(false),
-                    document.as_ref().map(|document| document.is_read_only()).unwrap_or(false),
-                )
-            };
-            let dirty_changed = this.dirty_states.insert(tab_id, is_dirty) != Some(is_dirty);
-            let read_only_changed = this.read_only_states.insert(tab_id, is_read_only) != Some(is_read_only);
-            if dirty_changed || read_only_changed {
-                cx.notify();
-            }
-        });
-        self.editor_subscriptions.insert(tab_id, subscription);
+        if let Some(editor) = tab.content.editor(cx) {
+            let is_dirty = tab.is_dirty(cx);
+            let is_read_only = tab.is_read_only(cx);
+            self.dirty_states.insert(tab_id, is_dirty);
+            self.read_only_states.insert(tab_id, is_read_only);
+            let subscription = cx.observe(&editor, move |this, editor, cx| {
+                let (is_dirty, is_read_only) = {
+                    let editor = editor.read(cx);
+                    let document = editor.document.read();
+                    (
+                        document.as_ref().map(|document| document.is_dirty()).unwrap_or(false),
+                        document.as_ref().map(|document| document.is_read_only()).unwrap_or(false),
+                    )
+                };
+                let dirty_changed = this.dirty_states.insert(tab_id, is_dirty) != Some(is_dirty);
+                let read_only_changed = this.read_only_states.insert(tab_id, is_read_only) != Some(is_read_only);
+                if dirty_changed || read_only_changed {
+                    cx.notify();
+                }
+            });
+            self.editor_subscriptions.insert(tab_id, subscription);
+        } else if let Some(diff_view) = tab.content.downcast::<Entity<crate::ui::views::diff_view::DiffView>>() {
+            let is_dirty = tab.is_dirty(cx);
+            let is_read_only = tab.is_read_only(cx);
+            let mut last_title = tab.title(cx);
+            self.dirty_states.insert(tab_id, is_dirty);
+            self.read_only_states.insert(tab_id, is_read_only);
+            let subscription = cx.observe(&diff_view, move |this, diff_view, cx| {
+                let (is_dirty, is_read_only, title) = {
+                    let diff = diff_view.read(cx);
+                    (diff.is_any_dirty(), diff.is_active_side_read_only(), diff.display_title())
+                };
+                let dirty_changed = this.dirty_states.insert(tab_id, is_dirty) != Some(is_dirty);
+                let read_only_changed = this.read_only_states.insert(tab_id, is_read_only) != Some(is_read_only);
+                let title_changed = title != last_title;
+                if title_changed {
+                    last_title = title;
+                }
+                if dirty_changed || read_only_changed || title_changed {
+                    cx.notify();
+                }
+            });
+            self.editor_subscriptions.insert(tab_id, subscription);
+        }
     }
 
     fn observe_tab_focus(&mut self, tab: &TabItem, window: &mut Window, cx: &mut Context<Self>) {

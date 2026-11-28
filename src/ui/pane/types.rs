@@ -65,10 +65,18 @@ pub trait WorkspaceTab: 'static {
         None
     }
 
-    /// Returns the underlying Document if this tab hosts a document.
+    /// Returns the underlying Document if this tab hosts a single document.
     fn document(&self, cx: &App) -> Option<Arc<RwLock<Document>>> {
         let _ = cx;
         None
+    }
+
+    /// Returns all underlying Documents hosted by this tab along with display labels.
+    ///
+    /// Multi-document tabs (such as `DiffView`) override this to return each hosted
+    /// document so unsaved-changes checks and remaining-open deduplication cover all sides.
+    fn documents(&self, cx: &App) -> Vec<(Arc<RwLock<Document>>, String)> {
+        self.document(cx).map(|doc| vec![(doc, self.title(cx))]).unwrap_or_default()
     }
 
     /// Returns the icon representing this tab kind in the tab bar.
@@ -117,6 +125,10 @@ impl TabContent {
 
     pub fn document(&self, cx: &App) -> Option<Arc<RwLock<Document>>> {
         self.0.document(cx)
+    }
+
+    pub fn documents(&self, cx: &App) -> Vec<(Arc<RwLock<Document>>, String)> {
+        self.0.documents(cx)
     }
 
     pub fn path(&self, cx: &App) -> Option<PathBuf> {

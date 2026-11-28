@@ -41,6 +41,10 @@ impl Workspace {
             panel.update(cx, |panel, cx| {
                 panel.select_all(action, window, cx);
             });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.select_all(action, window, cx);
+            });
         }
     }
 
@@ -49,6 +53,10 @@ impl Workspace {
             panel.update(cx, |panel, cx| {
                 panel.go_to_beginning(action, window, cx);
             });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.go_to_beginning(action, window, cx);
+            });
         }
     }
 
@@ -56,6 +64,10 @@ impl Workspace {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.go_to_end(action, window, cx);
+            });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.go_to_end(action, window, cx);
             });
         }
     }
@@ -81,6 +93,10 @@ impl Workspace {
             panel.update(cx, |panel, cx| {
                 panel.toggle_edit_column(action, window, cx);
             });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.toggle_edit_column(action, window, cx);
+            });
         }
     }
 
@@ -88,6 +104,10 @@ impl Workspace {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.toggle_search(action, window, cx);
+            });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.toggle_search(action, window, cx);
             });
         }
     }
@@ -97,6 +117,10 @@ impl Workspace {
             panel.update(cx, |panel, cx| {
                 panel.toggle_replace(action, window, cx);
             });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.toggle_replace(action, window, cx);
+            });
         }
     }
 
@@ -104,6 +128,10 @@ impl Workspace {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.toggle_goto_address(action, window, cx);
+            });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.toggle_goto_address(action, window, cx);
             });
         }
     }
@@ -113,6 +141,10 @@ impl Workspace {
             panel.update(cx, |panel, cx| {
                 panel.search_next(action, window, cx);
             });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.search_next(action, window, cx);
+            });
         }
     }
 
@@ -120,6 +152,10 @@ impl Workspace {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.search_prev(action, window, cx);
+            });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.search_prev(action, window, cx);
             });
         }
     }
@@ -129,6 +165,10 @@ impl Workspace {
             panel.update(cx, |panel, cx| {
                 panel.undo(action, window, cx);
             });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.undo(action, window, cx);
+            });
         }
     }
 
@@ -136,6 +176,10 @@ impl Workspace {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.redo(action, window, cx);
+            });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.redo(action, window, cx);
             });
         }
     }
@@ -145,6 +189,10 @@ impl Workspace {
             panel.update(cx, |panel, cx| {
                 panel.cut(action, window, cx);
             });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.cut(action, window, cx);
+            });
         }
     }
 
@@ -153,6 +201,10 @@ impl Workspace {
             panel.update(cx, |panel, cx| {
                 panel.copy(action, window, cx);
             });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.copy(action, window, cx);
+            });
         }
     }
 
@@ -160,6 +212,10 @@ impl Workspace {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
                 panel.paste(action, window, cx);
+            });
+        } else if let Some(diff) = self.active_diff_view(cx) {
+            diff.update(cx, |diff, cx| {
+                diff.paste(action, window, cx);
             });
         }
     }
@@ -245,7 +301,10 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_copy_path(&mut self, _: &CopyPath, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(editor) = self.active_editor(cx) {
+        let editor = self
+            .active_editor(cx)
+            .or_else(|| self.active_diff_view(cx).map(|diff| diff.read(cx).active_side_editor()));
+        if let Some(editor) = editor {
             let path = editor.read(cx).document.read().ok().map(|d| d.path().to_path_buf());
             if let Some(path) = path {
                 cx.write_to_clipboard(ClipboardItem::new_string(path.to_string_lossy().to_string()));
@@ -254,7 +313,10 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_copy_file_name(&mut self, _: &CopyFileName, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(editor) = self.active_editor(cx) {
+        let editor = self
+            .active_editor(cx)
+            .or_else(|| self.active_diff_view(cx).map(|diff| diff.read(cx).active_side_editor()));
+        if let Some(editor) = editor {
             let path = editor.read(cx).document.read().ok().map(|d| d.path().to_path_buf());
             if let Some(path) = path
                 && let Some(name) = path.file_name()
@@ -588,154 +650,104 @@ impl Workspace {
         self.on_action_set_encoding(&SetEncoding { encoding: Encoding::Utf16Be }, window, cx);
     }
 
-    pub(crate) fn on_action_set_radix_hex(&mut self, _: &SetRadixHex, window: &mut Window, cx: &mut Context<Self>) {
+    fn apply_radix(&mut self, radix: crate::core::radix::DisplayRadix, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(editor) = self.active_editor(cx) {
             editor.update(cx, |editor, cx| {
-                editor.set_radix(crate::core::radix::DisplayRadix::Hexadecimal);
+                editor.set_radix(radix);
                 cx.notify();
             });
-        }
-        if let Some(panel) = self.active_editor_view(cx) {
-            panel.update(cx, |panel, cx| {
-                panel.focus_hex_view(&FocusHexView, window, cx);
+            if let Some(panel) = self.active_editor_view(cx) {
+                panel.update(cx, |panel, cx| {
+                    panel.focus_hex_view(&FocusHexView, window, cx);
+                });
+            }
+        } else if let Some(diff_view) = self.active_diff_view(cx) {
+            diff_view.update(cx, |diff_view, cx| {
+                diff_view.set_radix(radix, cx);
+                diff_view.focus_active_side(window, cx);
             });
         }
         cx.notify();
+    }
+
+    fn apply_group_size(&mut self, group_size: crate::core::radix::ByteGroupSize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(editor) = self.active_editor(cx) {
+            editor.update(cx, |editor, cx| {
+                editor.set_group_size(group_size);
+                cx.notify();
+            });
+            if let Some(panel) = self.active_editor_view(cx) {
+                panel.update(cx, |panel, cx| {
+                    panel.focus_hex_view(&FocusHexView, window, cx);
+                });
+            }
+        } else if let Some(diff_view) = self.active_diff_view(cx) {
+            diff_view.update(cx, |diff_view, cx| {
+                diff_view.set_group_size(group_size, cx);
+                diff_view.focus_active_side(window, cx);
+            });
+        }
+        cx.notify();
+    }
+
+    fn apply_byte_order(&mut self, is_big_endian: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(editor) = self.active_editor(cx) {
+            editor.update(cx, |editor, cx| {
+                editor.set_is_big_endian(is_big_endian);
+                cx.notify();
+            });
+            if let Some(panel) = self.active_editor_view(cx) {
+                panel.update(cx, |panel, cx| {
+                    panel.focus_hex_view(&FocusHexView, window, cx);
+                });
+            }
+        } else if let Some(diff_view) = self.active_diff_view(cx) {
+            diff_view.update(cx, |diff_view, cx| {
+                diff_view.set_is_big_endian(is_big_endian, cx);
+                diff_view.focus_active_side(window, cx);
+            });
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn on_action_set_radix_hex(&mut self, _: &SetRadixHex, window: &mut Window, cx: &mut Context<Self>) {
+        self.apply_radix(crate::core::radix::DisplayRadix::Hexadecimal, window, cx);
     }
 
     pub(crate) fn on_action_set_radix_dec(&mut self, _: &SetRadixDec, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(editor) = self.active_editor(cx) {
-            editor.update(cx, |editor, cx| {
-                editor.set_radix(crate::core::radix::DisplayRadix::Decimal);
-                cx.notify();
-            });
-        }
-        if let Some(panel) = self.active_editor_view(cx) {
-            panel.update(cx, |panel, cx| {
-                panel.focus_hex_view(&FocusHexView, window, cx);
-            });
-        }
-        cx.notify();
+        self.apply_radix(crate::core::radix::DisplayRadix::Decimal, window, cx);
     }
 
     pub(crate) fn on_action_set_radix_oct(&mut self, _: &SetRadixOct, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(editor) = self.active_editor(cx) {
-            editor.update(cx, |editor, cx| {
-                editor.set_radix(crate::core::radix::DisplayRadix::Octal);
-                cx.notify();
-            });
-        }
-        if let Some(panel) = self.active_editor_view(cx) {
-            panel.update(cx, |panel, cx| {
-                panel.focus_hex_view(&FocusHexView, window, cx);
-            });
-        }
-        cx.notify();
+        self.apply_radix(crate::core::radix::DisplayRadix::Octal, window, cx);
     }
 
     pub(crate) fn on_action_set_radix_bin(&mut self, _: &SetRadixBin, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(editor) = self.active_editor(cx) {
-            editor.update(cx, |editor, cx| {
-                editor.set_radix(crate::core::radix::DisplayRadix::Binary);
-                cx.notify();
-            });
-        }
-        if let Some(panel) = self.active_editor_view(cx) {
-            panel.update(cx, |panel, cx| {
-                panel.focus_hex_view(&FocusHexView, window, cx);
-            });
-        }
-        cx.notify();
+        self.apply_radix(crate::core::radix::DisplayRadix::Binary, window, cx);
     }
 
     pub(crate) fn on_action_set_group_size_1(&mut self, _: &SetGroupSize1, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(editor) = self.active_editor(cx) {
-            editor.update(cx, |editor, cx| {
-                editor.set_group_size(crate::core::radix::ByteGroupSize::One);
-                cx.notify();
-            });
-        }
-        if let Some(panel) = self.active_editor_view(cx) {
-            panel.update(cx, |panel, cx| {
-                panel.focus_hex_view(&FocusHexView, window, cx);
-            });
-        }
-        cx.notify();
+        self.apply_group_size(crate::core::radix::ByteGroupSize::One, window, cx);
     }
 
     pub(crate) fn on_action_set_group_size_2(&mut self, _: &SetGroupSize2, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(editor) = self.active_editor(cx) {
-            editor.update(cx, |editor, cx| {
-                editor.set_group_size(crate::core::radix::ByteGroupSize::Two);
-                cx.notify();
-            });
-        }
-        if let Some(panel) = self.active_editor_view(cx) {
-            panel.update(cx, |panel, cx| {
-                panel.focus_hex_view(&FocusHexView, window, cx);
-            });
-        }
-        cx.notify();
+        self.apply_group_size(crate::core::radix::ByteGroupSize::Two, window, cx);
     }
 
     pub(crate) fn on_action_set_group_size_4(&mut self, _: &SetGroupSize4, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(editor) = self.active_editor(cx) {
-            editor.update(cx, |editor, cx| {
-                editor.set_group_size(crate::core::radix::ByteGroupSize::Four);
-                cx.notify();
-            });
-        }
-        if let Some(panel) = self.active_editor_view(cx) {
-            panel.update(cx, |panel, cx| {
-                panel.focus_hex_view(&FocusHexView, window, cx);
-            });
-        }
-        cx.notify();
+        self.apply_group_size(crate::core::radix::ByteGroupSize::Four, window, cx);
     }
 
     pub(crate) fn on_action_set_group_size_8(&mut self, _: &SetGroupSize8, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(editor) = self.active_editor(cx) {
-            editor.update(cx, |editor, cx| {
-                editor.set_group_size(crate::core::radix::ByteGroupSize::Eight);
-                cx.notify();
-            });
-        }
-        if let Some(panel) = self.active_editor_view(cx) {
-            panel.update(cx, |panel, cx| {
-                panel.focus_hex_view(&FocusHexView, window, cx);
-            });
-        }
-        cx.notify();
+        self.apply_group_size(crate::core::radix::ByteGroupSize::Eight, window, cx);
     }
 
     pub(crate) fn on_action_set_byte_order_le(&mut self, _: &SetByteOrderLittleEndian, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(editor) = self.active_editor(cx) {
-            editor.update(cx, |editor, cx| {
-                editor.set_is_big_endian(false);
-                cx.notify();
-            });
-        }
-        if let Some(panel) = self.active_editor_view(cx) {
-            panel.update(cx, |panel, cx| {
-                panel.focus_hex_view(&FocusHexView, window, cx);
-            });
-        }
-        cx.notify();
+        self.apply_byte_order(false, window, cx);
     }
 
     pub(crate) fn on_action_set_byte_order_be(&mut self, _: &SetByteOrderBigEndian, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(editor) = self.active_editor(cx) {
-            editor.update(cx, |editor, cx| {
-                editor.set_is_big_endian(true);
-                cx.notify();
-            });
-        }
-        if let Some(panel) = self.active_editor_view(cx) {
-            panel.update(cx, |panel, cx| {
-                panel.focus_hex_view(&FocusHexView, window, cx);
-            });
-        }
-        cx.notify();
+        self.apply_byte_order(true, window, cx);
     }
 
     pub(crate) fn on_action_toggle_byte_order(&mut self, _: &ToggleByteOrder, window: &mut Window, cx: &mut Context<Self>) {
@@ -744,10 +756,15 @@ impl Workspace {
                 editor.toggle_byte_order();
                 cx.notify();
             });
-        }
-        if let Some(panel) = self.active_editor_view(cx) {
-            panel.update(cx, |panel, cx| {
-                panel.focus_hex_view(&FocusHexView, window, cx);
+            if let Some(panel) = self.active_editor_view(cx) {
+                panel.update(cx, |panel, cx| {
+                    panel.focus_hex_view(&FocusHexView, window, cx);
+                });
+            }
+        } else if let Some(diff_view) = self.active_diff_view(cx) {
+            diff_view.update(cx, |diff_view, cx| {
+                diff_view.toggle_byte_order(cx);
+                diff_view.focus_active_side(window, cx);
             });
         }
         cx.notify();

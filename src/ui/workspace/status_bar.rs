@@ -98,8 +98,11 @@ impl Render for StatusBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
-        let active_editor = self.active_editor.as_ref().and_then(|e| e.upgrade());
         let active_diff_view = self.active_diff_view.as_ref().and_then(|d| d.upgrade());
+        let active_editor = active_diff_view
+            .as_ref()
+            .map(|d| d.read(cx).active_side_editor())
+            .or_else(|| self.active_editor.as_ref().and_then(|e| e.upgrade()));
         let has_editor = active_editor.is_some();
         let is_diff_primary = active_diff_view.is_some();
 

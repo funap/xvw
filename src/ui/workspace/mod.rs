@@ -543,6 +543,41 @@ impl Workspace {
                 inline_structure_view: ed.structure.show_inline_structure_view,
                 hide_unbookmarked: ed.bookmarks().is_hide_unbookmarked(),
             }
+        } else if let Some(diff) = active_diff {
+            let (side_editor, side_hex_view, diff_encoding) = {
+                let d = diff.read(cx);
+                (d.active_side_editor(), d.active_side_hex_view(), d.encoding())
+            };
+            let ed = side_editor.read(cx);
+            let is_ro = ed.is_read_only();
+            let can_u = !is_ro && ed.can_undo();
+            let can_r = !is_ro && ed.can_redo();
+            let has_sel = ed.has_selection();
+            let can_copy = side_hex_view.read(cx).copy_range(cx).is_some();
+            MenuEditorState {
+                has_doc: true,
+                has_tab,
+                has_diff,
+                is_read_only: is_ro,
+                is_insert_mode,
+                can_undo: can_u,
+                can_redo: can_r,
+                has_selection: has_sel,
+                can_copy,
+                can_close_others,
+                can_close_right,
+                has_saved,
+                has_scratch,
+                encoding: Some(diff_encoding),
+                radix: Some(ed.options.radix),
+                group_size: Some(ed.options.group_size),
+                byte_order: Some(if ed.options.is_big_endian {
+                    crate::core::radix::ByteOrder::BigEndian
+                } else {
+                    crate::core::radix::ByteOrder::LittleEndian
+                }),
+                ..Default::default()
+            }
         } else {
             MenuEditorState {
                 has_tab,
@@ -553,7 +588,6 @@ impl Workspace {
                 can_close_right,
                 has_saved,
                 has_scratch,
-                encoding: active_diff.map(|diff| diff.read(cx).encoding()),
                 ..Default::default()
             }
         }
