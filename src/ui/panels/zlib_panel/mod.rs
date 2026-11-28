@@ -11,6 +11,7 @@ use crate::app_state::AppState;
 use crate::core::buffer::Buffer;
 use crate::core::dealloc::discard_in_background;
 use crate::core::editor::Editor;
+use crate::core::format::HexCase;
 use crate::core::zlib::ZlibError;
 use crate::ui::icon::IconName;
 use gpui_kit::base::actions::Cancel;
@@ -88,6 +89,7 @@ pub struct ZlibPanel {
     cached_states: ZlibStateCache,
     _table_subscription: Option<Subscription>,
     _editor_subscription: Option<Subscription>,
+    _hex_case_subscription: Subscription,
 }
 
 impl Drop for ZlibPanel {
@@ -135,6 +137,13 @@ impl ZlibPanel {
             _ => {}
         });
 
+        let hex_case_subscription = cx.observe_global::<HexCase>(|this, cx| {
+            this.table_state.update(cx, |table, cx| {
+                table.refresh(cx);
+            });
+            cx.notify();
+        });
+
         let mut this = Self {
             editor: None,
             focus_handle,
@@ -158,6 +167,7 @@ impl ZlibPanel {
             cached_states: ZlibStateCache::new(MAX_CACHED_EDITORS),
             _table_subscription: Some(table_subscription),
             _editor_subscription: None,
+            _hex_case_subscription: hex_case_subscription,
         };
 
         this.set_editor(editor, cx);
@@ -459,16 +469,18 @@ impl ZlibPanel {
         self.table_state.read(cx).delegate().visible_indices().get(row_ix).copied()
     }
 
-    fn result_summary(&self) -> String {
-        if self.is_scanning {
-            "Searching...".to_string()
-        } else if self.is_truncated {
-            format!("{MAX_ZLIB_RESULTS}+ streams found (showing first {MAX_ZLIB_RESULTS} streams)")
-        } else {
-            let total = self.rows.len();
-            let label = if total == 1 { "stream" } else { "streams" };
-            format!("{total} {label} found")
+    /// Cancels an active zlib stream scan without resetting cached signature state.
+    pub fn cancel_scan(&mut self, cx: &mut Context<Self>) {
+        if !self.is_scanning {
+            return;
         }
+        self.scan_generation = self.scan_generation.wrapping_add(1);
+        if let Some(cancel) = self.scan_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        self.scan_task = None;
+        self.is_scanning = false;
+        cx.notify();
     }
 
     fn sync_table_state(&mut self, cx: &mut Context<Self>) {
@@ -602,6 +614,21 @@ impl Render for ZlibPanel {
         let has_editor = self.editor.is_some();
         let can_decompress_selected = has_editor && self.selected_index.is_some() && !self.is_scanning && !self.is_decompressing;
 
+        let badge = if self.is_scanning {
+            Some(crate::ui::panels::panel_badge("Scanning...", theme).into_any_element())
+        } else if self.has_scanned {
+            let text = if self.is_truncated {
+                format!("{MAX_ZLIB_RESULTS}+")
+            } else {
+                let total = self.rows.len();
+                let label = if total == 1 { "stream" } else { "streams" };
+                format!("{total} {label}")
+            };
+            Some(crate::ui::panels::panel_badge(text, theme).into_any_element())
+        } else {
+            None
+        };
+
         let actions = Button::new("clear-zlib")
             .ghost()
             .icon(IconName::Eraser)
@@ -611,55 +638,102 @@ impl Render for ZlibPanel {
             .on_click(cx.listener(|this, _, _window, cx| {
                 this.reset_results(cx);
             }));
-        let header = crate::ui::panels::panel_header("ZLIB", is_focused, theme, None, Some(actions.into_any_element()));
+        let header = crate::ui::panels::panel_header("ZLIB", is_focused, theme, badge, Some(actions.into_any_element()));
 
-        let scan_controls = h_flex().p_2().gap_2().border_b_1().border_color(theme.border).items_center().child(
-            div().flex_1().child(
-                Button::new("search-zlib")
-                    .label(if self.is_scanning { "Searching..." } else { "Search" })
-                    .icon(IconName::Search)
-                    .primary()
-                    .with_size(Size::Small)
-                    .w_full()
-                    .disabled(self.is_scanning || !has_editor)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.trigger_scan(cx);
-                    })),
-            ),
-        );
+        let scan_button = if self.is_scanning {
+            Button::new("cancel-zlib-scan")
+                .label("Cancel Search")
+                .danger()
+                .with_size(Size::Small)
+                .w_full()
+                .tooltip("Cancel ongoing zlib stream scan")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.cancel_scan(cx);
+                }))
+        } else {
+            Button::new("search-zlib")
+                .label("Search")
+                .icon(IconName::Search)
+                .primary()
+                .with_size(Size::Small)
+                .w_full()
+                .disabled(!has_editor)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.trigger_scan(cx);
+                }))
+        };
 
-        let result_summary_text = (self.has_scanned || self.is_scanning).then(|| self.result_summary());
+        let scan_controls = h_flex()
+            .p_2()
+            .gap_2()
+            .border_b_1()
+            .border_color(theme.border)
+            .items_center()
+            .child(div().flex_1().min_w_0().child(scan_button));
 
-        let body = if self.is_scanning {
+        let truncation_notice = (self.has_scanned && !self.is_scanning && self.is_truncated).then(|| {
             div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_sm()
+                .w_full()
+                .px_2()
+                .py_1()
+                .bg(theme.secondary)
+                .border_b_1()
+                .border_color(theme.border)
+                .text_xs()
                 .text_color(theme.muted_foreground)
-                .child("Searching...")
-                .into_any_element()
+                .truncate()
+                .child(format!("{MAX_ZLIB_RESULTS}+ streams found (showing first {MAX_ZLIB_RESULTS} streams)"))
+        });
+
+        let body = if !has_editor {
+            crate::ui::panels::panel_empty_state(
+                IconName::PackageSearch,
+                "No Active File",
+                Some("Open a binary file to scan for embedded zlib streams"),
+                None,
+                theme,
+            )
+            .into_any_element()
+        } else if self.is_scanning {
+            let cancel_btn = Button::new("empty-cancel-zlib-scan")
+                .label("Cancel Search")
+                .ghost()
+                .with_size(Size::Small)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.cancel_scan(cx);
+                }));
+            crate::ui::panels::panel_empty_state(
+                IconName::LoaderCircle,
+                "Scanning Zlib Streams...",
+                Some("Searching for valid zlib headers and compressed payloads"),
+                Some(cancel_btn.into_any_element()),
+                theme,
+            )
+            .into_any_element()
         } else if self.rows.is_empty() {
-            let message = if self.has_scanned {
-                "No zlib streams found"
-            } else if has_editor {
-                "Click Search to find zlib streams"
-            } else {
-                "Open a file to search zlib streams"
-            };
-            div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child(message)
+            if self.has_scanned {
+                crate::ui::panels::panel_empty_state(
+                    IconName::PackageSearch,
+                    "No Zlib Streams Found",
+                    Some("No valid zlib-compressed streams were detected in this file"),
+                    None,
+                    theme,
+                )
                 .into_any_element()
+            } else {
+                crate::ui::panels::panel_empty_state(
+                    IconName::PackageSearch,
+                    "Ready to Scan",
+                    Some("Click Search to find embedded zlib streams"),
+                    None,
+                    theme,
+                )
+                .into_any_element()
+            }
         } else {
             div()
                 .flex_1()
+                .min_h_0()
                 .overflow_hidden()
                 .child(DataTable::new(&self.table_state).bordered(false))
                 .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -676,6 +750,12 @@ impl Render for ZlibPanel {
         crate::ui::panels::panel_container(is_focused, theme)
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.focus_handle.focus(window, cx);
+                }),
+            )
             .on_action(cx.listener(Self::confirm_select))
             .on_action(cx.listener(Self::dismiss_table))
             .on_action(cx.listener(|this, _: &Cancel, window, cx| {
@@ -687,19 +767,7 @@ impl Render for ZlibPanel {
             .on_action(cx.listener(Self::clear_results))
             .child(header)
             .child(scan_controls)
-            .when_some(result_summary_text, |this, summary| {
-                this.child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .bg(theme.secondary)
-                        .border_b_1()
-                        .border_color(theme.border)
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(summary),
-                )
-            })
+            .children(truncation_notice)
             .child(body)
             .when(show_footer, |this| {
                 let footer = h_flex()
@@ -710,7 +778,7 @@ impl Render for ZlibPanel {
                     .bg(theme.sidebar)
                     .items_center()
                     .child(
-                        div().flex_1().child(
+                        div().flex_1().min_w_0().child(
                             Button::new("open-decompressed-zlib")
                                 .label(if self.is_decompressing { "Decompressing..." } else { "Open Decompressed" })
                                 .icon(IconName::ExternalLink)

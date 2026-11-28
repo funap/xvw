@@ -231,7 +231,7 @@ impl TableDelegate for ZlibTableDelegate {
             )
             .separator()
             .menu_with_icon("Copy Address", IconName::Hash, Box::new(CopyAddress { value: offset_value }))
-            .menu_with_icon("Copy Preview", IconName::Binary, Box::new(CopyPreview { value: preview_value }))
+            .menu_with_icon("Copy Preview", IconName::Copy, Box::new(CopyPreview { value: preview_value }))
     }
 
     fn render_td(&mut self, row_ix: usize, col_ix: usize, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
