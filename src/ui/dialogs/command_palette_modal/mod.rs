@@ -150,6 +150,27 @@ impl CommandPaletteModal {
     }
 }
 
+/// Splits a command `title` of the form `"{category}: {rest}"` into `(rest, category_matches, rest_matches)`
+/// so the category badge and command label can be highlighted independently without repeating the category text.
+pub(crate) fn strip_category_prefix<'a>(title: &'a str, category: &str, title_matches: &[usize]) -> (&'a str, Vec<usize>, Vec<usize>) {
+    let prefix_len = category.len();
+    if title.starts_with(category) && title[prefix_len..].starts_with(": ") {
+        let rest_offset = prefix_len + 2;
+        let mut cat_matches = Vec::new();
+        let mut rest_matches = Vec::new();
+        for &pos in title_matches {
+            if pos < prefix_len {
+                cat_matches.push(pos);
+            } else if pos >= rest_offset {
+                rest_matches.push(pos - rest_offset);
+            }
+        }
+        (&title[rest_offset..], cat_matches, rest_matches)
+    } else {
+        (title, Vec::new(), title_matches.to_vec())
+    }
+}
+
 impl Render for CommandPaletteModal {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity().clone();
@@ -170,42 +191,49 @@ impl Render for CommandPaletteModal {
                     .label(item.title.clone())
                     .disabled(!is_executable)
                     .child(move |_window, _cx| {
+                        let (display_label, cat_matches, label_matches) = strip_category_prefix(&title, &category, &title_matches);
                         let title_color = if is_executable {
                             theme_clone.foreground
                         } else {
                             theme_clone.muted_foreground
                         };
-                        let title_element = render_highlighted_text(
-                            &title,
-                            &title_matches,
-                            title_color,
+                        let highlight_color = if is_executable { theme_clone.primary } else { theme_clone.muted_foreground };
+                        let cat_element = render_highlighted_text(
+                            &category,
+                            &cat_matches,
                             if is_executable { theme_clone.primary } else { theme_clone.muted_foreground },
-                            true,
+                            highlight_color,
+                            false,
                         );
+                        let title_element = render_highlighted_text(display_label, &label_matches, title_color, highlight_color, true);
 
                         h_flex()
                             .items_center()
                             .justify_between()
+                            .gap_2()
                             .w_full()
                             .child(
                                 h_flex()
+                                    .flex_1()
+                                    .min_w_0()
                                     .items_center()
                                     .gap_2()
                                     .overflow_hidden()
                                     .child(
                                         div()
+                                            .flex_shrink_0()
                                             .text_xs()
                                             .px_1p5()
                                             .py_0p5()
                                             .rounded_sm()
                                             .bg(theme_clone.secondary)
-                                            .text_color(theme_clone.primary)
-                                            .child(category.clone()),
+                                            .child(cat_element),
                                     )
-                                    .child(div().text_sm().child(title_element)),
+                                    .child(div().min_w_0().overflow_hidden().text_sm().child(title_element)),
                             )
                             .child(
                                 h_flex()
+                                    .flex_shrink_0()
                                     .items_center()
                                     .gap_2()
                                     .when_some(shortcut.as_ref(), |el, sc| el.child(render_shortcut_badge(sc)))
@@ -218,6 +246,7 @@ impl Render for CommandPaletteModal {
             .collect();
 
         let count = self.filtered_items.len();
+        let count_label = if count == 1 { "1 command".to_string() } else { format!("{count} commands") };
         let footer_theme = theme.clone();
         let view_for_query = view.clone();
         let view_for_confirm = view.clone();
@@ -245,7 +274,7 @@ impl Render for CommandPaletteModal {
                             .text_xs()
                             .text_color(footer_theme.muted_foreground)
                             .child(render_palette_footer_hints())
-                            .child(format!("{} commands", count))
+                            .child(count_label.clone())
                     })
                     .on_query(move |query, _window, cx| {
                         view_for_query.update(cx, |this, cx| {

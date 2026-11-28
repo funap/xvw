@@ -9,12 +9,18 @@ use gpui_kit::*;
 
 pub fn init(_cx: &mut App) {}
 
+pub enum NewFileModalEvent {
+    Submit { size: usize, fill: u8 },
+}
+
 pub struct NewFileModal {
     pub size_input: Entity<InputState>,
     pub fill_input: Entity<InputState>,
     pub parsed_size: Result<usize, String>,
     pub parsed_fill: Result<u8, String>,
 }
+
+impl EventEmitter<NewFileModalEvent> for NewFileModal {}
 
 impl NewFileModal {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -36,23 +42,31 @@ impl NewFileModal {
             parsed_fill: parse_fill_byte("0x00"),
         };
 
-        // Subscribe to size input changes
-        cx.subscribe(&size_input, |this, input, event: &input::InputEvent, cx| {
-            if let input::InputEvent::Change = event {
+        // Subscribe to size input changes & Enter submit
+        cx.subscribe(&size_input, |this, input, event: &input::InputEvent, cx| match event {
+            input::InputEvent::Change => {
                 let val = input.read(cx).value().to_string();
                 this.parsed_size = parse_buffer_size(&val);
                 cx.notify();
             }
+            input::InputEvent::PressEnter { .. } => {
+                this.try_submit(cx);
+            }
+            _ => {}
         })
         .detach();
 
-        // Subscribe to fill input changes
-        cx.subscribe(&fill_input, |this, input, event: &input::InputEvent, cx| {
-            if let input::InputEvent::Change = event {
+        // Subscribe to fill input changes & Enter submit
+        cx.subscribe(&fill_input, |this, input, event: &input::InputEvent, cx| match event {
+            input::InputEvent::Change => {
                 let val = input.read(cx).value().to_string();
                 this.parsed_fill = parse_fill_byte(&val);
                 cx.notify();
             }
+            input::InputEvent::PressEnter { .. } => {
+                this.try_submit(cx);
+            }
+            _ => {}
         })
         .detach();
 
@@ -61,6 +75,12 @@ impl NewFileModal {
 
     pub fn is_valid(&self) -> bool {
         self.parsed_size.is_ok() && self.parsed_fill.is_ok()
+    }
+
+    fn try_submit(&mut self, cx: &mut Context<Self>) {
+        if let (Ok(&size), Ok(&fill)) = (self.parsed_size.as_ref(), self.parsed_fill.as_ref()) {
+            cx.emit(NewFileModalEvent::Submit { size, fill });
+        }
     }
 
     pub fn set_size_preset(&mut self, preset: &'static str, window: &mut Window, cx: &mut Context<Self>) {
@@ -80,9 +100,22 @@ impl NewFileModal {
     }
 
     fn render_size_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let size_preview_text = match &self.parsed_size {
-            Ok(size) => format_size_preview(*size),
-            Err(err) => err.clone(),
+        let (size_preview_text, size_preview_color) = match &self.parsed_size {
+            Ok(size) => (format_size_preview(*size), theme.muted_foreground),
+            Err(err) => (err.clone(), theme.danger),
+        };
+        let current_size = self.parsed_size.as_ref().ok().copied();
+
+        let size_preset_btn = |id: &'static str, label: &'static str, preset: &'static str, expected: usize, cx: &mut Context<Self>| {
+            let is_active = current_size == Some(expected);
+            Button::new(id)
+                .label(label)
+                .with_size(Size::XSmall)
+                .when(is_active, |b| b.primary())
+                .when(!is_active, |b| b.ghost())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.set_size_preset(preset, window, cx);
+                }))
         };
 
         v_flex()
@@ -98,7 +131,7 @@ impl NewFileModal {
                             .text_color(theme.foreground)
                             .child("Buffer Size"),
                     )
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(size_preview_text)),
+                    .child(div().text_xs().text_color(size_preview_color).child(size_preview_text)),
             )
             .child(Input::new(&self.size_input).cleanable(true))
             .child(
@@ -107,67 +140,32 @@ impl NewFileModal {
                     .flex_wrap()
                     .items_center()
                     .child(div().text_xs().text_color(theme.muted_foreground).mr_1().child("Presets:"))
-                    .child(
-                        Button::new("size-0")
-                            .label("0 B")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_size_preset("0", window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("size-256")
-                            .label("256 B")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_size_preset("256", window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("size-1k")
-                            .label("1 KB")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_size_preset("1KB", window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("size-4k")
-                            .label("4 KB")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_size_preset("4KB", window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("size-64k")
-                            .label("64 KB")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_size_preset("64KB", window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("size-1m")
-                            .label("1 MB")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_size_preset("1MB", window, cx);
-                            })),
-                    ),
+                    .child(size_preset_btn("size-0", "0 B", "0", 0, cx))
+                    .child(size_preset_btn("size-256", "256 B", "256", 256, cx))
+                    .child(size_preset_btn("size-1k", "1 KB", "1KB", 1024, cx))
+                    .child(size_preset_btn("size-4k", "4 KB", "4KB", 4096, cx))
+                    .child(size_preset_btn("size-64k", "64 KB", "64KB", 65_536, cx))
+                    .child(size_preset_btn("size-1m", "1 MB", "1MB", 1_048_576, cx)),
             )
     }
 
     fn render_fill_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let fill_preview_text = match &self.parsed_fill {
-            Ok(fill) => format_fill_preview(*fill),
-            Err(err) => err.clone(),
+        let (fill_preview_text, fill_preview_color) = match &self.parsed_fill {
+            Ok(fill) => (format_fill_preview(*fill), theme.muted_foreground),
+            Err(err) => (err.clone(), theme.danger),
+        };
+        let current_fill = self.parsed_fill.as_ref().ok().copied();
+
+        let fill_preset_btn = |id: &'static str, label: &'static str, preset: &'static str, expected: u8, cx: &mut Context<Self>| {
+            let is_active = current_fill == Some(expected);
+            Button::new(id)
+                .label(label)
+                .with_size(Size::XSmall)
+                .when(is_active, |b| b.primary())
+                .when(!is_active, |b| b.ghost())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.set_fill_preset(preset, window, cx);
+                }))
         };
 
         v_flex()
@@ -177,7 +175,7 @@ impl NewFileModal {
                     .justify_between()
                     .items_center()
                     .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(theme.foreground).child("Fill Value"))
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(fill_preview_text)),
+                    .child(div().text_xs().text_color(fill_preview_color).child(fill_preview_text)),
             )
             .child(Input::new(&self.fill_input).cleanable(true))
             .child(
@@ -186,33 +184,9 @@ impl NewFileModal {
                     .flex_wrap()
                     .items_center()
                     .child(div().text_xs().text_color(theme.muted_foreground).mr_1().child("Presets:"))
-                    .child(
-                        Button::new("fill-00")
-                            .label("0x00 (Zeros)")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_fill_preset("0x00", window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("fill-ff")
-                            .label("0xFF (0xFF)")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_fill_preset("0xFF", window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("fill-20")
-                            .label("0x20 (Spaces)")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_fill_preset("0x20", window, cx);
-                            })),
-                    ),
+                    .child(fill_preset_btn("fill-00", "0x00 (Zeros)", "0x00", 0x00, cx))
+                    .child(fill_preset_btn("fill-ff", "0xFF (Ones)", "0xFF", 0xFF, cx))
+                    .child(fill_preset_btn("fill-20", "0x20 (Spaces)", "0x20", 0x20, cx)),
             )
     }
 }
@@ -237,12 +211,23 @@ pub fn open_new_file_dialog(window: &mut Window, cx: &mut App, on_confirm: impl 
     let on_confirm = std::rc::Rc::new(on_confirm);
     let view = cx.new(|cx| NewFileModal::new(window, cx));
 
-    // Focus size input initially
+    // Focus and select size input initially so user can immediately type a new size
     view.update(cx, |v, cx| {
         v.size_input.update(cx, |input, cx| {
             input.focus(window, cx);
+            input.select_all(window, cx);
         });
     });
+
+    // Submit when Enter is pressed inside either Input field
+    let on_confirm_for_enter = on_confirm.clone();
+    window
+        .subscribe(&view, cx, move |_, event: &NewFileModalEvent, window, cx| {
+            let NewFileModalEvent::Submit { size, fill } = *event;
+            window.close_dialog(cx);
+            on_confirm_for_enter(size, fill, window, cx);
+        })
+        .detach();
 
     let on_confirm_for_click = on_confirm.clone();
     let on_confirm_for_ok = on_confirm.clone();

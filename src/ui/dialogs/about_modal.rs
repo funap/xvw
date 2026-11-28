@@ -114,10 +114,16 @@ pub fn open_about_modal(window: &mut Window, cx: &mut App) {
                                         .child(div().text_color(theme.muted_foreground).child("Repository"))
                                         .child(
                                             h_flex()
+                                                .id("about-repo-link")
                                                 .items_center()
                                                 .gap_1()
                                                 .cursor_pointer()
                                                 .text_color(theme.link)
+                                                .hover(|s| s.underline())
+                                                .tooltip(|_window, cx| {
+                                                    cx.new(|_| gpui_kit::component::tooltip::Tooltip::new(format!("Open {APP_REPOSITORY} in browser")))
+                                                        .into()
+                                                })
                                                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                                     cx.open_url(APP_REPOSITORY);
                                                 })
@@ -142,6 +148,7 @@ pub fn open_about_modal(window: &mut Window, cx: &mut App) {
                         window.close_dialog(cx);
                     })),
             )
+            .on_ok(|_, _, _| true)
     });
 }
 

@@ -32,6 +32,10 @@ pub enum PatternFormat {
     Text,
 }
 
+pub enum FillSelectionModalEvent {
+    Submit(FillPattern),
+}
+
 pub struct FillSelectionModal {
     pub focus_handle: FocusHandle,
     pub range: Range<usize>,
@@ -58,6 +62,8 @@ pub struct FillSelectionModal {
     pub random_mode: RandomMode,
     pub random_preview_sample: Vec<u8>,
 }
+
+impl EventEmitter<FillSelectionModalEvent> for FillSelectionModal {}
 
 impl FillSelectionModal {
     pub fn new(range: Range<usize>, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -108,57 +114,88 @@ impl FillSelectionModal {
             random_preview_sample: FillPattern::Random { mode: RandomMode::Pseudo }.generate(16),
         };
 
-        // Subscribe to byte input changes
-        cx.subscribe(&byte_input, |this, input, event: &input::InputEvent, cx| {
-            if let input::InputEvent::Change = event {
+        // Subscribe to byte input changes & Enter submit
+        cx.subscribe(&byte_input, |this, input, event: &input::InputEvent, cx| match event {
+            input::InputEvent::Change => {
                 let val = input.read(cx).value().to_string();
                 this.parsed_byte = parse_fill_byte(&val);
                 cx.notify();
             }
+            input::InputEvent::PressEnter { .. } => {
+                this.try_submit(cx);
+            }
+            _ => {}
         })
         .detach();
 
-        // Subscribe to pattern input changes
-        cx.subscribe(&pattern_input, |this, _input, event: &input::InputEvent, cx| {
-            if let input::InputEvent::Change = event {
+        // Subscribe to pattern input changes & Enter submit
+        cx.subscribe(&pattern_input, |this, _input, event: &input::InputEvent, cx| match event {
+            input::InputEvent::Change => {
                 this.reparse_pattern(cx);
             }
+            input::InputEvent::PressEnter { .. } => {
+                this.try_submit(cx);
+            }
+            _ => {}
         })
         .detach();
 
-        // Subscribe to sequential start input changes
-        cx.subscribe(&seq_start_input, |this, input, event: &input::InputEvent, cx| {
-            if let input::InputEvent::Change = event {
+        // Subscribe to sequential start input changes & Enter submit
+        cx.subscribe(&seq_start_input, |this, input, event: &input::InputEvent, cx| match event {
+            input::InputEvent::Change => {
                 let val = input.read(cx).value().to_string();
                 this.parsed_seq_start = parse_u64_val(&val);
                 cx.notify();
             }
+            input::InputEvent::PressEnter { .. } => {
+                this.try_submit(cx);
+            }
+            _ => {}
         })
         .detach();
 
-        // Subscribe to sequential step input changes
-        cx.subscribe(&seq_step_input, |this, input, event: &input::InputEvent, cx| {
-            if let input::InputEvent::Change = event {
+        // Subscribe to sequential step input changes & Enter submit
+        cx.subscribe(&seq_step_input, |this, input, event: &input::InputEvent, cx| match event {
+            input::InputEvent::Change => {
                 let val = input.read(cx).value().to_string();
                 this.parsed_seq_step = parse_step_val(&val);
                 cx.notify();
             }
+            input::InputEvent::PressEnter { .. } => {
+                this.try_submit(cx);
+            }
+            _ => {}
         })
         .detach();
 
         this
     }
 
+    fn try_submit(&mut self, cx: &mut Context<Self>) {
+        if let Some(pattern) = self.current_fill_pattern() {
+            cx.emit(FillSelectionModalEvent::Submit(pattern));
+        }
+    }
+
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         match self.active_tab {
             FillTab::SingleByte => {
-                self.byte_input.update(cx, |input, cx| input.focus(window, cx));
+                self.byte_input.update(cx, |input, cx| {
+                    input.focus(window, cx);
+                    input.select_all(window, cx);
+                });
             }
             FillTab::Pattern => {
-                self.pattern_input.update(cx, |input, cx| input.focus(window, cx));
+                self.pattern_input.update(cx, |input, cx| {
+                    input.focus(window, cx);
+                    input.select_all(window, cx);
+                });
             }
             FillTab::Sequential => {
-                self.seq_start_input.update(cx, |input, cx| input.focus(window, cx));
+                self.seq_start_input.update(cx, |input, cx| {
+                    input.focus(window, cx);
+                    input.select_all(window, cx);
+                });
             }
             FillTab::Random => {
                 self.focus_handle.focus(window, cx);
@@ -305,19 +342,35 @@ impl FillSelectionModal {
 
     fn render_single_byte_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> impl IntoElement {
         let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
-        let preview_text = match &self.parsed_byte {
+        let (preview_text, preview_color) = match &self.parsed_byte {
             Ok(b) => {
                 let ascii = if b.is_ascii_graphic() || *b == b' ' {
                     format!("'{}'", *b as char)
                 } else {
                     "non-printable".to_string()
                 };
-                format!(
-                    "Hex: {} | Dec: {b} | Bin: 0b{b:08b} | ASCII: {ascii}",
-                    hex_case.format_prefixed_pad(*b as usize, 2)
+                (
+                    format!(
+                        "Hex: {} | Dec: {b} | Bin: 0b{b:08b} | ASCII: {ascii}",
+                        hex_case.format_prefixed_pad(*b as usize, 2)
+                    ),
+                    theme.muted_foreground,
                 )
             }
-            Err(e) => format!("Error: {e}"),
+            Err(e) => (format!("Error: {e}"), theme.danger),
+        };
+        let current_byte = self.parsed_byte.as_ref().ok().copied();
+
+        let preset_btn = |id: &'static str, label: &'static str, preset: &'static str, expected: u8, cx: &mut Context<Self>| {
+            let is_active = current_byte == Some(expected);
+            Button::new(id)
+                .label(label)
+                .with_size(Size::XSmall)
+                .when(is_active, |b| b.primary())
+                .when(!is_active, |b| b.ghost())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.set_single_byte_preset(preset, window, cx);
+                }))
         };
 
         v_flex()
@@ -327,7 +380,7 @@ impl FillSelectionModal {
                     .justify_between()
                     .items_center()
                     .child(div().text_xs().font_weight(FontWeight::MEDIUM).child("Byte Value"))
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(preview_text)),
+                    .child(div().text_xs().text_color(preview_color).child(preview_text)),
             )
             .child(Input::new(&self.byte_input).cleanable(true))
             .child(
@@ -336,42 +389,10 @@ impl FillSelectionModal {
                     .flex_wrap()
                     .items_center()
                     .child(div().text_xs().text_color(theme.muted_foreground).mr_1().child("Presets:"))
-                    .child(
-                        Button::new("fill-00")
-                            .label("0x00 (Zeros)")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_single_byte_preset("0x00", window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("fill-ff")
-                            .label("0xFF (0xFF)")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_single_byte_preset("0xFF", window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("fill-90")
-                            .label("0x90 (NOP)")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_single_byte_preset("0x90", window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("fill-20")
-                            .label("0x20 (Spaces)")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_single_byte_preset("0x20", window, cx);
-                            })),
-                    ),
+                    .child(preset_btn("fill-00", "0x00 (Zeros)", "0x00", 0x00, cx))
+                    .child(preset_btn("fill-ff", "0xFF (Ones)", "0xFF", 0xFF, cx))
+                    .child(preset_btn("fill-90", "0x90 (NOP)", "0x90", 0x90, cx))
+                    .child(preset_btn("fill-20", "0x20 (Spaces)", "0x20", 0x20, cx)),
             )
     }
 
@@ -379,13 +400,13 @@ impl FillSelectionModal {
         let is_hex = self.pattern_format == PatternFormat::Hex;
         let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
 
-        let preview_text = match &self.parsed_pattern {
+        let (preview_text, preview_color) = match &self.parsed_pattern {
             Ok(bytes) => {
                 let hex_repr: Vec<String> = bytes.iter().take(8).map(|b| hex_case.format_byte(*b)).collect();
                 let dots = if bytes.len() > 8 { "..." } else { "" };
-                format!("Length: {} bytes | {}{dots}", bytes.len(), hex_repr.join(" "))
+                (format!("Length: {} bytes | {}{dots}", bytes.len(), hex_repr.join(" ")), theme.muted_foreground)
             }
-            Err(e) => format!("Error: {e}"),
+            Err(e) => (format!("Error: {e}"), theme.danger),
         };
 
         v_flex()
@@ -413,6 +434,7 @@ impl FillSelectionModal {
                                             }
                                             input.set_placeholder("DE AD BE EF, deadbeef...", window, cx);
                                             input.focus(window, cx);
+                                            input.select_all(window, cx);
                                         });
                                         this.reparse_pattern(cx);
                                     })),
@@ -431,12 +453,13 @@ impl FillSelectionModal {
                                             }
                                             input.set_placeholder("NULL, TEST, text...", window, cx);
                                             input.focus(window, cx);
+                                            input.select_all(window, cx);
                                         });
                                         this.reparse_pattern(cx);
                                     })),
                             ),
                     )
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(preview_text)),
+                    .child(div().text_xs().text_color(preview_color).child(preview_text)),
             )
             .child(Input::new(&self.pattern_input).cleanable(true))
             .child(
@@ -991,12 +1014,24 @@ pub fn open_fill_selection_dialog(range: Range<usize>, window: &mut Window, cx: 
     let on_confirm = std::rc::Rc::new(on_confirm);
     let view = cx.new(|cx| FillSelectionModal::new(range.clone(), window, cx));
 
-    // Focus byte input initially
+    // Focus and select byte input initially so user can type immediately
     view.update(cx, |v, cx| {
         v.byte_input.update(cx, |input, cx| {
             input.focus(window, cx);
+            input.select_all(window, cx);
         });
     });
+
+    // Submit when Enter is pressed inside any Input field
+    let on_confirm_for_enter = on_confirm.clone();
+    window
+        .subscribe(&view, cx, move |_, event: &FillSelectionModalEvent, window, cx| {
+            let FillSelectionModalEvent::Submit(pattern) = event;
+            let pattern = pattern.clone();
+            window.close_dialog(cx);
+            on_confirm_for_enter(pattern, window, cx);
+        })
+        .detach();
 
     let on_confirm_for_click = on_confirm.clone();
     let on_confirm_for_ok = on_confirm.clone();
