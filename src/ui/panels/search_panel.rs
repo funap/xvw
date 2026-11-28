@@ -1,7 +1,8 @@
 use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
-use crate::core::search::{SearchMode, parse_hex_pattern, parse_text_pattern};
+use crate::core::format::HexCase;
+use crate::core::search::{SearchMode, TextSearchFlags, compile_search};
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{self, Input, InputState};
@@ -11,6 +12,8 @@ use gpui_kit::component::table::{Column, DataTable, TableDelegate, TableEvent, T
 use gpui_kit::component::{ActiveTheme as _, Disableable, Sizable, Size, StyledExt, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub trait SearchModeExt {
     fn placeholder(&self) -> &'static str;
@@ -60,6 +63,7 @@ pub fn init(cx: &mut App) {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SearchResultItem {
     pub offset: usize,
+    pub len: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,7 +74,6 @@ pub enum SearchPanelEvent {
 
 pub struct SearchTableDelegate {
     results: Vec<SearchResultItem>,
-    match_len: usize,
     editor: Option<Entity<Editor>>,
     selected_index: Option<usize>,
     focus_handle: FocusHandle,
@@ -95,6 +98,7 @@ impl TableDelegate for SearchTableDelegate {
     }
 
     fn fit_column(&mut self, col_ix: usize, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> Option<Pixels> {
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let (encoding, buffer, address_map) = if let Some(ed) = &self.editor {
             let ed_ref = ed.read(cx);
             let doc = ed_ref.document.read().ok();
@@ -111,13 +115,13 @@ impl TableDelegate for SearchTableDelegate {
             .iter()
             .take(128)
             .map(|item| match col_ix {
-                0 => format!("0x{:08X}", address_map.offset_to_address(item.offset)).chars().count(),
+                0 => hex_case.format_prefixed_pad(address_map.offset_to_address(item.offset), 8).chars().count(),
                 1 => {
-                    let (hex, _) = format_row_previews(buffer_slice, item.offset, self.match_len, encoding);
+                    let (hex, _) = format_row_previews(buffer_slice, item.offset, item.len, encoding, hex_case);
                     hex.chars().count()
                 }
                 2 => {
-                    let (_, text) = format_row_previews(buffer_slice, item.offset, self.match_len, encoding);
+                    let (_, text) = format_row_previews(buffer_slice, item.offset, item.len, encoding, hex_case);
                     text.chars().count()
                 }
                 _ => 0,
@@ -132,8 +136,9 @@ impl TableDelegate for SearchTableDelegate {
         let Some(item) = self.results.get(row_ix) else {
             return menu;
         };
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let offset = item.offset;
-        let match_len = self.match_len;
+        let match_len = item.len;
         let (encoding, buffer, address_map) = if let Some(ed) = &self.editor {
             let ed_ref = ed.read(cx);
             let doc = ed_ref.document.read().ok();
@@ -143,9 +148,9 @@ impl TableDelegate for SearchTableDelegate {
         } else {
             (Encoding::Ascii, None, crate::core::address_map::AddressMap::default())
         };
-        let offset_value = format!("0x{:08X}", address_map.offset_to_address(offset));
+        let offset_value = hex_case.format_prefixed_pad(address_map.offset_to_address(offset), 8);
         let buffer_data = buffer.as_ref().map(|b| b.data());
-        let (preview_hex, preview_text) = format_row_previews(buffer_data, offset, match_len, encoding);
+        let (preview_hex, preview_text) = format_row_previews(buffer_data, offset, match_len, encoding, hex_case);
 
         menu.action_context(self.focus_handle.clone())
             .menu_with_icon("Copy Address", IconName::Hash, Box::new(CopyAddress { value: offset_value }))
@@ -158,6 +163,7 @@ impl TableDelegate for SearchTableDelegate {
             return div().into_any_element();
         };
         let theme = cx.theme();
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let font_family = cx.global::<Appearance>().font_family.clone();
         let (encoding, buffer, address_map) = if let Some(ed) = &self.editor {
             let ed_ref = ed.read(cx);
@@ -170,8 +176,8 @@ impl TableDelegate for SearchTableDelegate {
         };
         let buffer_data = buffer.as_ref().map(|b| b.data());
         let offset = item.offset;
-        let offset_value = format!("0x{:08X}", address_map.offset_to_address(offset));
-        let (preview_hex, preview_text) = format_row_previews(buffer_data, offset, self.match_len, encoding);
+        let offset_value = hex_case.format_prefixed_pad(address_map.offset_to_address(offset), 8);
+        let (preview_hex, preview_text) = format_row_previews(buffer_data, offset, item.len, encoding, hex_case);
 
         let is_selected = self.selected_index == Some(row_ix);
 
@@ -206,18 +212,21 @@ pub struct SearchPanel {
     pub table_state: Entity<TableState<SearchTableDelegate>>,
     pub input: Entity<InputState>,
     pub mode: SearchMode,
+    pub flags: TextSearchFlags,
     pub is_searching: bool,
     pub results: Vec<SearchResultItem>,
     pub is_truncated: bool,
     pub selected_index: Option<usize>,
     pub last_query: String,
-    pub match_len: usize,
+    pub error_message: Option<String>,
     pub search_task: Option<Task<()>>,
+    cancel_flag: Option<Arc<AtomicBool>>,
     is_panel_active: bool,
     needs_editor_sync: bool,
     _table_subscription: Option<Subscription>,
     _input_subscription: Option<Subscription>,
     _editor_subscription: Option<Subscription>,
+    _hex_case_subscription: Subscription,
 }
 
 impl EventEmitter<SearchPanelEvent> for SearchPanel {}
@@ -227,7 +236,6 @@ impl SearchPanel {
         let focus_handle = cx.focus_handle();
         let delegate = SearchTableDelegate {
             results: Vec::new(),
-            match_len: 0,
             editor: None,
             selected_index: None,
             focus_handle: focus_handle.clone(),
@@ -262,9 +270,17 @@ impl SearchPanel {
                 this.trigger_search(cx);
             }
             input::InputEvent::Change => {
+                this.error_message = None;
                 cx.notify();
             }
             _ => {}
+        });
+
+        let hex_case_sub = cx.observe_global::<HexCase>(|this, cx| {
+            this.table_state.update(cx, |table, cx| {
+                table.refresh(cx);
+            });
+            cx.notify();
         });
 
         let mut this = Self {
@@ -273,18 +289,21 @@ impl SearchPanel {
             table_state,
             input,
             mode: SearchMode::Hex,
+            flags: TextSearchFlags::default(),
             is_searching: false,
             results: Vec::new(),
             is_truncated: false,
             selected_index: None,
             last_query: String::new(),
-            match_len: 0,
+            error_message: None,
             search_task: None,
+            cancel_flag: None,
             is_panel_active: true,
             needs_editor_sync: false,
             _table_subscription: Some(table_subscription),
             _input_subscription: Some(input_sub),
             _editor_subscription: None,
+            _hex_case_subscription: hex_case_sub,
         };
 
         this.set_editor(editor, cx);
@@ -306,14 +325,31 @@ impl SearchPanel {
         }
     }
 
+    fn cancel_active_task(&mut self) {
+        if let Some(flag) = self.cancel_flag.take() {
+            flag.store(true, Ordering::Relaxed);
+        }
+        self.search_task = None;
+    }
+
+    pub fn cancel_search(&mut self, cx: &mut Context<Self>) {
+        if !self.is_searching {
+            return;
+        }
+        self.cancel_active_task();
+        self.is_searching = false;
+        cx.notify();
+    }
+
     pub fn set_editor(&mut self, editor: Option<Entity<Editor>>, cx: &mut Context<Self>) {
         self._editor_subscription = None;
+        self.cancel_active_task();
         self.editor = editor.clone();
         self.results.clear();
         self.is_truncated = false;
         self.selected_index = None;
         self.is_searching = false;
-        self.search_task = None;
+        self.error_message = None;
         self.needs_editor_sync = false;
         self.sync_table_state(cx);
 
@@ -345,6 +381,18 @@ impl SearchPanel {
         }
     }
 
+    fn toggle_case_insensitive(&mut self, cx: &mut Context<Self>) {
+        self.flags.case_insensitive = !self.flags.case_insensitive;
+        self.error_message = None;
+        cx.notify();
+    }
+
+    fn toggle_regex(&mut self, cx: &mut Context<Self>) {
+        self.flags.regex = !self.flags.regex;
+        self.error_message = None;
+        cx.notify();
+    }
+
     pub fn trigger_search(&mut self, cx: &mut Context<Self>) {
         let query = self.input.read(cx).value().to_string();
         if query.trim().is_empty() {
@@ -357,20 +405,20 @@ impl SearchPanel {
         };
 
         let mode = self.mode;
+        let flags = self.flags;
         let encoding = editor_entity.read(cx).options.encoding;
-        let pattern_len = match mode {
-            SearchMode::Text => parse_text_pattern(&query, encoding).map(|p| p.len()).unwrap_or(0),
-            SearchMode::Hex => parse_hex_pattern(&query).map(|p| p.len()).unwrap_or(0),
-        };
 
-        if pattern_len == 0 {
+        if let Err(err) = compile_search(&query, mode, encoding, flags) {
             self.clear_results(cx);
-            self.last_query = query.clone();
+            self.last_query = query;
+            self.error_message = Some(err.to_string());
+            cx.notify();
             return;
         }
 
+        self.cancel_active_task();
         self.last_query = query.clone();
-        self.match_len = pattern_len;
+        self.error_message = None;
         self.is_searching = true;
         self.results.clear();
         self.is_truncated = false;
@@ -379,7 +427,7 @@ impl SearchPanel {
 
         // Update editor search query so visible ranges in HexView are highlighted
         editor_entity.update(cx, |editor, cx| {
-            editor.search_state_mut().set_query_and_mode(query.clone(), mode);
+            editor.search_state_mut().set_query_mode_and_flags(query.clone(), mode, flags);
             cx.notify();
         });
 
@@ -388,6 +436,10 @@ impl SearchPanel {
             let doc = editor.document.read().expect("document read lock");
             (doc.buffer.clone(), doc.address_map.segment_ranges())
         };
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancel_flag = Some(cancel.clone());
+        let cancel_for_check = cancel.clone();
 
         let task = cx.spawn(async move |this, cx| {
             let search_task = cx.update(|cx| {
@@ -398,32 +450,49 @@ impl SearchPanel {
                         query,
                         mode,
                         encoding,
+                        flags,
                         segments: segment_ranges,
                         max_results: MAX_SEARCH_RESULTS,
+                        cancel: Some(cancel),
                     },
                     cx,
                 )
             });
 
-            let (offsets, is_truncated) = search_task.await;
-
-            let items: Vec<SearchResultItem> = offsets.iter().map(|&offset| SearchResultItem { offset }).collect();
+            let result = search_task.await;
+            if cancel_for_check.load(Ordering::Relaxed) {
+                return;
+            }
 
             if let Some(this) = this.upgrade() {
                 this.update(cx, |this, cx| {
                     this.is_searching = false;
-                    this.is_truncated = is_truncated;
-                    this.results = items;
-                    if !this.results.is_empty() {
-                        this.selected_index = Some(0);
-                    }
-                    this.sync_table_state(cx);
-                    if let Some(ed) = &this.editor {
-                        let generation = ed.read(cx).search_state.generation;
-                        ed.update(cx, |editor, cx| {
-                            editor.search_state_mut().set_results(offsets, generation, !is_truncated);
-                            cx.notify();
-                        });
+                    this.cancel_flag = None;
+                    match result {
+                        Ok((ranges, is_truncated)) => {
+                            let items: Vec<SearchResultItem> = ranges.iter().map(|r| SearchResultItem { offset: r.start, len: r.len() }).collect();
+                            this.error_message = None;
+                            this.is_truncated = is_truncated;
+                            this.results = items;
+                            if !this.results.is_empty() {
+                                this.selected_index = Some(0);
+                            }
+                            this.sync_table_state(cx);
+                            if let Some(ed) = &this.editor {
+                                let generation = ed.read(cx).search_state.generation;
+                                ed.update(cx, |editor, cx| {
+                                    editor.search_state_mut().set_result_ranges(ranges, generation, !is_truncated);
+                                    cx.notify();
+                                });
+                            }
+                        }
+                        Err(err) => {
+                            this.error_message = Some(err.to_string());
+                            this.results.clear();
+                            this.is_truncated = false;
+                            this.selected_index = None;
+                            this.sync_table_state(cx);
+                        }
                     }
                     cx.notify();
                 });
@@ -437,8 +506,9 @@ impl SearchPanel {
     pub fn select_item(&mut self, index: usize, cx: &mut Context<Self>) {
         if index < self.results.len() {
             self.selected_index = Some(index);
-            let offset = self.results[index].offset;
-            let len = self.match_len;
+            let item = self.results[index];
+            let offset = item.offset;
+            let len = item.len;
 
             let table_state = self.table_state.clone();
             cx.defer(move |cx| {
@@ -493,12 +563,13 @@ impl SearchPanel {
     }
 
     fn clear_results(&mut self, cx: &mut Context<Self>) {
-        self.search_task = None;
+        self.cancel_active_task();
+        self.is_searching = false;
         self.results.clear();
         self.is_truncated = false;
         self.selected_index = None;
         self.last_query.clear();
-        self.match_len = 0;
+        self.error_message = None;
         self.sync_table_state(cx);
         if let Some(ed) = &self.editor {
             ed.update(cx, |ed, cx| {
@@ -511,14 +582,12 @@ impl SearchPanel {
 
     fn sync_table_state(&mut self, cx: &mut Context<Self>) {
         let results = self.results.clone();
-        let match_len = self.match_len;
         let editor = self.editor.clone();
         let selected_index = self.selected_index;
 
         self.table_state.update(cx, |table, cx| {
             let delegate = table.delegate_mut();
             delegate.results = results;
-            delegate.match_len = match_len;
             delegate.editor = editor;
             delegate.selected_index = selected_index;
             table.refresh(cx);
@@ -551,12 +620,7 @@ impl SearchPanel {
             return false;
         }
         let editor_ref = editor.read(cx);
-        let found_index = find_matching_result_index(
-            &self.results,
-            self.match_len,
-            editor_ref.selection_range().map(|range| range.start),
-            editor_ref.cursor.offset,
-        );
+        let found_index = find_matching_result_index(&self.results, editor_ref.selection_range().map(|range| range.start), editor_ref.cursor.offset);
 
         if self.selected_index == found_index {
             return false;
@@ -578,19 +642,19 @@ impl SearchPanel {
     }
 }
 
-fn find_matching_result_index(results: &[SearchResultItem], match_len: usize, selection_start: Option<usize>, cursor_offset: usize) -> Option<usize> {
+fn find_matching_result_index(results: &[SearchResultItem], selection_start: Option<usize>, cursor_offset: usize) -> Option<usize> {
     if results.is_empty() {
         return None;
     }
-    let effective_len = match_len.max(1);
     let lookup = |offset: usize| -> Option<usize> {
         match results.binary_search_by_key(&offset, |item| item.offset) {
             Ok(exact) => Some(exact),
             Err(insert_idx) => {
                 if insert_idx > 0 {
                     let prev_idx = insert_idx - 1;
-                    let item_offset = results[prev_idx].offset;
-                    if offset < item_offset.saturating_add(effective_len) {
+                    let item = results[prev_idx];
+                    let effective_len = item.len.max(1);
+                    if offset < item.offset.saturating_add(effective_len) {
                         Some(prev_idx)
                     } else {
                         None
@@ -605,18 +669,19 @@ fn find_matching_result_index(results: &[SearchResultItem], match_len: usize, se
     selection_start.and_then(lookup).or_else(|| lookup(cursor_offset))
 }
 
-fn format_row_previews(buffer_data: Option<&[u8]>, offset: usize, match_len: usize, encoding: Encoding) -> (String, String) {
+fn format_row_previews(buffer_data: Option<&[u8]>, offset: usize, match_len: usize, encoding: Encoding, hex_case: HexCase) -> (String, String) {
     let snippet_len = match_len.clamp(4, 16);
     if let Some(data) = buffer_data {
         let end = (offset + snippet_len).min(data.len());
         let slice = if offset < data.len() { &data[offset..end] } else { &[] };
+        let digits = hex_case.digits();
         let mut hex = String::with_capacity(slice.len() * 3);
-        for (i, b) in slice.iter().enumerate() {
+        for (i, &b) in slice.iter().enumerate() {
             if i > 0 {
                 hex.push(' ');
             }
-            use std::fmt::Write as _;
-            let _ = write!(&mut hex, "{:02X}", b);
+            hex.push(digits[(b >> 4) as usize] as char);
+            hex.push(digits[(b & 0x0F) as usize] as char);
         }
         let text = encoding.format_preview(data, offset, snippet_len);
         (hex, text)
@@ -637,6 +702,8 @@ impl Render for SearchPanel {
 
         let badge = if self.is_searching {
             Some(crate::ui::panels::panel_badge("Scanning...", theme).into_any_element())
+        } else if self.error_message.is_some() {
+            Some(crate::ui::panels::panel_badge("Error", theme).into_any_element())
         } else if self.is_truncated {
             if let Some(idx) = self.selected_index {
                 Some(crate::ui::panels::panel_badge(format!("{}/{}+ matches", idx + 1, MAX_SEARCH_RESULTS), theme).into_any_element())
@@ -660,14 +727,34 @@ impl Render for SearchPanel {
             .icon(IconName::Eraser)
             .with_size(Size::XSmall)
             .tooltip("Clear results")
-            .disabled(!has_editor || (self.results.is_empty() && self.last_query.is_empty()))
+            .disabled(!has_editor || (self.results.is_empty() && self.last_query.is_empty() && self.error_message.is_none() && !self.is_searching))
             .on_click(cx.listener(|this, _, _window, cx| {
                 this.clear_results(cx);
             }));
 
         let header = crate::ui::panels::panel_header("SEARCH", is_focused, theme, badge, Some(actions.into_any_element()));
 
-        // Search controls: Mode toggle + Search Input + Scan Button
+        let action_button = if self.is_searching {
+            Button::new("cancel_scan_btn")
+                .label("Cancel")
+                .danger()
+                .with_size(Size::Small)
+                .tooltip("Cancel ongoing search")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.cancel_search(cx);
+                }))
+        } else {
+            Button::new("scan_btn")
+                .label("Find All")
+                .primary()
+                .with_size(Size::Small)
+                .disabled(!has_editor || is_query_empty)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.trigger_search(cx);
+                }))
+        };
+
+        // Search controls: Mode toggle + Text options + Search Input + Scan/Cancel Button
         let search_controls = v_flex()
             .p_2()
             .gap_2()
@@ -696,23 +783,45 @@ impl Render for SearchPanel {
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.set_mode(SearchMode::Text, window, cx);
                         })),
-                    ),
+                    )
+                    .when(self.mode == SearchMode::Text, |el| {
+                        let match_case = !self.flags.case_insensitive;
+                        let regex_enabled = self.flags.regex;
+                        el.child(div().w(px(6.0)))
+                            .child(
+                                if match_case {
+                                    Button::new("panel_match_case").label("Aa").primary().with_size(Size::XSmall)
+                                } else {
+                                    Button::new("panel_match_case").label("Aa").ghost().with_size(Size::XSmall)
+                                }
+                                .tooltip(if match_case {
+                                    "Match Case: On (click for case-insensitive)"
+                                } else {
+                                    "Match Case: Off (click for case-sensitive)"
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.toggle_case_insensitive(cx);
+                                })),
+                            )
+                            .child(
+                                if regex_enabled {
+                                    Button::new("panel_regex").label(".*").primary().with_size(Size::XSmall)
+                                } else {
+                                    Button::new("panel_regex").label(".*").ghost().with_size(Size::XSmall)
+                                }
+                                .tooltip("Use Regular Expression (bytes)")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.toggle_regex(cx);
+                                })),
+                            )
+                    }),
             )
             .child(
                 h_flex()
                     .gap_1p5()
                     .items_center()
                     .child(div().flex_1().child(Input::new(&self.input).prefix(IconName::Search).cleanable(true)))
-                    .child(
-                        Button::new("scan_btn")
-                            .label(if self.is_searching { "Scanning..." } else { "Find All" })
-                            .primary()
-                            .with_size(Size::Small)
-                            .disabled(self.is_searching || !has_editor || is_query_empty)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.trigger_search(cx);
-                            })),
-                    ),
+                    .child(action_button),
             );
 
         let truncation_notice = if self.is_truncated {
@@ -744,17 +853,26 @@ impl Render for SearchPanel {
             )
             .into_any_element()
         } else if self.is_searching {
+            let cancel_btn = Button::new("empty_cancel_scan")
+                .label("Cancel Search")
+                .ghost()
+                .with_size(Size::Small)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.cancel_search(cx);
+                }));
             crate::ui::panels::panel_empty_state(
                 IconName::Loader,
                 "Searching File...",
                 Some("Finding matching occurrences in the background"),
-                None,
+                Some(cancel_btn.into_any_element()),
                 theme,
             )
             .into_any_element()
+        } else if let Some(err) = &self.error_message {
+            crate::ui::panels::panel_empty_state(IconName::CircleAlert, "Invalid Pattern", Some(err.as_str()), None, theme).into_any_element()
         } else if self.results.is_empty() {
             let message = if self.last_query.is_empty() {
-                "Enter a pattern and click Search"
+                "Enter a pattern and click Find All"
             } else {
                 "No occurrences found for query"
             };
@@ -803,13 +921,18 @@ impl Focusable for SearchPanel {
 mod tests {
     use super::format_row_previews;
     use crate::core::encoding::Encoding;
+    use crate::core::format::HexCase;
 
     #[test]
-    fn test_format_row_previews() {
+    fn test_format_row_previews_respects_hex_case() {
         let data = b"Hello, World!\x00\x01\x02\x03";
-        let (hex, text) = format_row_previews(Some(data), 0, 5, Encoding::Ascii);
-        assert_eq!(hex, "48 65 6C 6C 6F");
-        assert_eq!(text, "Hello");
+        let (hex_upper, text_upper) = format_row_previews(Some(data), 0, 5, Encoding::Ascii, HexCase::Upper);
+        assert_eq!(hex_upper, "48 65 6C 6C 6F");
+        assert_eq!(text_upper, "Hello");
+
+        let (hex_lower, text_lower) = format_row_previews(Some(data), 0, 5, Encoding::Ascii, HexCase::Lower);
+        assert_eq!(hex_lower, "48 65 6c 6c 6f");
+        assert_eq!(text_lower, "Hello");
     }
 
     #[test]
@@ -871,20 +994,21 @@ mod tests {
     }
 
     #[test]
-    fn test_find_matching_result_index_without_allocation() {
+    fn test_find_matching_result_index_variable_lengths() {
         use super::{SearchResultItem, find_matching_result_index};
 
         let results = [
-            SearchResultItem { offset: 0x10 },
-            SearchResultItem { offset: 0x40 },
-            SearchResultItem { offset: 0x80 },
+            SearchResultItem { offset: 0x10, len: 4 },
+            SearchResultItem { offset: 0x40, len: 2 },
+            SearchResultItem { offset: 0x80, len: 6 },
         ];
 
-        assert_eq!(find_matching_result_index(&[], 4, None, 0x10), None);
-        assert_eq!(find_matching_result_index(&results, 4, None, 0x10), Some(0));
-        assert_eq!(find_matching_result_index(&results, 4, None, 0x13), Some(0));
-        assert_eq!(find_matching_result_index(&results, 4, None, 0x14), None);
-        assert_eq!(find_matching_result_index(&results, 4, Some(0x41), 0x80), Some(1));
-        assert_eq!(find_matching_result_index(&results, 4, Some(0x20), 0x82), Some(2));
+        assert_eq!(find_matching_result_index(&[], None, 0x10), None);
+        assert_eq!(find_matching_result_index(&results, None, 0x10), Some(0));
+        assert_eq!(find_matching_result_index(&results, None, 0x13), Some(0));
+        assert_eq!(find_matching_result_index(&results, None, 0x14), None);
+        assert_eq!(find_matching_result_index(&results, Some(0x41), 0x80), Some(1));
+        assert_eq!(find_matching_result_index(&results, None, 0x42), None);
+        assert_eq!(find_matching_result_index(&results, Some(0x20), 0x85), Some(2));
     }
 }
