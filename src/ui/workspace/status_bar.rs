@@ -3,15 +3,24 @@ use crate::app_state::InsertModeState;
 use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
-use crate::core::format::{HexCase, decode_uint_value, format_binary_repr, format_size_friendly, format_text_repr};
+use crate::core::format::{HexCase, decode_uint_value_with_case, format_binary_repr, format_size_friendly, format_text_repr};
+use crate::core::radix::{ByteGroupSize, DisplayRadix};
 use crate::ui::icon::IconName;
 use crate::ui::views::diff_view::DiffView;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::status_bar::StatusBar as KitStatusBar;
-use gpui_kit::component::{ActiveTheme, Sizable as _, Size, StyledExt};
+use gpui_kit::component::{ActiveTheme, Sizable as _, Size, StyledExt, WindowExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = status_bar, no_json)]
+struct CopyStatusText {
+    value: String,
+    description: String,
+}
 
 pub enum StatusBarEvent {
     #[allow(dead_code)]
@@ -19,6 +28,7 @@ pub enum StatusBarEvent {
 }
 
 pub struct StatusBar {
+    focus_handle: FocusHandle,
     active_editor: Option<WeakEntity<Editor>>,
     editor_subscription: Option<Subscription>,
     active_diff_view: Option<WeakEntity<DiffView>>,
@@ -37,6 +47,7 @@ impl EventEmitter<StatusBarEvent> for StatusBar {}
 
 impl StatusBar {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let focus_handle = cx.focus_handle();
         let _insert_mode_subscription = cx.observe_global::<InsertModeState>(|_, cx| {
             cx.notify();
         });
@@ -44,6 +55,7 @@ impl StatusBar {
             cx.notify();
         });
         Self {
+            focus_handle,
             active_editor: None,
             editor_subscription: None,
             active_diff_view: None,
@@ -75,19 +87,27 @@ impl StatusBar {
         }
         cx.notify();
     }
+
+    fn on_copy_status_text(&mut self, action: &CopyStatusText, window: &mut Window, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(action.value.clone()));
+        window.push_notification(Notification::info(format!("Copied {}", action.description)), cx);
+    }
 }
 
 impl Render for StatusBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
         let active_editor = self.active_editor.as_ref().and_then(|e| e.upgrade());
         let active_diff_view = self.active_diff_view.as_ref().and_then(|d| d.upgrade());
+        let has_editor = active_editor.is_some();
+        let is_diff_primary = active_diff_view.is_some();
 
-        let (_cursor_offset, total_size, cursor_addr) = if let Some(editor) = &active_editor {
+        let (total_size, cursor_addr) = if let Some(editor) = &active_editor {
             let editor = editor.read(cx);
-            (editor.cursor.offset, editor.total_size(), editor.cursor_address())
+            (Some(editor.total_size()), editor.cursor_address())
         } else {
-            (0, 0, 0)
+            (None, 0)
         };
 
         let (current_byte_info, raw_byte_val) = if let Some(editor) = &active_editor {
@@ -108,7 +128,7 @@ impl Render for StatusBar {
             if let (Some(d), Some((offset, len))) = (doc, target) {
                 let slice = d.buffer.get_range(offset, len);
                 if slice.len() == len && len > 0 {
-                    let (uint_val, hex_str) = decode_uint_value(slice, editor.options.is_big_endian);
+                    let (uint_val, hex_str) = decode_uint_value_with_case(slice, editor.options.is_big_endian, hex_case);
                     let text_repr = format_text_repr(slice, editor.options.encoding);
                     let bin_repr = format_binary_repr(uint_val, len);
                     let display_str = format!("Val: {} ({}, {}, {})", hex_str, uint_val, text_repr, bin_repr);
@@ -124,8 +144,7 @@ impl Render for StatusBar {
             (None, None)
         };
 
-        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
-        let (position_text, position_copy_val) = if let Some(editor) = &active_editor {
+        let position_info = active_editor.as_ref().map(|editor| {
             let editor = editor.read(cx);
             if editor.has_selection() {
                 if let Some(range) = editor.selected_range_or_cursor() {
@@ -158,28 +177,21 @@ impl Render for StatusBar {
                     hex_case.format_prefixed(cur_addr),
                 )
             }
-        } else {
-            (format!("{} (0)", hex_case.format_prefixed(0)), hex_case.format_prefixed(0))
-        };
+        });
 
-        let is_read_only = if let Some(editor) = &active_editor {
-            editor.read(cx).is_read_only()
-        } else {
-            false
-        };
+        let is_read_only = active_editor.as_ref().map(|e| e.read(cx).is_read_only()).unwrap_or(false);
         let file_mode_label = if is_read_only { "Read-only" } else { "Writable" };
-        let file_mode_icon = if is_read_only { IconName::PenOff } else { IconName::File };
+        let file_mode_icon = if is_read_only { IconName::PenOff } else { IconName::PenLine };
         let insert_mode = InsertModeState::is_enabled(cx);
         let edit_mode_label = if insert_mode { "Insert" } else { "Overwrite" };
 
-        let radix_badge_info = if let Some(editor) = &active_editor {
-            let editor = editor.read(cx);
-            Some(editor.options.radix.short_label())
-        } else {
-            None
-        };
+        let current_radix = active_editor.as_ref().map(|e| e.read(cx).options.radix);
+        let current_group_size = active_editor.as_ref().map(|e| e.read(cx).options.group_size);
+        let current_big_endian = active_editor.as_ref().map(|e| e.read(cx).options.is_big_endian);
 
-        let grouping_badge_info = if let Some(editor) = &active_editor {
+        let radix_badge_info = current_radix.map(|r| r.short_label());
+
+        let grouping_badge_info = active_editor.as_ref().map(|editor| {
             let editor = editor.read(cx);
             let group_str = editor.options.group_size.short_label();
             let endian_str = if editor.options.group_size.byte_count() > 1 {
@@ -187,10 +199,8 @@ impl Render for StatusBar {
             } else {
                 ""
             };
-            Some(format!("{}{}", group_str, endian_str))
-        } else {
-            None
-        };
+            format!("{}{}", group_str, endian_str)
+        });
 
         let current_encoding = resolve_status_bar_encoding(
             active_diff_view.as_ref().map(|d| d.read(cx).encoding()),
@@ -198,47 +208,78 @@ impl Render for StatusBar {
         );
         let encoding_info = current_encoding.map(Encoding::label);
 
+        let status_focus_handle = self.focus_handle.clone();
+
         let left_section = div()
             .flex()
             .items_center()
             .min_w_0()
             .gap_2()
             .text_xs()
-            .child(
-                div()
-                    .id("status-position")
-                    .flex_shrink_0()
-                    .font_medium()
-                    .text_color(theme.foreground)
-                    .cursor_pointer()
-                    .hover(|s| s.text_color(theme.primary))
-                    .tooltip(|_window, cx| cx.new(|_| gpui_kit::component::tooltip::Tooltip::new("Click to copy address")).into())
-                    .on_mouse_down(MouseButton::Left, {
-                        let copy_str = position_copy_val.clone();
-                        move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(copy_str.clone()));
-                        }
-                    })
-                    .context_menu({
-                        let offset_hex = hex_case.format_prefixed(cursor_addr);
-                        let offset_dec = format!("{}", cursor_addr);
-                        let pos_str = position_copy_val.clone();
-                        move |menu, _window, _cx| {
+            .when_some(position_info, |el, (position_text, position_copy_val)| {
+                let focus_for_menu = status_focus_handle.clone();
+                let copy_str_click = position_copy_val.clone();
+                let offset_hex = hex_case.format_prefixed(cursor_addr);
+                let offset_dec = format!("{}", cursor_addr);
+                let pos_str = position_copy_val;
+                el.child(
+                    div()
+                        .id("status-position")
+                        .flex_shrink_0()
+                        .font_medium()
+                        .text_color(theme.foreground)
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(theme.primary))
+                        .tooltip(|_window, cx| {
+                            cx.new(|_| gpui_kit::component::tooltip::Tooltip::new("Click to copy address • Right-click for options"))
+                                .into()
+                        })
+                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(copy_str_click.clone()));
+                            window.push_notification(Notification::info(format!("Copied address {}", copy_str_click)), cx);
+                        })
+                        .context_menu(move |menu, _window, _cx| {
                             let off_h = offset_hex.clone();
                             let off_d = offset_dec.clone();
                             let p_str = pos_str.clone();
-                            menu.menu_with_icon("Go to Address...", IconName::Search, Box::new(ToggleGoToAddress))
+                            menu.action_context(focus_for_menu.clone())
+                                .menu_with_icon("Go to Address...", IconName::Search, Box::new(ToggleGoToAddress))
                                 .separator()
                                 .menu_with_icon("Go to Beginning", IconName::ChevronUp, Box::new(GoToBeginning))
                                 .menu_with_icon("Go to End", IconName::ChevronDown, Box::new(GoToEnd))
                                 .separator()
-                                .menu_with_icon(format!("Copy Address ({})", p_str), IconName::Copy, Box::new(Copy))
-                                .menu_with_icon(format!("Copy Hex Address ({})", off_h), IconName::Hash, Box::new(Copy))
-                                .menu_with_icon(format!("Copy Dec Address ({})", off_d), IconName::Hash, Box::new(Copy))
-                        }
-                    })
-                    .child(position_text),
-            )
+                                .menu_with_icon(
+                                    format!("Copy Address ({})", p_str),
+                                    IconName::Copy,
+                                    Box::new(CopyStatusText {
+                                        description: format!("address {}", p_str),
+                                        value: p_str,
+                                    }),
+                                )
+                                .menu_with_icon(
+                                    format!("Copy Hex Address ({})", off_h),
+                                    IconName::Hash,
+                                    Box::new(CopyStatusText {
+                                        description: format!("hex address {}", off_h),
+                                        value: off_h,
+                                    }),
+                                )
+                                .menu_with_icon(
+                                    format!("Copy Dec Address ({})", off_d),
+                                    IconName::Hash,
+                                    Box::new(CopyStatusText {
+                                        description: format!("decimal address {}", off_d),
+                                        value: off_d,
+                                    }),
+                                )
+                        })
+                        .child(position_text),
+                )
+            })
+            .when(!has_editor, |el| {
+                let label = if is_diff_primary { "Diff View" } else { "Ready" };
+                el.child(div().text_color(theme.muted_foreground).child(label))
+            })
             .when_some(current_byte_info, |el, val_str| {
                 let raw_copy = raw_byte_val.unwrap_or_default();
                 el.child(div().w_px().h_3().bg(theme.border).flex_shrink_0()).child(
@@ -251,9 +292,10 @@ impl Render for StatusBar {
                         .cursor_pointer()
                         .hover(|s| s.text_color(theme.foreground))
                         .tooltip(|_window, cx| cx.new(|_| gpui_kit::component::tooltip::Tooltip::new("Click to copy value")).into())
-                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                             if !raw_copy.is_empty() {
                                 cx.write_to_clipboard(ClipboardItem::new_string(raw_copy.clone()));
+                                window.push_notification(Notification::info(format!("Copied value {}", raw_copy)), cx);
                             }
                         })
                         .child(val_str),
@@ -266,22 +308,42 @@ impl Render for StatusBar {
             .flex_shrink_0()
             .gap_2()
             .text_xs()
-            .child(
-                div()
-                    .id("status-size-pill")
-                    .px_2()
-                    .py_0p5()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .text_color(theme.muted_foreground)
-                    .hover(|s| s.bg(theme.muted))
-                    .tooltip(|_window, cx| cx.new(|_| gpui_kit::component::tooltip::Tooltip::new("Click to copy exact file size")).into())
-                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(total_size.to_string()));
+            .when_some(total_size, |el, size| {
+                el.child(
+                    div()
+                        .id("status-size-pill")
+                        .px_2()
+                        .py_0p5()
+                        .rounded_sm()
+                        .cursor_pointer()
+                        .text_color(theme.muted_foreground)
+                        .hover(|s| s.bg(theme.muted).text_color(theme.foreground))
+                        .tooltip(|_window, cx| {
+                            cx.new(|_| gpui_kit::component::tooltip::Tooltip::new("Click to copy exact file size in bytes"))
+                                .into()
+                        })
+                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(size.to_string()));
+                            window.push_notification(Notification::info(format!("Copied size ({size} bytes)")), cx);
+                        })
+                        .child(format!("Size: {}", format_size_friendly(size))),
+                )
+            })
+            .when(has_editor, |el| {
+                let edit_mode_btn = Button::new("status-edit-mode-btn")
+                    .label(edit_mode_label)
+                    .ghost()
+                    .with_size(Size::XSmall)
+                    .when(insert_mode, |btn| btn.text_color(theme.warning))
+                    .tooltip(if insert_mode {
+                        "Insert Mode (typing inserts bytes and shifts offsets). Click to switch to Overwrite Mode"
+                    } else {
+                        "Overwrite Mode. Click to switch to Insert Mode"
                     })
-                    .child(format!("Size: {}", format_size_friendly(total_size))),
-            )
-            .when(active_editor.is_some(), |el| {
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(Box::new(ToggleInsertMode), cx);
+                    }));
+
                 el.child(
                     Button::new("status-file-mode-btn")
                         .icon(file_mode_icon)
@@ -298,20 +360,7 @@ impl Render for StatusBar {
                         })),
                 )
                 .child(div().w_px().h_3().bg(theme.border))
-                .child(
-                    Button::new("status-edit-mode-btn")
-                        .label(edit_mode_label)
-                        .ghost()
-                        .with_size(Size::XSmall)
-                        .tooltip(if insert_mode {
-                            "Insert Mode. Click to switch to Overwrite Mode"
-                        } else {
-                            "Overwrite Mode. Click to switch to Insert Mode"
-                        })
-                        .on_click(cx.listener(|_, _, window, cx| {
-                            window.dispatch_action(Box::new(ToggleInsertMode), cx);
-                        })),
-                )
+                .child(edit_mode_btn)
             })
             .when_some(radix_badge_info, |el, radix_label| {
                 el.child(div().w_px().h_3().bg(theme.border)).child(
@@ -321,10 +370,10 @@ impl Render for StatusBar {
                         .with_size(Size::XSmall)
                         .tooltip("Click to change Radix (Hex, Dec, Oct, Bin)")
                         .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _window, _cx| {
-                            menu.menu("Hexadecimal (16)", Box::new(SetRadixHex))
-                                .menu("Decimal (10)", Box::new(SetRadixDec))
-                                .menu("Octal (8)", Box::new(SetRadixOct))
-                                .menu("Binary (2)", Box::new(SetRadixBin))
+                            menu.menu_with_check("Hexadecimal (16)", current_radix == Some(DisplayRadix::Hexadecimal), Box::new(SetRadixHex))
+                                .menu_with_check("Decimal (10)", current_radix == Some(DisplayRadix::Decimal), Box::new(SetRadixDec))
+                                .menu_with_check("Octal (8)", current_radix == Some(DisplayRadix::Octal), Box::new(SetRadixOct))
+                                .menu_with_check("Binary (2)", current_radix == Some(DisplayRadix::Binary), Box::new(SetRadixBin))
                         }),
                 )
             })
@@ -336,20 +385,20 @@ impl Render for StatusBar {
                         .with_size(Size::XSmall)
                         .tooltip("Click to change Grouping & Byte Order")
                         .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, window, cx| {
-                            menu.menu("1 Byte (8-bit)", Box::new(SetGroupSize1))
-                                .menu("2 Bytes (16-bit)", Box::new(SetGroupSize2))
-                                .menu("4 Bytes (32-bit)", Box::new(SetGroupSize4))
-                                .menu("8 Bytes (64-bit)", Box::new(SetGroupSize8))
+                            menu.menu_with_check("1 Byte (8-bit)", current_group_size == Some(ByteGroupSize::One), Box::new(SetGroupSize1))
+                                .menu_with_check("2 Bytes (16-bit)", current_group_size == Some(ByteGroupSize::Two), Box::new(SetGroupSize2))
+                                .menu_with_check("4 Bytes (32-bit)", current_group_size == Some(ByteGroupSize::Four), Box::new(SetGroupSize4))
+                                .menu_with_check("8 Bytes (64-bit)", current_group_size == Some(ByteGroupSize::Eight), Box::new(SetGroupSize8))
                                 .separator()
                                 .submenu("Byte Order", window, cx, move |menu, _window, _cx| {
-                                    menu.menu("Little Endian", Box::new(SetByteOrderLittleEndian))
-                                        .menu("Big Endian", Box::new(SetByteOrderBigEndian))
+                                    menu.menu_with_check("Little Endian", current_big_endian == Some(false), Box::new(SetByteOrderLittleEndian))
+                                        .menu_with_check("Big Endian", current_big_endian == Some(true), Box::new(SetByteOrderBigEndian))
                                 })
                         }),
                 )
             })
             .when_some(encoding_info, |el, enc| {
-                el.child(div().w_px().h_3().bg(theme.border)).child(
+                el.when(has_editor, |d| d.child(div().w_px().h_3().bg(theme.border))).child(
                     Button::new("status-encoding-btn")
                         .label(enc)
                         .ghost()
@@ -373,42 +422,49 @@ impl Render for StatusBar {
 
         div()
             .id("status-bar-container")
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::on_copy_status_text))
             .w_full()
             .context_menu(move |menu, window, cx| {
-                menu.menu_with_icon("Find...", IconName::Search, Box::new(ToggleSearch))
-                    .menu_with_icon("Toggle Read-only", IconName::PenOff, Box::new(ToggleReadOnly))
-                    .separator()
-                    .submenu("Radix", window, cx, move |menu, _window, _cx| {
-                        menu.menu("Hexadecimal (16)", Box::new(SetRadixHex))
-                            .menu("Decimal (10)", Box::new(SetRadixDec))
-                            .menu("Octal (8)", Box::new(SetRadixOct))
-                            .menu("Binary (2)", Box::new(SetRadixBin))
-                    })
-                    .submenu("Grouping", window, cx, move |menu, _window, _cx| {
-                        menu.menu("1 Byte (8-bit)", Box::new(SetGroupSize1))
-                            .menu("2 Bytes (16-bit)", Box::new(SetGroupSize2))
-                            .menu("4 Bytes (32-bit)", Box::new(SetGroupSize4))
-                            .menu("8 Bytes (64-bit)", Box::new(SetGroupSize8))
-                    })
-                    .submenu("Byte Order", window, cx, move |menu, _window, _cx| {
-                        menu.menu("Little Endian", Box::new(SetByteOrderLittleEndian))
-                            .menu("Big Endian", Box::new(SetByteOrderBigEndian))
-                    })
-                    .submenu("Encoding", window, cx, move |menu, window, cx| {
-                        let menu = Encoding::primary_encodings().iter().copied().fold(menu, |menu, encoding| {
-                            menu.menu_with_check(encoding.label(), Some(encoding) == current_encoding, Box::new(SetEncoding { encoding }))
-                        });
-                        let menu = menu.separator();
-                        Encoding::secondary_categories().iter().fold(menu, |menu, (cat, encs)| {
-                            menu.submenu(cat.label(), window, cx, move |menu, _window, _cx| {
-                                encs.iter().copied().fold(menu, |menu, encoding| {
-                                    menu.menu_with_check(encoding.label(), Some(encoding) == current_encoding, Box::new(SetEncoding { encoding }))
+                let menu = if has_editor {
+                    menu.menu_with_icon("Find...", IconName::Search, Box::new(ToggleSearch))
+                        .menu_with_check("Read-only", is_read_only, Box::new(ToggleReadOnly))
+                        .separator()
+                        .submenu("Radix", window, cx, move |menu, _window, _cx| {
+                            menu.menu_with_check("Hexadecimal (16)", current_radix == Some(DisplayRadix::Hexadecimal), Box::new(SetRadixHex))
+                                .menu_with_check("Decimal (10)", current_radix == Some(DisplayRadix::Decimal), Box::new(SetRadixDec))
+                                .menu_with_check("Octal (8)", current_radix == Some(DisplayRadix::Octal), Box::new(SetRadixOct))
+                                .menu_with_check("Binary (2)", current_radix == Some(DisplayRadix::Binary), Box::new(SetRadixBin))
+                        })
+                        .submenu("Grouping", window, cx, move |menu, _window, _cx| {
+                            menu.menu_with_check("1 Byte (8-bit)", current_group_size == Some(ByteGroupSize::One), Box::new(SetGroupSize1))
+                                .menu_with_check("2 Bytes (16-bit)", current_group_size == Some(ByteGroupSize::Two), Box::new(SetGroupSize2))
+                                .menu_with_check("4 Bytes (32-bit)", current_group_size == Some(ByteGroupSize::Four), Box::new(SetGroupSize4))
+                                .menu_with_check("8 Bytes (64-bit)", current_group_size == Some(ByteGroupSize::Eight), Box::new(SetGroupSize8))
+                        })
+                        .submenu("Byte Order", window, cx, move |menu, _window, _cx| {
+                            menu.menu_with_check("Little Endian", current_big_endian == Some(false), Box::new(SetByteOrderLittleEndian))
+                                .menu_with_check("Big Endian", current_big_endian == Some(true), Box::new(SetByteOrderBigEndian))
+                        })
+                        .submenu("Encoding", window, cx, move |menu, window, cx| {
+                            let menu = Encoding::primary_encodings().iter().copied().fold(menu, |menu, encoding| {
+                                menu.menu_with_check(encoding.label(), Some(encoding) == current_encoding, Box::new(SetEncoding { encoding }))
+                            });
+                            let menu = menu.separator();
+                            Encoding::secondary_categories().iter().fold(menu, |menu, (cat, encs)| {
+                                menu.submenu(cat.label(), window, cx, move |menu, _window, _cx| {
+                                    encs.iter().copied().fold(menu, |menu, encoding| {
+                                        menu.menu_with_check(encoding.label(), Some(encoding) == current_encoding, Box::new(SetEncoding { encoding }))
+                                    })
                                 })
                             })
                         })
-                    })
-                    .separator()
-                    .menu_with_icon("Toggle Left Panel", IconName::PanelLeft, Box::new(ToggleLeftPanel))
+                        .separator()
+                } else {
+                    menu
+                };
+                menu.menu_with_icon("Toggle Left Panel", IconName::PanelLeft, Box::new(ToggleLeftPanel))
+                    .menu_with_icon("Toggle Scratchpad", IconName::PanelRight, Box::new(ToggleRightPanel))
             })
             .child(
                 KitStatusBar::new()
