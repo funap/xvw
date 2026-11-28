@@ -191,3 +191,35 @@ fn test_theme_list_delegate_is_item_checked() {
     assert!(!delegate.check_item(&SharedString::from("Light"), &selection));
     assert!(delegate.check_item(&SharedString::from("Dark"), &selection));
 }
+
+#[test]
+fn test_settings_input_validators() {
+    use super::{validate_bytes_per_row, validate_font_family, validate_font_size, validate_yaml_sha_threshold};
+
+    assert_eq!(validate_font_family(" JetBrains Mono "), Ok("JetBrains Mono".to_string()));
+    assert!(validate_font_family("   ").is_err());
+
+    assert_eq!(validate_font_size("14"), Ok(14.0));
+    assert!(validate_font_size("0").is_err());
+    assert!(validate_font_size("999").is_err());
+    assert!(validate_font_size("abc").is_err());
+
+    assert_eq!(validate_bytes_per_row("16"), Ok(16));
+    assert!(validate_bytes_per_row("0").is_err());
+    assert!(validate_bytes_per_row("128").is_err());
+    assert!(validate_bytes_per_row("-4").is_err());
+
+    assert_eq!(validate_yaml_sha_threshold("0"), Ok(0));
+    assert_eq!(validate_yaml_sha_threshold("32"), Ok(32));
+    assert!(validate_yaml_sha_threshold("not-a-num").is_err());
+}
+
+#[test]
+fn test_matches_settings_filter() {
+    use super::matches_settings_filter;
+
+    assert!(matches_settings_filter("", "Editor", "Font Size", "points"));
+    assert!(matches_settings_filter("  font size  ", "Editor", "Font Size", "points"));
+    assert!(matches_settings_filter("editor points", "Editor", "Font Size", "points"));
+    assert!(!matches_settings_filter("radix", "Editor", "Font Size", "points"));
+}
