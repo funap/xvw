@@ -46,6 +46,17 @@ fn header_clip_indicator(is_left: bool, theme: &gpui_kit::component::Theme) -> D
     }
 }
 
+fn header_focus_flash_overlay(id_prefix: &'static str, epoch: usize, primary: Hsla) -> impl IntoElement {
+    div()
+        .absolute()
+        .inset_0()
+        .with_animation((id_prefix, epoch), Animation::new(super::COLUMN_FOCUS_FLASH_DURATION), move |el, progress| {
+            let alpha = column_focus_flash_alpha(progress);
+            el.bg(primary.opacity(alpha * 0.10))
+                .child(div().absolute().left_0().right_0().bottom_0().h(px(2.0)).bg(primary.opacity(alpha)))
+        })
+}
+
 impl Render for HexView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity().clone();
@@ -217,8 +228,10 @@ impl Render for HexView {
             }
 
             let can_switch_edit_col = self.show_ascii && !is_struct_mode;
+            let flash_epoch = self.column_focus_flash_epoch;
             let flash_is_hex = can_switch_edit_col && self.column_focus_flash == Some(EditColumn::Hex);
             let flash_is_ascii = can_switch_edit_col && self.column_focus_flash == Some(EditColumn::Ascii);
+            let flash_primary = theme.primary;
 
             let comment_header_el = |width: f32, can_scroll_left: bool, can_scroll_right: bool, theme: &gpui_kit::component::Theme| {
                 h_flex()
@@ -357,7 +370,7 @@ impl Render for HexView {
                                             .when(can_switch_edit_col, |el| el.cursor_pointer())
                                             .children(hex_cols)
                                             .when(flash_is_hex, |el| {
-                                                el.child(div().absolute().left_0().right_0().bottom_0().h(px(2.0)).bg(theme.primary))
+                                                el.child(header_focus_flash_overlay("hex-col-flash", flash_epoch, flash_primary))
                                             })
                                             .on_mouse_down(
                                                 MouseButton::Left,
@@ -402,7 +415,6 @@ impl Render for HexView {
                             )
                             .when(self.show_ascii, |el| {
                                 let label = self.encoding.label();
-                                let ascii_label_color = if flash_is_ascii { theme.foreground } else { theme.muted_foreground };
                                 el.child(
                                     h_flex()
                                         .h(px(header_height))
@@ -416,13 +428,12 @@ impl Render for HexView {
                                                 .overflow_hidden()
                                                 .relative()
                                                 .text_xs()
-                                                .text_color(ascii_label_color)
-                                                .when(flash_is_ascii, |el| el.font_semibold())
+                                                .text_color(theme.muted_foreground)
                                                 .when(can_switch_edit_col, |el| el.cursor_pointer())
                                                 .when(is_ascii_clipped_left, |el| el.pl(px(16.0)))
                                                 .child(label)
                                                 .when(flash_is_ascii, |el| {
-                                                    el.child(div().absolute().left_0().right_0().bottom_0().h(px(2.0)).bg(theme.primary))
+                                                    el.child(header_focus_flash_overlay("ascii-col-flash", flash_epoch, flash_primary))
                                                 })
                                                 .when(is_ascii_clipped_left, |el| el.child(header_clip_indicator(true, theme)))
                                                 .when(is_ascii_clipped_right, |el| el.child(header_clip_indicator(false, theme)))

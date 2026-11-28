@@ -51,6 +51,21 @@ pub fn address_col_width_for_font_size(font_size: f32, max_address: usize) -> f3
     (digits as f32 * char_w + 11.0).ceil().max(ADDRESS_WIDTH)
 }
 
+/// Maps normalized column-focus animation progress (`0.0..=1.0`) to highlight opacity (`1.0..=0.0`).
+/// Holds briefly at full opacity so the focus move registers clearly, then smoothly fades out.
+#[inline]
+pub fn column_focus_flash_alpha(progress: f32) -> f32 {
+    let p = progress.clamp(0.0, 1.0);
+    const HOLD_PORTION: f32 = 0.2;
+    if p <= HOLD_PORTION {
+        1.0
+    } else {
+        let fade_t = (p - HOLD_PORTION) / (1.0 - HOLD_PORTION);
+        let remaining = 1.0 - fade_t;
+        remaining * remaining
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum EditColumn {
     #[default]
