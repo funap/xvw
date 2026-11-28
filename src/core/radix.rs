@@ -109,13 +109,14 @@ impl ByteOrder {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ByteColoring {
-    DimZero,
+    #[serde(alias = "none", alias = "plain")]
+    Uniform,
     DimPadding,
     Category,
     Custom,
     #[default]
-    #[serde(other, alias = "none", alias = "plain")]
-    Uniform,
+    #[serde(other)]
+    DimZero,
 }
 
 #[allow(dead_code)]
@@ -297,12 +298,12 @@ pub struct ByteCategoryColors {
 
 impl Default for ByteCategoryColors {
     fn default() -> Self {
-        ByteColoring::Uniform.colors().expect("Uniform preset has explicit colors")
+        ByteColoring::DimZero.colors().expect("DimZero preset has explicit colors")
     }
 }
 
 impl ByteCategoryColors {
-    /// Resets all category colors to the default (`ByteColoring::Uniform`) mapping.
+    /// Resets all category colors to the default (`ByteColoring::DimZero`) mapping.
     pub fn reset_all(&mut self) {
         *self = Self::default();
     }
@@ -932,7 +933,7 @@ mod tests {
         let deserialized_custom: ByteColoring = serde_json::from_str("\"custom\"").expect("deserialize");
         assert_eq!(deserialized_custom, ByteColoring::Custom);
 
-        assert_eq!(ByteColoring::default(), ByteColoring::Uniform);
+        assert_eq!(ByteColoring::default(), ByteColoring::DimZero);
     }
 
     #[test]
@@ -1132,8 +1133,8 @@ mod tests {
     #[test]
     fn test_byte_category_colors_color_for_and_set() {
         let mut colors = ByteCategoryColors::default();
-        assert_eq!(ByteColoring::from_colors(colors), ByteColoring::Uniform);
-        assert_eq!(colors.color_for(Some(HexByteCategory::Null)), CategoryColor::Default);
+        assert_eq!(ByteColoring::from_colors(colors), ByteColoring::DimZero);
+        assert_eq!(colors.color_for(Some(HexByteCategory::Null)), CategoryColor::Muted);
         assert_eq!(colors.color_for(None), CategoryColor::Default);
         assert_eq!(colors.color_for(Some(HexByteCategory::AsciiPrintable)), CategoryColor::Default);
 
@@ -1145,18 +1146,21 @@ mod tests {
         assert_eq!(colors.color_for(Some(HexByteCategory::AsciiPrintable)), CategoryColor::Cyan);
 
         colors.reset_all();
-        assert_eq!(ByteColoring::from_colors(colors), ByteColoring::Uniform);
-        assert_eq!(colors.color_for(Some(HexByteCategory::Null)), CategoryColor::Default);
+        assert_eq!(ByteColoring::from_colors(colors), ByteColoring::DimZero);
+        assert_eq!(colors.color_for(Some(HexByteCategory::Null)), CategoryColor::Muted);
         assert_eq!(colors.color_for(None), CategoryColor::Default);
     }
 
     #[test]
     fn test_byte_coloring_fallback_on_unknown_variant() {
         let de: ByteColoring = serde_json::from_str("\"unknown_preset\"").expect("deserialize unknown");
-        assert_eq!(de, ByteColoring::Uniform);
+        assert_eq!(de, ByteColoring::DimZero);
 
         let de_legacy: ByteColoring = serde_json::from_str("\"ascii_printable\"").expect("deserialize legacy");
-        assert_eq!(de_legacy, ByteColoring::Uniform);
+        assert_eq!(de_legacy, ByteColoring::DimZero);
+
+        let de_none: ByteColoring = serde_json::from_str("\"none\"").expect("deserialize alias none");
+        assert_eq!(de_none, ByteColoring::Uniform);
     }
 
     #[test]

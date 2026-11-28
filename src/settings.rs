@@ -806,8 +806,8 @@ panel_width = 99999.0
         fs::write(&file_default.path, "").expect("write settings");
 
         let settings_default = Settings::load_from(&file_default.path).expect("load settings");
-        assert_eq!(settings_default.byte_coloring, ByteColoring::Uniform);
-        assert_eq!(settings_default.byte_category_colors, ByteColoring::Uniform.colors().unwrap());
+        assert_eq!(settings_default.byte_coloring, ByteColoring::DimZero);
+        assert_eq!(settings_default.byte_category_colors, ByteColoring::DimZero.colors().unwrap());
     }
 
     #[test]
@@ -839,7 +839,7 @@ max = "magenta"
         fs::write(&file_default.path, "").expect("write settings");
 
         let settings_default = Settings::load_from(&file_default.path).expect("load settings");
-        assert_eq!(settings_default.byte_coloring, ByteColoring::Uniform);
+        assert_eq!(settings_default.byte_coloring, ByteColoring::DimZero);
         assert_eq!(settings_default.byte_category_colors, ByteCategoryColors::default());
     }
 
@@ -859,7 +859,7 @@ font_size = 16.0
         fs::write(&file.path, toml_str).expect("write settings");
 
         let settings = Settings::load_from(&file.path).expect("load settings with unknown coloring");
-        assert_eq!(settings.byte_coloring, ByteColoring::Uniform);
+        assert_eq!(settings.byte_coloring, ByteColoring::DimZero);
         assert_eq!(settings.light_theme, "Solarized Light");
         assert_eq!(settings.dark_theme, "Nord");
         assert_eq!(settings.bytes_per_row, 24);
