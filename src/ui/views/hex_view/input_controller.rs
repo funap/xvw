@@ -37,6 +37,10 @@ pub struct InputController {
     active_column: EditColumn,
     pending: Option<PendingHexInput>,
     pending_range: Option<Range<usize>>,
+    /// When the user clicks the second (low) hex digit of a byte in Overwrite mode,
+    /// stores `(offset, original_byte)` so the next typed digit replaces only the low nibble
+    /// while moving away or cancelling leaves the byte untouched.
+    low_nibble_target: Option<(usize, u8)>,
 }
 
 impl InputController {
@@ -68,14 +72,25 @@ impl InputController {
         self.pending.is_some()
     }
 
+    pub fn low_nibble_offset(&self) -> Option<usize> {
+        self.low_nibble_target.map(|(offset, _)| offset)
+    }
+
+    pub fn set_low_nibble_target(&mut self, offset: usize, original_byte: u8) {
+        self.pending = None;
+        self.pending_range = None;
+        self.low_nibble_target = Some((offset, original_byte));
+    }
+
     pub fn clear_pending(&mut self) {
         self.pending = None;
         self.pending_range = None;
+        self.low_nibble_target = None;
     }
 
-    /// Cancels any pending input and returns `true` if a pending edit was active.
+    /// Cancels any pending input or low-nibble focus and returns `true` if one was active.
     pub fn cancel_pending(&mut self) -> bool {
-        let had_pending = self.pending.is_some();
+        let had_pending = self.pending.is_some() || self.low_nibble_target.is_some();
         self.clear_pending();
         had_pending
     }
@@ -92,6 +107,19 @@ impl InputController {
         if radix != DisplayRadix::Hexadecimal || is_read_only {
             return HexInputResult::Ignored;
         }
+
+        if selected_range.is_none()
+            && let Some((target_offset, original_byte)) = self.low_nibble_target.take()
+            && target_offset == cursor_offset
+        {
+            let value = (original_byte & 0xF0) | (digit & 0x0F);
+            return HexInputResult::Commit(HexCommit {
+                offset: target_offset,
+                value,
+                replacement_range: None,
+            });
+        }
+        self.low_nibble_target = None;
 
         let target_pos = if let Some(range) = selected_range {
             self.pending_range = Some(range.clone());
@@ -119,7 +147,9 @@ impl InputController {
 
     /// Commits a pending single digit padded with leading zero (e.g. `'a'` -> `0x0A`),
     /// as triggered by navigation away from the byte (HexEd.it style).
+    /// Moving away from an untyped low-nibble target simply clears it without modifying the byte.
     pub fn commit_pending_with_zero(&mut self, radix: DisplayRadix, is_read_only: bool) -> Option<HexCommit> {
+        self.low_nibble_target = None;
         if radix != DisplayRadix::Hexadecimal || is_read_only {
             self.clear_pending();
             return None;
@@ -141,5 +171,35 @@ impl InputController {
         }
         self.clear_pending();
         encoding.encode_char(character)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_low_nibble_target_edits_low_nibble_and_cancels_cleanly() {
+        let mut input = InputController::new();
+        input.set_low_nibble_target(4, 0xAB);
+        assert_eq!(input.low_nibble_offset(), Some(4));
+        assert!(!input.has_pending());
+
+        // Typing '5' commits 0xA5 immediately
+        let res = input.handle_hex_digit(0x05, 4, None, false, DisplayRadix::Hexadecimal);
+        assert_eq!(
+            res,
+            HexInputResult::Commit(HexCommit {
+                offset: 4,
+                value: 0xA5,
+                replacement_range: None,
+            })
+        );
+        assert_eq!(input.low_nibble_offset(), None);
+
+        // Moving away without typing does NOT emit a commit
+        input.set_low_nibble_target(4, 0xAB);
+        assert_eq!(input.commit_pending_with_zero(DisplayRadix::Hexadecimal, false), None);
+        assert_eq!(input.low_nibble_offset(), None);
     }
 }

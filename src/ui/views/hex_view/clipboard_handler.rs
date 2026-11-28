@@ -159,10 +159,24 @@ impl ClipboardHandler {
     }
 
     pub fn cut(editor: &Entity<Editor>, focus_handle: &FocusHandle, window: &mut Window, cx: &mut App) -> bool {
+        use crate::core::editor::OverwriteDeleteBehavior;
+        use gpui_kit::component::WindowExt as _;
+        use gpui_kit::component::notification::Notification;
+
         focus_handle.focus(window, cx);
         if editor.read(cx).is_read_only() {
             return false;
         }
+        let insert_mode = InsertModeState::is_enabled(cx);
+        let overwrite_behavior = cx.try_global::<OverwriteDeleteBehavior>().copied().unwrap_or_default();
+        if !insert_mode && overwrite_behavior == OverwriteDeleteBehavior::Disallow {
+            window.push_notification(
+                Notification::warning("Overwrite mode protects file size — use Copy, switch to Insert mode, or enable Zero-Fill in Settings"),
+                cx,
+            );
+            return false;
+        }
+
         let (range, bytes) = {
             let editor = editor.read(cx);
             let Some(range) = editor.edit_range() else {
@@ -189,9 +203,13 @@ impl ClipboardHandler {
         ));
 
         editor.update(cx, |editor, editor_cx| {
-            let remaining = editor.total_size().saturating_sub(range.len());
-            let cursor_after = range.start.min(remaining.saturating_sub(1));
-            let changed = editor.replace_range_with_cursor(range, Vec::new(), cursor_after);
+            let changed = if insert_mode {
+                let remaining = editor.total_size().saturating_sub(range.len());
+                let cursor_after = range.start.min(remaining.saturating_sub(1));
+                editor.replace_range_with_cursor(range, Vec::new(), cursor_after)
+            } else {
+                editor.zero_fill_range(range)
+            };
             if changed {
                 editor_cx.notify();
             }

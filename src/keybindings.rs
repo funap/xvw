@@ -71,6 +71,20 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("alt-f4", crate::actions::Quit, None),
         // Settings
         KeyBinding::new(primary_key!(","), crate::actions::OpenSettings, None),
+        // Zoom (font size)
+        KeyBinding::new(primary_key!("="), crate::actions::ZoomIn, None),
+        KeyBinding::new(primary_key!("+"), crate::actions::ZoomIn, None),
+        KeyBinding::new(primary_key!("-"), crate::actions::ZoomOut, None),
+        KeyBinding::new(primary_key!("0"), crate::actions::ResetZoom, None),
+        // Jump history navigation
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("ctrl--", crate::actions::NavigateBack, None),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("ctrl-shift--", crate::actions::NavigateForward, None),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("alt-left", crate::actions::NavigateBack, None),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("alt-right", crate::actions::NavigateForward, None),
         // Compare / Diff
         KeyBinding::new(alt_primary_key!("d"), crate::actions::CompareOpenFiles, None),
         // Standard text input shortcuts on non-macOS platforms

@@ -579,6 +579,8 @@ impl Render for HexView {
             .on_action(cx.listener(Self::move_right))
             .on_action(cx.listener(Self::move_up))
             .on_action(cx.listener(Self::move_down))
+            .on_action(cx.listener(Self::move_group_left))
+            .on_action(cx.listener(Self::move_group_right))
             .on_action(cx.listener(Self::vi_move_left))
             .on_action(cx.listener(Self::vi_move_right))
             .on_action(cx.listener(Self::vi_move_up))
@@ -587,6 +589,9 @@ impl Render for HexView {
             .on_action(cx.listener(Self::select_right))
             .on_action(cx.listener(Self::select_up))
             .on_action(cx.listener(Self::select_down))
+            .on_action(cx.listener(Self::select_group_left))
+            .on_action(cx.listener(Self::select_group_right))
+            .on_action(cx.listener(Self::toggle_edit_column))
             .on_action(cx.listener(Self::vi_select_left))
             .on_action(cx.listener(Self::vi_select_right))
             .on_action(cx.listener(Self::vi_select_up))
@@ -752,11 +757,76 @@ impl Render for HexView {
                         this.commit_pending_hex_with_zero(cx);
                         this.input.set_active_column(edit_target.column());
                         let target_pos = edit_target.offset();
-                        let selection_anchor = {
-                            let editor = this.editor.read(cx);
-                            editor.selection().anchor()
-                        };
                         let is_ascii = matches!(edit_target, EditTarget::Ascii { .. });
+                        let insert_mode = InsertModeState::is_enabled(cx);
+
+                        if !event.modifiers.shift && event.click_count >= 3 {
+                            let row_range = {
+                                let editor = this.editor.read(cx);
+                                let line_map = editor.line_starts();
+                                crate::core::editor::CursorModel::visual_row_bounds(target_pos, &line_map, editor.total_size())
+                                    .filter(|(start, end)| start < end)
+                                    .map(|(start, end)| start..end)
+                            };
+                            if let Some(range) = row_range {
+                                this.is_selecting = false;
+                                this.mouse_selection_anchor = None;
+                                this.editor.update(cx, |editor, cx| {
+                                    editor.set_selection_range(range.clone());
+                                    cx.notify();
+                                });
+                                cx.emit(HexViewEvent::SelectionChanged {
+                                    start: Some(range.start),
+                                    end: Some(range.end.saturating_sub(1)),
+                                });
+                                cx.emit(HexViewEvent::CursorMoved(range.start));
+                                return;
+                            }
+                        } else if !event.modifiers.shift && event.click_count == 2 {
+                            let dbl_range = {
+                                let editor = this.editor.read(cx);
+                                let total = editor.total_size();
+                                if editor.structure.show_inline_structure_view
+                                    && !editor.structure.is_parse_in_progress()
+                                    && let Some(parse_res) = editor.parse_result()
+                                    && !parse_res.is_live()
+                                    && let Some(leaf) = parse_res.find_deepest_leaf_at(target_pos)
+                                    && leaf.size > 0
+                                {
+                                    Some(leaf.offset..leaf.offset.saturating_add(leaf.size).min(total))
+                                } else if is_ascii {
+                                    editor
+                                        .document
+                                        .read()
+                                        .ok()
+                                        .and_then(|doc| crate::core::editor::cursor::ascii_word_range(doc.buffer.data(), target_pos))
+                                } else {
+                                    crate::core::editor::cursor::hex_double_click_range(target_pos, editor.options.group_size, total)
+                                }
+                            };
+                            if let Some(range) = dbl_range
+                                && range.start < range.end
+                            {
+                                this.is_selecting = false;
+                                this.mouse_selection_anchor = None;
+                                this.editor.update(cx, |editor, cx| {
+                                    editor.set_selection_range(range.clone());
+                                    cx.notify();
+                                });
+                                cx.emit(HexViewEvent::SelectionChanged {
+                                    start: Some(range.start),
+                                    end: Some(range.end.saturating_sub(1)),
+                                });
+                                cx.emit(HexViewEvent::CursorMoved(range.start));
+                                return;
+                            }
+                        }
+
+                        let (selection_anchor, total_size, is_read_only, clicked_byte) = {
+                            let editor = this.editor.read(cx);
+                            let byte = editor.document.read().ok().and_then(|doc| doc.buffer.data().get(target_pos).copied());
+                            (editor.selection().anchor(), editor.total_size(), editor.is_read_only(), byte)
+                        };
                         let (char_start, char_end) = if is_ascii {
                             let editor = this.editor.read(cx);
                             if let Ok(doc) = editor.document.read() {
@@ -777,15 +847,16 @@ impl Render for HexView {
                             Some(target_pos)
                         };
                         this.is_selecting = true;
-                        let insert_mode = InsertModeState::is_enabled(cx);
                         this.editor.update(cx, |editor, cx| {
                             if event.modifiers.shift {
-                                let drag_target = if is_ascii {
-                                    if target_pos >= selection_anchor { char_end } else { char_start }
+                                if is_ascii {
+                                    let (anchor, active) =
+                                        crate::core::editor::cursor::ascii_shift_click_selection(selection_anchor, char_start, char_end, total_size);
+                                    editor.set_selection(anchor, active);
+                                    editor.cursor.offset = if active > anchor { active.saturating_sub(1) } else { active };
                                 } else {
-                                    target_pos
-                                };
-                                editor.continue_drag(selection_anchor, drag_target);
+                                    editor.continue_drag(selection_anchor, target_pos);
+                                }
                             } else if is_ascii && char_end > char_start && !insert_mode {
                                 editor.set_selection_range(char_start..char_end);
                             } else {
@@ -793,6 +864,17 @@ impl Render for HexView {
                             }
                             cx.notify();
                         });
+
+                        if !event.modifiers.shift
+                            && !insert_mode
+                            && !is_read_only
+                            && this.radix == crate::core::radix::DisplayRadix::Hexadecimal
+                            && let EditTarget::Hex { offset, nibble: 1 } = edit_target
+                            && let Some(original_byte) = clicked_byte
+                        {
+                            this.input.set_low_nibble_target(offset, original_byte);
+                            cx.notify();
+                        }
                     } else if let Some(target_pos) = this.offset_from_point(event.position, window, cx) {
                         let (is_struct_collapse_toggle, struct_collapse_target, is_desc_field_selection) = {
                             let editor = this.editor.read(cx);
@@ -906,11 +988,19 @@ impl Render for HexView {
                         }
 
                         if let Some(range) = is_desc_field_selection {
+                            this.is_selecting = false;
+                            this.mouse_selection_anchor = None;
                             this.editor.update(cx, |editor, cx| {
                                 editor.set_selection_range(range.clone());
-                                editor.set_cursor_offset_exact(range.start);
                                 cx.notify();
                             });
+                            if range.start < range.end {
+                                cx.emit(HexViewEvent::SelectionChanged {
+                                    start: Some(range.start),
+                                    end: Some(range.end.saturating_sub(1)),
+                                });
+                            }
+                            cx.emit(HexViewEvent::CursorMoved(range.start));
                             return;
                         }
 
@@ -1118,6 +1208,7 @@ impl Render for HexView {
                 let is_big_endian = self.is_big_endian;
                 let active_column = self.input.active_column();
                 let pending_hex_digit = self.input.pending_hex_digit();
+                let low_nibble_offset = self.input.low_nibble_offset();
                 let highlights = self.highlights.clone();
                 let highlights_version = self.highlights_version;
                 let effective_highlights_cache = self.effective_highlights_cache.clone();
@@ -1338,6 +1429,7 @@ impl Render for HexView {
                                     ascii_cursor_char_range: ascii_cursor_char_range.clone(),
                                     cursor_visible,
                                     pending_hex_digit,
+                                    low_nibble_offset,
                                     outer_scroll_x,
                                     hex_scroll_x,
                                     desc_scroll_x,
@@ -1394,10 +1486,21 @@ impl Render for HexView {
                 let editor = self.editor.clone();
                 let view = view.clone();
                 move |menu, window, cx| {
-                    let (is_read_only, can_undo, can_redo, has_selection, can_copy) = {
+                    let (is_read_only, can_undo, can_redo, has_selection, can_copy, has_structure, can_switch_column) = {
                         let ed = editor.read(cx);
-                        let can_copy = view.read(cx).copy_range(cx).is_some();
-                        (ed.is_read_only(), ed.can_undo(), ed.can_redo(), ed.has_selection(), can_copy)
+                        let view_ref = view.read(cx);
+                        let can_copy = view_ref.copy_range(cx).is_some();
+                        let has_structure = ed.ksy_definition().is_some() || ed.parse_result().is_some();
+                        let is_struct_mode = ed.structure.show_inline_structure_view && ed.parse_result().is_some();
+                        (
+                            ed.is_read_only(),
+                            ed.can_undo(),
+                            ed.can_redo(),
+                            ed.has_selection(),
+                            can_copy,
+                            has_structure,
+                            view_ref.show_ascii && !is_struct_mode,
+                        )
                     };
                     menu.action_context(focus_handle.clone())
                         .menu_with_disabled("Undo", Box::new(Undo), is_read_only || !can_undo)
@@ -1405,24 +1508,24 @@ impl Render for HexView {
                         .menu_with_disabled("Cut", Box::new(Cut), is_read_only || !has_selection)
                         .menu_with_disabled("Copy", Box::new(Copy), !can_copy)
                         .submenu("Copy As", window, cx, move |menu, _window, _cx| {
-                            menu.menu_with_disabled("as Hex Dump", Box::new(CopyAsHexDump), !can_copy)
-                                .menu_with_disabled("as C++ Array", Box::new(CopyAsCppArray), !can_copy)
-                                .menu_with_disabled("as Hex Stream", Box::new(CopyAsHexStream), !can_copy)
-                                .menu_with_disabled("as Hex with Spaces", Box::new(CopyAsHexSpaces), !can_copy)
-                                .menu_with_disabled("as Printable Text", Box::new(CopyAsPrintableText), !can_copy)
-                                .menu_with_disabled("as Base64", Box::new(CopyAsBase64), !can_copy)
-                                .menu_with_disabled("as Escaped String", Box::new(CopyAsEscapedString), !can_copy)
-                                .menu_with_disabled("as Binary", Box::new(CopyAsBinary), !can_copy)
-                                .menu_with_disabled("as Rust Array", Box::new(CopyAsRustArray), !can_copy)
-                                .menu_with_disabled("as JSON Array", Box::new(CopyAsJsonArray), !can_copy)
+                            menu.menu_with_disabled("Hex Dump", Box::new(CopyAsHexDump), !can_copy)
+                                .menu_with_disabled("C++ Array", Box::new(CopyAsCppArray), !can_copy)
+                                .menu_with_disabled("Hex Stream", Box::new(CopyAsHexStream), !can_copy)
+                                .menu_with_disabled("Hex with Spaces", Box::new(CopyAsHexSpaces), !can_copy)
+                                .menu_with_disabled("Printable Text", Box::new(CopyAsPrintableText), !can_copy)
+                                .menu_with_disabled("Base64", Box::new(CopyAsBase64), !can_copy)
+                                .menu_with_disabled("Escaped String", Box::new(CopyAsEscapedString), !can_copy)
+                                .menu_with_disabled("Binary", Box::new(CopyAsBinary), !can_copy)
+                                .menu_with_disabled("Rust Array", Box::new(CopyAsRustArray), !can_copy)
+                                .menu_with_disabled("JSON Array", Box::new(CopyAsJsonArray), !can_copy)
                         })
                         .menu_with_disabled("Paste", Box::new(Paste), is_read_only)
                         .menu_with_disabled("Fill Selection...", Box::new(FillSelection), is_read_only || !has_selection)
                         .separator()
-                        .submenu("Scratchpad", window, cx, move |menu, _window, _cx| {
-                            menu.menu_with_icon("as Offset", IconName::Hash, Box::new(crate::actions::InsertActiveOffsetOnly))
-                                .menu_with_icon("as Hex Bytes", IconName::Binary, Box::new(crate::actions::InsertActiveHexBytes))
-                                .menu_with_icon("as Text / String", IconName::FileText, Box::new(crate::actions::InsertActiveText))
+                        .submenu("Send to Scratchpad", window, cx, move |menu, _window, _cx| {
+                            menu.menu_with_icon("Offset", IconName::Hash, Box::new(crate::actions::InsertActiveOffsetOnly))
+                                .menu_with_icon("Hex Bytes", IconName::Binary, Box::new(crate::actions::InsertActiveHexBytes))
+                                .menu_with_icon("Text / String", IconName::FileText, Box::new(crate::actions::InsertActiveText))
                         })
                         .separator()
                         .submenu("Bookmark", window, cx, move |menu, _window, _cx| {
@@ -1474,12 +1577,14 @@ impl Render for HexView {
                         .submenu("Structure", window, cx, move |menu, _window, _cx| {
                             menu.menu("Toggle Inline Structure View", Box::new(ToggleInlineStructureView))
                                 .menu("Load Structure Definition...", Box::new(LoadStructureDefinition))
-                                .menu("Clear Structure Definition", Box::new(ClearStructureDefinition))
+                                .menu_with_disabled("Clear Structure Definition", Box::new(ClearStructureDefinition), !has_structure)
                                 .separator()
                                 .menu("Show Structure Panel", Box::new(ShowStructureTab))
                         })
                         .separator()
                         .menu("Find / Replace...", Box::new(ToggleSearch))
+                        .menu("Go to Address...", Box::new(crate::actions::ToggleGoToAddress))
+                        .menu_with_disabled("Switch Hex / ASCII Column", Box::new(crate::actions::ToggleEditColumn), !can_switch_column)
                         .menu("Select All", Box::new(SelectAll))
                         .separator()
                         .menu("Break Line", Box::new(AddCustomBreak))

@@ -12,11 +12,12 @@ use gpui_kit::{
 use crate::actions::{
     AddCustomBreak, BookmarkBlue, BookmarkCyan, BookmarkGreen, BookmarkOrange, BookmarkPink, BookmarkPurple, BookmarkRed, BookmarkYellow, ClearAllBookmarks,
     ClearAllCustomBreaks, ClearBookmark, Copy, CopyAsBase64, CopyAsBinary, CopyAsCppArray, CopyAsEscapedString, CopyAsHexDump, CopyAsHexSpaces,
-    CopyAsHexStream, CopyAsJsonArray, CopyAsPrintableText, CopyAsRustArray, Cut, FocusHexView, GoToBeginning, GoToEnd, HideAllBookmarks, JoinLine, Paste, Redo,
-    RemoveCustomBreakBackward, RemoveCustomBreakForward, RemoveCustomBreaksInRange, SearchNext, SearchPrev, SelectAll, ShowAllBookmarks, ShowOnlyBookmarkBlue,
-    ShowOnlyBookmarkCyan, ShowOnlyBookmarkGreen, ShowOnlyBookmarkOrange, ShowOnlyBookmarkPink, ShowOnlyBookmarkPurple, ShowOnlyBookmarkRed,
-    ShowOnlyBookmarkYellow, ToggleBookmarkBlue, ToggleBookmarkCyan, ToggleBookmarkGreen, ToggleBookmarkOrange, ToggleBookmarkPink, ToggleBookmarkPurple,
-    ToggleBookmarkRed, ToggleBookmarkYellow, ToggleGoToAddress, ToggleHideUnbookmarked, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
+    CopyAsHexStream, CopyAsJsonArray, CopyAsPrintableText, CopyAsRustArray, Cut, FocusHexView, GoToBeginning, GoToEnd, HideAllBookmarks, JoinLine,
+    NavigateBack, NavigateForward, Paste, Redo, RemoveCustomBreakBackward, RemoveCustomBreakForward, RemoveCustomBreaksInRange, SearchNext, SearchPrev,
+    SelectAll, SelectToBeginning, SelectToEnd, ShowAllBookmarks, ShowOnlyBookmarkBlue, ShowOnlyBookmarkCyan, ShowOnlyBookmarkGreen, ShowOnlyBookmarkOrange,
+    ShowOnlyBookmarkPink, ShowOnlyBookmarkPurple, ShowOnlyBookmarkRed, ShowOnlyBookmarkYellow, ToggleBookmarkBlue, ToggleBookmarkCyan, ToggleBookmarkGreen,
+    ToggleBookmarkOrange, ToggleBookmarkPink, ToggleBookmarkPurple, ToggleBookmarkRed, ToggleBookmarkYellow, ToggleEditColumn, ToggleGoToAddress,
+    ToggleHideUnbookmarked, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
 };
 use crate::app_state::{AppState, InsertModeState};
 use crate::core::appearance::Appearance;
@@ -176,14 +177,31 @@ impl EditorView {
         })
         .detach();
 
-        // Subscribe to HexView scroll events to update highlights when scrolling
-        cx.subscribe(&hex_view, |this, _, event: &crate::ui::views::hex_view::HexViewEvent, cx| {
-            if let crate::ui::views::hex_view::HexViewEvent::Scrolled(scroll_row) = event {
+        // Subscribe to HexView scroll and escape events
+        cx.subscribe(&hex_view, |this, _, event: &crate::ui::views::hex_view::HexViewEvent, cx| match event {
+            crate::ui::views::hex_view::HexViewEvent::Scrolled(scroll_row) => {
                 let current = this.capture_highlight_sync_state(this.editor.read(cx), Some(*scroll_row), cx);
                 if current.needs_scroll_refresh(this.last_highlight_sync) {
                     this.update_highlights(cx);
                 }
             }
+            crate::ui::views::hex_view::HexViewEvent::EscapePressed => {
+                let mut dismissed = false;
+                if this.is_search_visible {
+                    this.is_search_visible = false;
+                    dismissed = true;
+                }
+                if this.is_goto_visible {
+                    this.is_goto_visible = false;
+                    dismissed = true;
+                }
+                if dismissed {
+                    this.update_top_overlay_state(cx);
+                    this.update_highlights(cx);
+                    cx.notify();
+                }
+            }
+            _ => {}
         })
         .detach();
 
@@ -638,7 +656,10 @@ impl EditorView {
         let insert_mode = InsertModeState::is_enabled(cx);
         self.editor.update(cx, |editor: &mut Editor, _| {
             if insert_mode {
-                editor.set_cursor_offset_exact(editor.total_size());
+                let from = editor.cursor.offset;
+                let total = editor.total_size();
+                editor.set_cursor_offset_exact(total);
+                editor.nav_history.record_jump(from, total);
             } else {
                 editor.go_to_end();
             }
@@ -649,6 +670,78 @@ impl EditorView {
             view.focus_handle(cx).focus(window, cx);
         });
         cx.notify();
+    }
+
+    pub fn select_to_beginning(&mut self, _: &SelectToBeginning, window: &mut Window, cx: &mut Context<Self>) {
+        let insert_mode = InsertModeState::is_enabled(cx);
+        self.editor.update(cx, |editor: &mut Editor, _| {
+            if insert_mode {
+                editor.select_home_for_insert();
+            } else {
+                editor.select_home();
+            }
+        });
+        let cursor_offset = self.editor.read(cx).cursor.offset;
+        self.hex_view.update(cx, |view, cx| {
+            view.scroll_to_byte(cursor_offset, cx);
+            view.focus_handle(cx).focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    pub fn select_to_end(&mut self, _: &SelectToEnd, window: &mut Window, cx: &mut Context<Self>) {
+        let insert_mode = InsertModeState::is_enabled(cx);
+        self.editor.update(cx, |editor: &mut Editor, _| {
+            if insert_mode {
+                editor.select_end_for_insert();
+            } else {
+                editor.select_end();
+            }
+        });
+        let cursor_offset = self.editor.read(cx).cursor.offset;
+        self.hex_view.update(cx, |view, cx| {
+            view.scroll_to_byte(cursor_offset, cx);
+            view.focus_handle(cx).focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    pub fn navigate_back(&mut self, _: &NavigateBack, window: &mut Window, cx: &mut Context<Self>) {
+        let target = self.editor.update(cx, |editor: &mut Editor, cx| {
+            let offset = editor.navigate_back();
+            if offset.is_some() {
+                cx.notify();
+            }
+            offset
+        });
+        if let Some(offset) = target {
+            self.hex_view.update(cx, |view, cx| {
+                view.scroll_to_byte_if_needed(offset, cx);
+                view.focus_handle(cx).focus(window, cx);
+            });
+            cx.notify();
+        }
+    }
+
+    pub fn navigate_forward(&mut self, _: &NavigateForward, window: &mut Window, cx: &mut Context<Self>) {
+        let target = self.editor.update(cx, |editor: &mut Editor, cx| {
+            let offset = editor.navigate_forward();
+            if offset.is_some() {
+                cx.notify();
+            }
+            offset
+        });
+        if let Some(offset) = target {
+            self.hex_view.update(cx, |view, cx| {
+                view.scroll_to_byte_if_needed(offset, cx);
+                view.focus_handle(cx).focus(window, cx);
+            });
+            cx.notify();
+        }
+    }
+
+    pub fn toggle_edit_column(&mut self, action: &ToggleEditColumn, window: &mut Window, cx: &mut Context<Self>) {
+        self.hex_view.update(cx, |hv, cx| hv.toggle_edit_column(action, window, cx));
     }
 
     pub fn copy(&mut self, action: &Copy, window: &mut Window, cx: &mut Context<Self>) {
@@ -1052,6 +1145,11 @@ impl Render for EditorView {
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::go_to_beginning))
             .on_action(cx.listener(Self::go_to_end))
+            .on_action(cx.listener(Self::select_to_beginning))
+            .on_action(cx.listener(Self::select_to_end))
+            .on_action(cx.listener(Self::navigate_back))
+            .on_action(cx.listener(Self::navigate_forward))
+            .on_action(cx.listener(Self::toggle_edit_column))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::paste))

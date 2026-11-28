@@ -1,7 +1,7 @@
 use super::types::CONTEXT;
 use crate::actions::{
     AddCustomBreak, ClearAllCustomBreaks, Copy, CopyAsHexDump, Cut, GoToBeginning, GoToEnd, JoinLine, Paste, Redo, RemoveCustomBreaksInRange, SearchNext,
-    SearchPrev, ToggleGoToAddress, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
+    SearchPrev, SelectToBeginning, SelectToEnd, ToggleEditColumn, ToggleGoToAddress, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
 };
 use gpui_kit::*;
 
@@ -12,10 +12,14 @@ actions!(
         MoveRight,
         MoveUp,
         MoveDown,
+        MoveGroupLeft,
+        MoveGroupRight,
         SelectLeft,
         SelectRight,
         SelectUp,
         SelectDown,
+        SelectGroupLeft,
+        SelectGroupRight,
         SelectAll,
         PageUp,
         PageDown,
@@ -50,18 +54,63 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-right", SelectRight, Some(CONTEXT)),
         KeyBinding::new("shift-up", SelectUp, Some(CONTEXT)),
         KeyBinding::new("shift-down", SelectDown, Some(CONTEXT)),
+        // Group / word jump
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-left", MoveGroupLeft, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-right", MoveGroupRight, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-shift-left", SelectGroupLeft, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("alt-shift-right", SelectGroupRight, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-left", MoveGroupLeft, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-right", MoveGroupRight, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-left", SelectGroupLeft, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-right", SelectGroupRight, Some(CONTEXT)),
+        // Column toggle (Hex <-> ASCII)
+        KeyBinding::new("tab", ToggleEditColumn, Some(CONTEXT)),
+        KeyBinding::new("shift-tab", ToggleEditColumn, Some(CONTEXT)),
+        // Page / Line / Document boundaries
         KeyBinding::new("pageup", PageUp, Some(CONTEXT)),
         KeyBinding::new("pagedown", PageDown, Some(CONTEXT)),
         KeyBinding::new("home", Home, Some(CONTEXT)),
         KeyBinding::new("end", End, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-left", Home, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-right", End, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-shift-left", SelectHome, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-shift-right", SelectEnd, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-home", GoToBeginning, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-up", GoToBeginning, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-home", GoToBeginning, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-end", GoToEnd, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-down", GoToEnd, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-end", GoToEnd, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-shift-home", SelectToBeginning, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-shift-up", SelectToBeginning, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-home", SelectToBeginning, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-shift-end", SelectToEnd, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-shift-down", SelectToEnd, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-end", SelectToEnd, Some(CONTEXT)),
         KeyBinding::new("shift-pageup", SelectPageUp, Some(CONTEXT)),
         KeyBinding::new("shift-pagedown", SelectPageDown, Some(CONTEXT)),
         KeyBinding::new("shift-home", SelectHome, Some(CONTEXT)),

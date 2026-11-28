@@ -60,6 +60,30 @@ impl Workspace {
         }
     }
 
+    pub(crate) fn on_action_navigate_back(&mut self, action: &NavigateBack, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.navigate_back(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_navigate_forward(&mut self, action: &NavigateForward, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.navigate_forward(action, window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn on_action_toggle_edit_column(&mut self, action: &ToggleEditColumn, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.toggle_edit_column(action, window, cx);
+            });
+        }
+    }
+
     pub(crate) fn on_action_toggle_search(&mut self, action: &ToggleSearch, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {
