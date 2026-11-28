@@ -168,8 +168,6 @@ impl HexView {
 
     pub(super) fn delete_backward_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::core::editor::OverwriteDeleteBehavior;
-        use gpui_kit::component::WindowExt as _;
-        use gpui_kit::component::notification::Notification;
 
         cx.focus_self(window);
         if self.edit_column_is_hex() && self.input.cancel_pending() {
@@ -182,22 +180,17 @@ impl HexView {
         }
         let insert_mode = InsertModeState::is_enabled(cx);
         let overwrite_behavior = cx.try_global::<OverwriteDeleteBehavior>().copied().unwrap_or_default();
-        if !insert_mode && overwrite_behavior == OverwriteDeleteBehavior::Disallow {
-            window.push_notification(
-                Notification::warning("Overwrite mode protects file size — switch to Insert mode or change Overwrite Delete / Cut in Settings"),
-                cx,
-            );
-            return;
-        }
         let (changed, cursor_moved, cursor_offset) = self.editor.update(cx, |ed, editor_cx| {
             let before = ed.cursor.offset;
-            let changed = if insert_mode || overwrite_behavior == OverwriteDeleteBehavior::DeleteBytes {
+            let changed = if insert_mode {
                 ed.delete_backward()
             } else {
-                // In Overwrite + ZeroFill mode, the block cursor sits on the target byte:
-                // zero-fill the current byte (or selection) and advance to the next offset (+1),
-                // so Delete works at offset 0 (including macOS Delete key which emits "backspace").
-                ed.zero_fill_forward()
+                // In Overwrite mode, the block cursor frames the current byte:
+                // Delete/Backspace acts on the framed byte (or selection) rather than offset - 1.
+                match overwrite_behavior {
+                    OverwriteDeleteBehavior::DeleteBytes => ed.delete_forward(),
+                    OverwriteDeleteBehavior::ZeroFill => ed.zero_fill_forward(),
+                }
             };
             let moved = ed.cursor.offset != before;
             if changed || moved {
@@ -213,8 +206,6 @@ impl HexView {
 
     pub(super) fn delete_forward_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::core::editor::OverwriteDeleteBehavior;
-        use gpui_kit::component::WindowExt as _;
-        use gpui_kit::component::notification::Notification;
 
         cx.focus_self(window);
         self.input.clear_pending();
@@ -223,13 +214,6 @@ impl HexView {
         }
         let insert_mode = InsertModeState::is_enabled(cx);
         let overwrite_behavior = cx.try_global::<OverwriteDeleteBehavior>().copied().unwrap_or_default();
-        if !insert_mode && overwrite_behavior == OverwriteDeleteBehavior::Disallow {
-            window.push_notification(
-                Notification::warning("Overwrite mode protects file size — switch to Insert mode or change Overwrite Delete / Cut in Settings"),
-                cx,
-            );
-            return;
-        }
         let (changed, cursor_moved, cursor_offset) = self.editor.update(cx, |ed, editor_cx| {
             let before = ed.cursor.offset;
             let changed = if insert_mode || overwrite_behavior == OverwriteDeleteBehavior::DeleteBytes {

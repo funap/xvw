@@ -959,7 +959,7 @@ panel_width = "wide"
     fn overwrite_delete_behavior_persists_and_falls_back_on_invalid() {
         let file = TestSettingsFile::new("overwrite-delete");
         let mut settings = Settings::default();
-        assert_eq!(settings.overwrite_delete_behavior, OverwriteDeleteBehavior::Disallow);
+        assert_eq!(settings.overwrite_delete_behavior, OverwriteDeleteBehavior::DeleteBytes);
 
         settings.overwrite_delete_behavior = OverwriteDeleteBehavior::ZeroFill;
         settings.save_to(&file.path).expect("save settings");
@@ -973,6 +973,6 @@ panel_width = "wide"
 
         fs::write(&file.path, "overwrite_delete_behavior = \"UnknownMode\"\n").expect("write invalid behavior");
         let fallback = Settings::load_from(&file.path).expect("load fallback settings");
-        assert_eq!(fallback.overwrite_delete_behavior, OverwriteDeleteBehavior::Disallow);
+        assert_eq!(fallback.overwrite_delete_behavior, OverwriteDeleteBehavior::DeleteBytes);
     }
 }

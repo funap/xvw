@@ -160,8 +160,6 @@ impl ClipboardHandler {
 
     pub fn cut(editor: &Entity<Editor>, focus_handle: &FocusHandle, window: &mut Window, cx: &mut App) -> bool {
         use crate::core::editor::OverwriteDeleteBehavior;
-        use gpui_kit::component::WindowExt as _;
-        use gpui_kit::component::notification::Notification;
 
         focus_handle.focus(window, cx);
         if editor.read(cx).is_read_only() {
@@ -169,13 +167,6 @@ impl ClipboardHandler {
         }
         let insert_mode = InsertModeState::is_enabled(cx);
         let overwrite_behavior = cx.try_global::<OverwriteDeleteBehavior>().copied().unwrap_or_default();
-        if !insert_mode && overwrite_behavior == OverwriteDeleteBehavior::Disallow {
-            window.push_notification(
-                Notification::warning("Overwrite mode protects file size — use Copy, switch to Insert mode, or change Overwrite Delete / Cut in Settings"),
-                cx,
-            );
-            return false;
-        }
 
         let (range, bytes) = {
             let editor = editor.read(cx);

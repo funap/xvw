@@ -5,23 +5,20 @@ use serde::{Deserialize, Serialize};
 /// Behavior of Backspace, Delete, and Cut while editing in Overwrite mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OverwriteDeleteBehavior {
-    /// Ignore delete/cut operations in Overwrite mode and notify the user, keeping file size fixed.
+    /// Remove the target byte(s) in Overwrite mode, reducing file size.
     #[default]
-    Disallow,
+    DeleteBytes,
     /// Overwrite the target byte(s) with `0x00` in Overwrite mode, keeping file size fixed.
     ZeroFill,
-    /// Remove the target byte(s) in Overwrite mode, reducing file size.
-    DeleteBytes,
 }
 
 impl OverwriteDeleteBehavior {
-    pub const ALL: [Self; 3] = [Self::Disallow, Self::ZeroFill, Self::DeleteBytes];
+    pub const ALL: [Self; 2] = [Self::DeleteBytes, Self::ZeroFill];
 
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Disallow => "Disallow (Protect Size)",
-            Self::ZeroFill => "Zero-Fill (0x00)",
             Self::DeleteBytes => "Delete Bytes (Resize)",
+            Self::ZeroFill => "Zero-Fill (0x00)",
         }
     }
 }
