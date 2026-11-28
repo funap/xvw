@@ -14,23 +14,23 @@ categories = ["development-tools", "gui"]
 dirs = "7.0.0"
 gpui-kit = { version = "0.11.0", features = ["tree-sitter-markdown"] }
 rust-embed = "8.14.0"
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 tokio = { version = "1.54.1", features = ["full"] }
 autocorrect = "2.14.2"
 serde = { version = "1.0.229", features = ["derive"] }
 schemars = "1.2.3"
 serde_json = "1.0.154"
-toml = "1.2.2+spec-1.1.0"
+toml = "1.2.3+spec-1.1.0"
 bstr = "1.14.0"
 serde_yaml = "0.9"
 memmap2 = "0.9.12"
 flate2 = "1.1.11"
 image = "0.25.10"
-sha2 = "0.11.1"
+sha2 = "0.11.2"
 encoding_rs = "0.8.44"
 getrandom = "0.4.3"
 lsp-types = "0.97.0"
-regex = "1"
+regex = "1.13.2"
 
 [profile.test]
 # Keep test builds fast enough for IDE test-runner timeouts. The tests cover
