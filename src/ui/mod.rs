@@ -20,6 +20,7 @@ impl gpui_kit::Global for crate::core::radix::ByteColoring {}
 impl gpui_kit::Global for crate::core::radix::ByteCategoryColors {}
 impl gpui_kit::Global for crate::core::structure::StructureYamlShaThreshold {}
 impl gpui_kit::Global for crate::core::structure::StructureYamlIncludeOffsets {}
+impl gpui_kit::Global for crate::core::editor::OverwriteDeleteBehavior {}
 
 /// Initializes all UI panels, dialogs, views, and menus.
 pub fn init(cx: &mut gpui_kit::App) {

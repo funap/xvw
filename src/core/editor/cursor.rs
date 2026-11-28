@@ -705,6 +705,238 @@ impl CursorModel {
         };
         self.selection = Selection::new(anchor, active);
     }
+
+    /// Returns `(line_start, line_end)` half-open bounds of the visual row containing `offset`.
+    pub fn visual_row_bounds(offset: usize, line_map: &LineMap, total_size: usize) -> Option<(usize, usize)> {
+        if line_map.is_empty() {
+            return None;
+        }
+        let line_idx = LayoutEngine::find_line_index(offset.min(total_size), line_map);
+        let line_start = line_map.get(line_idx)?;
+        let line_end = if line_idx + 1 < line_map.len() {
+            line_map.get(line_idx + 1).unwrap_or(total_size)
+        } else {
+            total_size
+        };
+        Some((line_start.min(total_size), line_end.min(total_size)))
+    }
+
+    /// Moves cursor to the first byte of the current visual row.
+    pub fn move_to_line_start(&mut self, line_map: &LineMap, total_size: usize) {
+        if let Some((line_start, _)) = Self::visual_row_bounds(self.offset, line_map, total_size) {
+            self.offset = line_start;
+        } else {
+            self.offset = 0;
+        }
+        self.clear_selection(total_size);
+    }
+
+    /// Moves cursor to the end of the current visual row.
+    /// In Overwrite mode, lands on the last byte (or group-aligned start) of the row.
+    /// In Insert mode, lands at the row's exclusive end boundary.
+    pub fn move_to_line_end(&mut self, is_insert_mode: bool, line_map: &LineMap, total_size: usize) {
+        if let Some((line_start, line_end)) = Self::visual_row_bounds(self.offset, line_map, total_size) {
+            if is_insert_mode {
+                self.offset = line_end;
+            } else if line_end > line_start {
+                let step = self.group_size.byte_count();
+                let last_byte = line_end.saturating_sub(1);
+                let aligned = (last_byte / step) * step;
+                self.offset = aligned.max(line_start);
+            } else {
+                self.offset = line_start;
+            }
+        } else {
+            self.offset = if is_insert_mode { total_size } else { total_size.saturating_sub(1) };
+        }
+        self.clear_selection(total_size);
+    }
+
+    /// Extends selection to the start of the current visual row.
+    pub fn select_to_line_start(&mut self, is_insert_mode: bool, line_map: &LineMap, total_size: usize) {
+        let active_pos = if self.has_selection(total_size) {
+            self.selection.active()
+        } else {
+            self.offset.min(total_size)
+        };
+        let lookup = if active_pos > 0 && active_pos == self.selection.active() && self.has_selection(total_size) && active_pos > self.selection.anchor() {
+            active_pos.saturating_sub(1)
+        } else {
+            active_pos
+        };
+        let line_start = Self::visual_row_bounds(lookup, line_map, total_size).map(|(s, _)| s).unwrap_or(0);
+        let anchor = if self.has_selection(total_size) {
+            self.selection.anchor()
+        } else if is_insert_mode {
+            self.offset.min(total_size)
+        } else {
+            let step = self.group_size.byte_count();
+            if self.offset < total_size {
+                self.offset.saturating_add(step).min(total_size)
+            } else {
+                total_size
+            }
+        };
+        self.offset = line_start;
+        self.selection = Selection::new(anchor, line_start);
+    }
+
+    /// Extends selection to the end of the current visual row.
+    pub fn select_to_line_end(&mut self, is_insert_mode: bool, line_map: &LineMap, total_size: usize) {
+        let active_pos = if self.has_selection(total_size) {
+            self.selection.active()
+        } else {
+            self.offset.min(total_size)
+        };
+        let lookup = if active_pos > 0 && active_pos == self.selection.active() && self.has_selection(total_size) && active_pos > self.selection.anchor() {
+            active_pos.saturating_sub(1)
+        } else {
+            active_pos
+        };
+        let (line_start, line_end) = Self::visual_row_bounds(lookup, line_map, total_size).unwrap_or((0, total_size));
+        let anchor = if self.has_selection(total_size) {
+            self.selection.anchor()
+        } else {
+            self.offset.min(total_size)
+        };
+        self.offset = if is_insert_mode {
+            line_end
+        } else if line_end > line_start {
+            line_end.saturating_sub(1)
+        } else {
+            line_start
+        };
+        self.selection = Selection::new(anchor, line_end);
+    }
+
+    /// Returns the jump step in bytes for group-jump navigation (`Alt/Ctrl+Left/Right`).
+    pub fn group_jump_step(&self) -> usize {
+        if self.group_size == ByteGroupSize::One {
+            4
+        } else {
+            self.group_size.byte_count()
+        }
+    }
+
+    /// Moves cursor backward to the previous group boundary (4-byte word when 1-byte grouping is active).
+    pub fn move_group_left(&mut self, total_size: usize) {
+        let step = self.group_jump_step();
+        self.offset = if self.offset > 0 && !self.offset.is_multiple_of(step) {
+            (self.offset / step) * step
+        } else {
+            Self::previous_group_boundary(self.offset, total_size, step)
+        };
+        self.clear_selection(total_size);
+    }
+
+    /// Moves cursor forward to the next group boundary (4-byte word when 1-byte grouping is active).
+    pub fn move_group_right(&mut self, is_insert_mode: bool, total_size: usize) {
+        let step = self.group_jump_step();
+        let next = Self::next_group_boundary(self.offset, total_size, step);
+        self.offset = if is_insert_mode {
+            next
+        } else if total_size == 0 {
+            0
+        } else {
+            next.min(total_size.saturating_sub(1))
+        };
+        self.clear_selection(total_size);
+    }
+
+    /// Extends selection backward to the previous group boundary.
+    pub fn select_group_left(&mut self, is_insert_mode: bool, total_size: usize) {
+        let step = self.group_jump_step();
+        let (anchor, current_active) = if self.has_selection(total_size) {
+            (self.selection.anchor(), self.selection.active())
+        } else {
+            let initial_anchor = if is_insert_mode {
+                self.offset.min(total_size)
+            } else {
+                self.offset.saturating_add(self.group_size.byte_count()).min(total_size)
+            };
+            (initial_anchor, self.offset.min(total_size))
+        };
+        let target = if current_active > 0 && !current_active.is_multiple_of(step) {
+            (current_active / step) * step
+        } else {
+            Self::previous_group_boundary(current_active, total_size, step)
+        };
+        self.offset = target;
+        self.selection = Selection::new(anchor, target);
+    }
+
+    /// Extends selection forward to the next group boundary.
+    pub fn select_group_right(&mut self, _is_insert_mode: bool, total_size: usize) {
+        let step = self.group_jump_step();
+        let (anchor, current_active) = if self.has_selection(total_size) {
+            (self.selection.anchor(), self.selection.active())
+        } else {
+            (self.offset.min(total_size), self.offset.min(total_size))
+        };
+        let target = Self::next_group_boundary(current_active, total_size, step);
+        self.offset = target.min(total_size);
+        self.selection = Selection::new(anchor, target);
+    }
+}
+
+/// Returns the half-open byte range for double-clicking a byte in the Hex column:
+/// selects the active byte group (or 4-byte aligned dword when 1-byte grouping is active).
+pub fn hex_double_click_range(offset: usize, group_size: ByteGroupSize, total_size: usize) -> Option<Range<usize>> {
+    if total_size == 0 || offset >= total_size {
+        return None;
+    }
+    let step = if group_size == ByteGroupSize::One { 4 } else { group_size.byte_count() };
+    let start = (offset / step) * step;
+    let end = (start + step).min(total_size);
+    (start < end).then_some(start..end)
+}
+
+/// Returns the half-open byte range for double-clicking in the ASCII column:
+/// selects a contiguous word (`[A-Za-z0-9_]`), contiguous whitespace, or the clicked character.
+pub fn ascii_word_range(data: &[u8], offset: usize) -> Option<Range<usize>> {
+    let total = data.len();
+    if total == 0 || offset >= total {
+        return None;
+    }
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let is_space = |b: u8| b == b' ' || b == b'\t';
+    let b = data[offset];
+    if is_word(b) {
+        let mut start = offset;
+        while start > 0 && is_word(data[start - 1]) {
+            start -= 1;
+        }
+        let mut end = offset + 1;
+        while end < total && is_word(data[end]) {
+            end += 1;
+        }
+        Some(start..end)
+    } else if is_space(b) {
+        let mut start = offset;
+        while start > 0 && is_space(data[start - 1]) {
+            start -= 1;
+        }
+        let mut end = offset + 1;
+        while end < total && is_space(data[end]) {
+            end += 1;
+        }
+        Some(start..end)
+    } else {
+        Some(offset..(offset + 1).min(total))
+    }
+}
+
+/// Resolves half-open `(anchor, active)` selection endpoints for Shift+click in the ASCII column
+/// without the +1 off-by-one error when `char_end` is already an exclusive boundary.
+pub fn ascii_shift_click_selection(anchor: usize, char_start: usize, char_end: usize, total_size: usize) -> (usize, usize) {
+    let clamped_anchor = anchor.min(total_size);
+    let clamped_start = char_start.min(total_size);
+    let clamped_end = char_end.min(total_size).max(clamped_start);
+    if clamped_start >= clamped_anchor {
+        (clamped_anchor, clamped_end)
+    } else {
+        (clamped_anchor, clamped_start)
+    }
 }
 
 #[cfg(test)]
@@ -824,5 +1056,77 @@ mod tests {
         empty_model.select_page_up(10, &empty_map, 0);
         empty_model.select_page_down(10, &empty_map, 0);
         assert_eq!(empty_model.offset, 0);
+    }
+
+    #[test]
+    fn test_cursor_model_line_home_end_and_select() {
+        let line_map = LineMap::Standard {
+            total_size: 40,
+            bytes_per_row: 16,
+        };
+        let mut model = CursorModel::default();
+        model.set_cursor_offset_exact(21, 40);
+
+        model.move_to_line_start(&line_map, 40);
+        assert_eq!(model.offset, 16);
+
+        model.move_to_line_end(false, &line_map, 40);
+        assert_eq!(model.offset, 31);
+
+        model.move_to_line_end(true, &line_map, 40);
+        assert_eq!(model.offset, 32);
+
+        // Select from middle of row 1 to row start (overwrite mode includes clicked byte)
+        model.set_cursor_offset_exact(20, 40);
+        model.select_to_line_start(false, &line_map, 40);
+        assert_eq!(model.offset, 16);
+        assert_eq!(model.selection_range(40), Some(16..21));
+
+        // Select from middle of row 1 to row end
+        model.set_cursor_offset_exact(20, 40);
+        model.select_to_line_end(false, &line_map, 40);
+        assert_eq!(model.offset, 31);
+        assert_eq!(model.selection_range(40), Some(20..32));
+    }
+
+    #[test]
+    fn test_cursor_model_group_jump_and_select() {
+        let mut model = CursorModel::default(); // 1-byte grouping -> jumps by 4
+        model.set_cursor_offset_exact(2, 32);
+        model.move_group_right(false, 32);
+        assert_eq!(model.offset, 4);
+        model.move_group_right(false, 32);
+        assert_eq!(model.offset, 8);
+        model.move_group_left(32);
+        assert_eq!(model.offset, 4);
+
+        model.set_cursor_offset_exact(6, 32);
+        model.move_group_left(32);
+        assert_eq!(model.offset, 4);
+
+        // Select group right from 4 -> 4..8, then 4..12
+        model.select_group_right(false, 32);
+        assert_eq!(model.selection_range(32), Some(4..8));
+        model.select_group_right(false, 32);
+        assert_eq!(model.selection_range(32), Some(4..12));
+    }
+
+    #[test]
+    fn test_double_click_and_ascii_shift_click_helpers() {
+        assert_eq!(hex_double_click_range(5, ByteGroupSize::One, 16), Some(4..8));
+        assert_eq!(hex_double_click_range(5, ByteGroupSize::Two, 16), Some(4..6));
+        assert_eq!(hex_double_click_range(14, ByteGroupSize::Four, 15), Some(12..15));
+
+        let data = b"hello_world  123!";
+        assert_eq!(ascii_word_range(data, 2), Some(0..11));
+        assert_eq!(ascii_word_range(data, 11), Some(11..13));
+        assert_eq!(ascii_word_range(data, 16), Some(16..17));
+
+        // Forward ASCII Shift+click from anchor 2 to single-byte char [5..6) => (2, 6), NOT (2, 7)
+        assert_eq!(ascii_shift_click_selection(2, 5, 6, 10), (2, 6));
+        // Forward ASCII Shift+click to 3-byte UTF-8 char [5..8) => (2, 8)
+        assert_eq!(ascii_shift_click_selection(2, 5, 8, 10), (2, 8));
+        // Backward ASCII Shift+click from anchor 8 to char [2..3) => (8, 2)
+        assert_eq!(ascii_shift_click_selection(8, 2, 3, 10), (8, 2));
     }
 }

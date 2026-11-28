@@ -2,15 +2,17 @@
 
 pub mod cursor;
 pub mod layout_engine;
+pub mod navigation_history;
 pub mod search_state;
 pub mod structure_state;
 pub mod view_options;
 
 pub use cursor::{CursorModel, CursorState};
 pub use layout_engine::LayoutEngine;
+pub use navigation_history::NavigationHistory;
 pub use search_state::SearchState;
 pub use structure_state::EditorStructureState;
-pub use view_options::ViewOptions;
+pub use view_options::{OverwriteDeleteBehavior, ViewOptions};
 
 use crate::core::bookmark::{BookmarkColor, BookmarkItem};
 use crate::core::color::RgbaColor;
@@ -39,6 +41,7 @@ pub struct Editor {
     pub search_state: SearchState,
     pub find_state: SearchState,
     pub structure: EditorStructureState,
+    pub nav_history: NavigationHistory,
 }
 
 /// Read-only session providing scoped queries into document bookmarks and visibility.
@@ -386,6 +389,7 @@ impl Editor {
             search_state: SearchState::default(),
             find_state: SearchState::default(),
             structure: EditorStructureState::default(),
+            nav_history: NavigationHistory::new(),
         }
     }
 
@@ -608,7 +612,9 @@ impl Editor {
     }
 
     pub fn adjust_after_edit(&mut self, start: usize, old_len: usize, new_len: usize) {
-        self.cursor.adjust_after_edit(start, old_len, new_len, self.total_size());
+        let total = self.total_size();
+        self.cursor.adjust_after_edit(start, old_len, new_len, total);
+        self.nav_history.adjust_after_edit(start, old_len, new_len, total);
         self.layout.invalidate();
     }
 
@@ -691,27 +697,53 @@ impl Editor {
     }
 
     pub fn go_to_beginning(&mut self) {
+        let from = self.cursor.offset;
         self.cursor.go_to_beginning(self.total_size());
+        self.nav_history.record_jump(from, self.cursor.offset);
     }
 
     pub fn go_to_end(&mut self) {
+        let from = self.cursor.offset;
         self.cursor.go_to_end(self.total_size());
+        self.nav_history.record_jump(from, self.cursor.offset);
     }
 
     pub fn go_to_offset(&mut self, offset: usize, extend_selection: bool) {
+        let from = self.cursor.offset;
         let target = offset.min(self.total_size());
         self.auto_unfold_if_needed(target);
         self.cursor.go_to_offset(offset, extend_selection, self.total_size());
+        self.nav_history.record_jump(from, self.cursor.offset);
     }
 
     /// Jumps to and selects the specified byte offset range, unfolding folded regions if needed.
     pub fn go_to_range(&mut self, range: Range<usize>) {
+        let from = self.cursor.offset;
         let start = range.start.min(self.total_size());
         self.auto_unfold_if_needed(start);
         if range.end > range.start {
             self.auto_unfold_if_needed(range.end.saturating_sub(1));
         }
         self.set_selection_range(range);
+        self.nav_history.record_jump(from, self.cursor.offset);
+    }
+
+    /// Navigates back to the previous recorded jump offset.
+    pub fn navigate_back(&mut self) -> Option<usize> {
+        let target = self.nav_history.go_back(self.cursor.offset)?;
+        let clamped = target.min(self.total_size());
+        self.auto_unfold_if_needed(clamped);
+        self.cursor.set_cursor_offset_exact(clamped, self.total_size());
+        Some(self.cursor.offset)
+    }
+
+    /// Navigates forward to the next recorded jump offset.
+    pub fn navigate_forward(&mut self) -> Option<usize> {
+        let target = self.nav_history.go_forward(self.cursor.offset)?;
+        let clamped = target.min(self.total_size());
+        self.auto_unfold_if_needed(clamped);
+        self.cursor.set_cursor_offset_exact(clamped, self.total_size());
+        Some(self.cursor.offset)
     }
 
     pub fn page_up(&mut self, visible_rows: usize) {
@@ -730,6 +762,42 @@ impl Editor {
 
     pub fn end(&mut self) {
         self.cursor.end(self.total_size());
+    }
+
+    pub fn move_to_line_start(&mut self) {
+        let line_map = self.line_starts();
+        self.cursor.move_to_line_start(&line_map, self.total_size());
+    }
+
+    pub fn move_to_line_end(&mut self, is_insert_mode: bool) {
+        let line_map = self.line_starts();
+        self.cursor.move_to_line_end(is_insert_mode, &line_map, self.total_size());
+    }
+
+    pub fn select_to_line_start(&mut self, is_insert_mode: bool) {
+        let line_map = self.line_starts();
+        self.cursor.select_to_line_start(is_insert_mode, &line_map, self.total_size());
+    }
+
+    pub fn select_to_line_end(&mut self, is_insert_mode: bool) {
+        let line_map = self.line_starts();
+        self.cursor.select_to_line_end(is_insert_mode, &line_map, self.total_size());
+    }
+
+    pub fn move_group_left(&mut self) {
+        self.cursor.move_group_left(self.total_size());
+    }
+
+    pub fn move_group_right(&mut self, is_insert_mode: bool) {
+        self.cursor.move_group_right(is_insert_mode, self.total_size());
+    }
+
+    pub fn select_group_left(&mut self, is_insert_mode: bool) {
+        self.cursor.select_group_left(is_insert_mode, self.total_size());
+    }
+
+    pub fn select_group_right(&mut self, is_insert_mode: bool) {
+        self.cursor.select_group_right(is_insert_mode, self.total_size());
     }
 
     pub fn select_page_up(&mut self, visible_rows: usize) {
@@ -883,6 +951,47 @@ impl Editor {
         self.replace_range_with_cursor(range, Vec::new(), cursor_after)
     }
 
+    /// Overwrites the selected bytes (or the byte at the cursor) with `0x00`,
+    /// preserving the total buffer size.
+    pub fn zero_fill_forward(&mut self) -> bool {
+        let Some(range) = self.edit_range() else {
+            return false;
+        };
+        let has_selection = self.has_selection();
+        let total = self.total_size();
+        let cursor_after = if has_selection { range.start } else { (range.start + 1).min(total) };
+        self.replace_range_with_cursor(range.clone(), vec![0u8; range.len()], cursor_after)
+    }
+
+    /// Overwrites the selected bytes (or the byte immediately before the cursor)
+    /// with `0x00`, preserving the total buffer size.
+    pub fn zero_fill_backward(&mut self) -> bool {
+        let total = self.total_size();
+        if total == 0 {
+            return false;
+        }
+        let range = if self.has_selection() {
+            self.selection_range().expect("a non-empty selection has a range")
+        } else if self.cursor.offset > 0 {
+            self.cursor.offset - 1..self.cursor.offset
+        } else {
+            return false;
+        };
+        let cursor_after = range.start;
+        self.replace_range_with_cursor(range.clone(), vec![0u8; range.len()], cursor_after)
+    }
+
+    /// Overwrites an explicit byte range with `0x00`, preserving the total buffer size.
+    pub fn zero_fill_range(&mut self, range: Range<usize>) -> bool {
+        let total = self.total_size();
+        let start = range.start.min(total);
+        let end = range.end.min(total).max(start);
+        if start == end {
+            return false;
+        }
+        self.replace_range_with_cursor(start..end, vec![0u8; end - start], start)
+    }
+
     pub fn search_pattern(&self) -> Option<Vec<PatternByte>> {
         self.search_state.search_pattern(self.options.encoding)
     }
@@ -902,8 +1011,10 @@ impl Editor {
         let from_offset = self.cursor.offset.saturating_add(1);
         let next_offset = crate::core::search::find_next_occurrence_segmented(data, &pattern, from_offset, &segments)?;
         drop(doc);
+        let origin = self.cursor.offset;
         self.auto_unfold_if_needed(next_offset);
         self.cursor.offset = next_offset;
+        self.nav_history.record_jump(origin, next_offset);
         Some(next_offset)
     }
 
@@ -916,8 +1027,10 @@ impl Editor {
         let segments = doc.address_map.segment_ranges();
         let prev_offset = crate::core::search::find_prev_occurrence_segmented(data, &pattern, self.cursor.offset, &segments)?;
         drop(doc);
+        let origin = self.cursor.offset;
         self.auto_unfold_if_needed(prev_offset);
         self.cursor.offset = prev_offset;
+        self.nav_history.record_jump(origin, prev_offset);
         Some(prev_offset)
     }
 
@@ -932,8 +1045,10 @@ impl Editor {
             let from_offset = self.cursor.offset.saturating_add(1);
             crate::core::search::find_next_occurrence_segmented(data, &pattern, from_offset, &segments)?
         };
+        let origin = self.cursor.offset;
         self.auto_unfold_if_needed(next_offset);
         self.cursor.offset = next_offset;
+        self.nav_history.record_jump(origin, next_offset);
         Some(next_offset)
     }
 
@@ -947,15 +1062,19 @@ impl Editor {
             let segments = doc.address_map.segment_ranges();
             crate::core::search::find_prev_occurrence_segmented(data, &pattern, self.cursor.offset, &segments)?
         };
+        let origin = self.cursor.offset;
         self.auto_unfold_if_needed(prev_offset);
         self.cursor.offset = prev_offset;
+        self.nav_history.record_jump(origin, prev_offset);
         Some(prev_offset)
     }
 
     pub fn next_search_result(&mut self) -> Option<usize> {
         if let Some(offset) = self.search_state.next_result_offset() {
+            let origin = self.cursor.offset;
             self.auto_unfold_if_needed(offset);
             self.cursor.offset = offset;
+            self.nav_history.record_jump(origin, offset);
             Some(offset)
         } else {
             self.find_and_navigate_next()
@@ -1065,8 +1184,10 @@ impl Editor {
 
     pub fn prev_search_result(&mut self) -> Option<usize> {
         if let Some(offset) = self.search_state.prev_result_offset() {
+            let origin = self.cursor.offset;
             self.auto_unfold_if_needed(offset);
             self.cursor.offset = offset;
+            self.nav_history.record_jump(origin, offset);
             Some(offset)
         } else {
             self.find_and_navigate_prev()

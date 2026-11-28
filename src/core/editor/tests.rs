@@ -2737,3 +2737,53 @@ fn test_finalizing_live_parse_keeps_standard_layout_and_unfolded_state() {
     assert!(editor.is_folded(0));
     assert_eq!(editor.line_starts(), vec![0, 32]);
 }
+
+#[test]
+fn test_editor_zero_fill_preserves_size_and_supports_undo() {
+    let mut editor = create_editor_with_content(&[0x11, 0x22, 0x33, 0x44, 0x55]);
+    editor.set_cursor_offset_exact(1);
+
+    // Forward zero-fill overwrites byte at cursor and advances
+    assert!(editor.zero_fill_forward());
+    assert_eq!(editor.total_size(), 5);
+    assert_eq!(editor.document.read().unwrap().buffer.data(), &[0x11, 0x00, 0x33, 0x44, 0x55]);
+    assert_eq!(editor.cursor.offset, 2);
+
+    // Backward zero-fill overwrites preceding byte and moves left
+    editor.set_cursor_offset_exact(4);
+    assert!(editor.zero_fill_backward());
+    assert_eq!(editor.total_size(), 5);
+    assert_eq!(editor.document.read().unwrap().buffer.data(), &[0x11, 0x00, 0x33, 0x00, 0x55]);
+    assert_eq!(editor.cursor.offset, 3);
+
+    // Selection zero-fill (e.g. Cut in Overwrite + ZeroFill mode)
+    assert!(editor.zero_fill_range(2..5));
+    assert_eq!(editor.total_size(), 5);
+    assert_eq!(editor.document.read().unwrap().buffer.data(), &[0x11, 0x00, 0x00, 0x00, 0x00]);
+    assert_eq!(editor.cursor.offset, 2);
+
+    // Undo restores previous bytes cleanly
+    assert!(editor.undo());
+    assert_eq!(editor.document.read().unwrap().buffer.data(), &[0x11, 0x00, 0x33, 0x00, 0x55]);
+}
+
+#[test]
+fn test_editor_navigation_history_back_and_forward() {
+    let mut editor = create_editor_with_content(&[0u8; 64]);
+    editor.set_cursor_offset_exact(4);
+    editor.go_to_offset(32, false);
+    editor.go_to_range(48..52);
+    assert_eq!(editor.cursor.offset, 48);
+
+    assert_eq!(editor.navigate_back(), Some(32));
+    assert_eq!(editor.cursor.offset, 32);
+    assert_eq!(editor.navigate_back(), Some(4));
+    assert_eq!(editor.cursor.offset, 4);
+    assert_eq!(editor.navigate_back(), None);
+
+    assert_eq!(editor.navigate_forward(), Some(32));
+    assert_eq!(editor.cursor.offset, 32);
+    assert_eq!(editor.navigate_forward(), Some(48));
+    assert_eq!(editor.cursor.offset, 48);
+    assert_eq!(editor.navigate_forward(), None);
+}
