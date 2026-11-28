@@ -117,3 +117,20 @@ fn test_filter_commands_no_limit() {
     let items_match = filter_commands(&commands, "Command", &state);
     assert_eq!(items_match.len(), 150);
 }
+
+#[test]
+fn test_strip_category_prefix_splits_category_and_label_matches() {
+    use super::strip_category_prefix;
+
+    // "File: Open File..." -> category "File" (0..4), ": " (4..6), label "Open File..." (6..)
+    let (label, cat_m, lbl_m) = strip_category_prefix("File: Open File...", "File", &[0, 2, 6, 11]);
+    assert_eq!(label, "Open File...");
+    assert_eq!(cat_m, vec![0, 2]);
+    assert_eq!(lbl_m, vec![0, 5]);
+
+    // Non-matching prefix falls back to full title
+    let (fallback, cat_empty, all_m) = strip_category_prefix("Custom Action", "Other", &[0, 7]);
+    assert_eq!(fallback, "Custom Action");
+    assert!(cat_empty.is_empty());
+    assert_eq!(all_m, vec![0, 7]);
+}

@@ -477,18 +477,24 @@ impl Render for QuickOpenModal {
                             h_flex()
                                 .items_center()
                                 .justify_between()
+                                .gap_2()
                                 .w_full()
                                 .child(
                                     h_flex()
+                                        .flex_1()
+                                        .min_w_0()
                                         .items_center()
                                         .gap_2()
                                         .overflow_hidden()
                                         .child(Icon::new(IconName::Binary).size(px(14.0)).text_color(theme_clone.muted_foreground))
-                                        .child(div().text_sm().child(name_elem))
-                                        .when_some(detail_elem, |el, d| el.child(div().text_xs().text_color(theme_clone.muted_foreground).child(d))),
+                                        .child(div().flex_shrink_0().text_sm().child(name_elem))
+                                        .when_some(detail_elem, |el, d| {
+                                            el.child(div().min_w_0().overflow_hidden().text_xs().text_color(theme_clone.muted_foreground).child(d))
+                                        }),
                                 )
                                 .child(
                                     div()
+                                        .flex_shrink_0()
                                         .text_xs()
                                         .px_1p5()
                                         .py_0p5()
@@ -519,18 +525,24 @@ impl Render for QuickOpenModal {
                             h_flex()
                                 .items_center()
                                 .justify_between()
+                                .gap_2()
                                 .w_full()
                                 .child(
                                     h_flex()
+                                        .flex_1()
+                                        .min_w_0()
                                         .items_center()
                                         .gap_2()
                                         .overflow_hidden()
                                         .child(Icon::new(IconName::File).size(px(14.0)).text_color(theme_clone.muted_foreground))
-                                        .child(div().text_sm().child(name_elem))
-                                        .when_some(path_elem, |el, p| el.child(div().text_xs().text_color(theme_clone.muted_foreground).child(p))),
+                                        .child(div().flex_shrink_0().text_sm().child(name_elem))
+                                        .when_some(path_elem, |el, p| {
+                                            el.child(div().min_w_0().overflow_hidden().text_xs().text_color(theme_clone.muted_foreground).child(p))
+                                        }),
                                 )
                                 .child(
                                     div()
+                                        .flex_shrink_0()
                                         .text_xs()
                                         .px_1p5()
                                         .py_0p5()
@@ -586,9 +598,12 @@ impl Render for QuickOpenModal {
                             h_flex()
                                 .items_center()
                                 .justify_between()
+                                .gap_2()
                                 .w_full()
                                 .child(
                                     h_flex()
+                                        .flex_1()
+                                        .min_w_0()
                                         .items_center()
                                         .gap_2()
                                         .overflow_hidden()
@@ -598,6 +613,7 @@ impl Render for QuickOpenModal {
                                         .when_some(target_name_opt.as_ref(), |el, target_name| {
                                             el.child(
                                                 div()
+                                                    .flex_shrink_0()
                                                     .px_1()
                                                     .py_0p5()
                                                     .rounded_md()
@@ -610,6 +626,7 @@ impl Render for QuickOpenModal {
                                 )
                                 .child(
                                     h_flex()
+                                        .flex_shrink_0()
                                         .items_center()
                                         .gap_2()
                                         .when(!rel_time.is_empty(), |el| {
@@ -640,22 +657,28 @@ impl Render for QuickOpenModal {
                             h_flex()
                                 .items_center()
                                 .justify_between()
+                                .gap_2()
                                 .w_full()
                                 .child(
                                     h_flex()
+                                        .flex_1()
+                                        .min_w_0()
                                         .items_center()
                                         .gap_2()
+                                        .overflow_hidden()
                                         .child(Icon::new(IconName::Plus).size(px(14.0)).text_color(theme_clone.primary))
                                         .child(
                                             div()
                                                 .text_sm()
                                                 .font_weight(FontWeight::MEDIUM)
                                                 .text_color(theme_clone.primary)
+                                                .truncate()
                                                 .child(label.clone()),
                                         ),
                                 )
                                 .child(
                                     div()
+                                        .flex_shrink_0()
                                         .text_xs()
                                         .px_1p5()
                                         .py_0p5()
@@ -671,6 +694,7 @@ impl Render for QuickOpenModal {
             .collect();
 
         let count = self.filtered_items.len();
+        let count_label = if count == 1 { "1 item".to_string() } else { format!("{count} items") };
         let is_loading = self.is_loading;
         let footer_theme = theme.clone();
         let view_for_query = view.clone();
@@ -708,7 +732,7 @@ impl Render for QuickOpenModal {
                                         .child("Scanning files..."),
                                 )
                             }))
-                            .child(format!("{count} items"))
+                            .child(count_label.clone())
                     })
                     .on_query(move |query, _window, cx| {
                         view_for_query.update(cx, |this, cx| {
