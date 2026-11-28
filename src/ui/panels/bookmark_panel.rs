@@ -1,10 +1,12 @@
 use crate::core::appearance::Appearance;
 use crate::core::bookmark::{BookmarkColor, BookmarkItem};
 use crate::core::editor::Editor;
+use crate::core::format::{HexCase, format_size_friendly};
 use crate::ui::color::BookmarkColorExt;
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{self, Input, InputState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Disableable, Sizable, Size, StyledExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -64,17 +66,53 @@ pub enum BookmarkPanelEvent {
     Import,
 }
 
+/// Formats a bookmark's physical address respecting `HexCase`.
+pub(crate) fn format_bookmark_address(address: usize, hex_case: HexCase) -> String {
+    hex_case.format_prefixed_pad(address, 8)
+}
+
+/// Formats a bookmark's byte size compactly.
+fn format_bookmark_size(size: usize) -> String {
+    if size < 1024 { format!("{size} B") } else { format_size_friendly(size) }
+}
+
+/// Returns the next bookmark ID to select after deleting `deleted_id` from `ids`.
+pub(crate) fn next_selection_after_delete(ids: &[&str], deleted_id: &str) -> Option<String> {
+    let idx = ids.iter().position(|&id| id == deleted_id)?;
+    if idx + 1 < ids.len() {
+        Some(ids[idx + 1].to_string())
+    } else if idx > 0 {
+        Some(ids[idx - 1].to_string())
+    } else {
+        None
+    }
+}
+
+/// Returns `true` if a bookmark matches the case-insensitive filter query by comment, color name, or address.
+pub(crate) fn bookmark_matches_filter(item: &BookmarkItem, formatted_address: &str, filter: &str) -> bool {
+    let query = filter.trim();
+    if query.is_empty() {
+        return true;
+    }
+    let query_lower = query.to_lowercase();
+    item.comment.to_lowercase().contains(&query_lower)
+        || item.color.name().to_lowercase().contains(&query_lower)
+        || formatted_address.to_lowercase().contains(&query_lower)
+}
+
 pub struct BookmarkPanel {
     pub editor: Option<Entity<Editor>>,
     pub focus_handle: FocusHandle,
     pub selected_id: Option<String>,
     pub editing_id: Option<String>,
     pub comment_input: Entity<InputState>,
+    filter_input: Entity<InputState>,
     pub color_picker_id: Option<String>,
+    last_bookmark_version: Option<u64>,
     is_panel_active: bool,
     needs_editor_sync: bool,
     _editor_subscription: Option<Subscription>,
-    _input_subscription: Option<Subscription>,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl EventEmitter<BookmarkPanelEvent> for BookmarkPanel {}
@@ -83,12 +121,22 @@ impl BookmarkPanel {
     pub fn new(editor: Option<Entity<Editor>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         let comment_input = cx.new(|cx| InputState::new(window, cx).placeholder("Add a comment..."));
+        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter bookmarks..."));
 
-        let input_sub = cx.subscribe_in(&comment_input, window, |this, _, event: &input::InputEvent, window, cx| {
+        let mut subscriptions = Vec::new();
+        subscriptions.push(cx.subscribe_in(&comment_input, window, |this, _, event: &input::InputEvent, window, cx| {
             if let input::InputEvent::PressEnter { .. } = event {
                 this.save_editing_comment(window, cx);
             }
-        });
+        }));
+        subscriptions.push(cx.subscribe_in(&filter_input, window, |_this, _, event: &input::InputEvent, _window, cx| {
+            if matches!(event, input::InputEvent::Change) {
+                cx.notify();
+            }
+        }));
+        subscriptions.push(cx.observe_global::<HexCase>(|_, cx| {
+            cx.notify();
+        }));
 
         let mut this = Self {
             editor: None,
@@ -96,11 +144,13 @@ impl BookmarkPanel {
             selected_id: None,
             editing_id: None,
             comment_input,
+            filter_input,
             color_picker_id: None,
+            last_bookmark_version: None,
             is_panel_active: true,
             needs_editor_sync: false,
             _editor_subscription: None,
-            _input_subscription: Some(input_sub),
+            _subscriptions: subscriptions,
         };
 
         this.set_editor(editor, cx);
@@ -116,7 +166,7 @@ impl BookmarkPanel {
         if active && self.needs_editor_sync {
             self.needs_editor_sync = false;
             if let Some(editor) = self.editor.clone() {
-                self.sync_selected_from_cursor(&editor, cx);
+                self.sync_from_editor(&editor, cx);
             }
             cx.notify();
         }
@@ -137,6 +187,7 @@ impl BookmarkPanel {
         self.selected_id = None;
         self.editing_id = None;
         self.color_picker_id = None;
+        self.last_bookmark_version = None;
 
         if let Some(ed) = &editor {
             self._editor_subscription = Some(cx.observe(ed, |this, editor, cx| {
@@ -144,12 +195,12 @@ impl BookmarkPanel {
                     this.needs_editor_sync = true;
                     return;
                 }
-                if this.sync_selected_from_cursor(&editor, cx) {
+                if this.sync_from_editor(&editor, cx) {
                     cx.notify();
                 }
             }));
             if self.is_panel_active {
-                self.sync_selected_from_cursor(ed, cx);
+                self.sync_from_editor(ed, cx);
             }
         }
         if self.is_panel_active {
@@ -158,6 +209,14 @@ impl BookmarkPanel {
         } else {
             self.needs_editor_sync = true;
         }
+    }
+
+    fn sync_from_editor(&mut self, editor: &Entity<Editor>, cx: &mut Context<Self>) -> bool {
+        let version = editor.read(cx).bookmarks().version();
+        let version_changed = self.last_bookmark_version != Some(version);
+        self.last_bookmark_version = Some(version);
+        let selection_changed = self.sync_selected_from_cursor(editor, cx);
+        version_changed || selection_changed
     }
 
     fn sync_selected_from_cursor(&mut self, editor: &Entity<Editor>, cx: &mut Context<Self>) -> bool {
@@ -175,6 +234,26 @@ impl BookmarkPanel {
         } else {
             false
         }
+    }
+
+    fn filtered_bookmarks(&self, cx: &App) -> Vec<BookmarkItem> {
+        let Some(ed) = &self.editor else {
+            return Vec::new();
+        };
+        let filter = self.filter_input.read(cx).value().to_string();
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
+        let editor = ed.read(cx);
+        let address_map = editor.document.read().ok().map(|d| d.address_map.clone()).unwrap_or_default();
+        let all = editor.bookmarks().snapshot();
+        if filter.trim().is_empty() {
+            return all;
+        }
+        all.into_iter()
+            .filter(|item| {
+                let addr_str = format_bookmark_address(address_map.offset_to_address(item.offset), hex_case);
+                bookmark_matches_filter(item, &addr_str, &filter)
+            })
+            .collect()
     }
 
     fn add_bookmark_from_selection(&mut self, cx: &mut Context<Self>) {
@@ -195,6 +274,7 @@ impl BookmarkPanel {
             actual_id = editor.bookmarks_mut().add(new_item);
             cx.notify();
         });
+        self.notify_document_changed(cx);
 
         if !actual_id.is_empty() {
             self.selected_id = Some(actual_id);
@@ -219,6 +299,7 @@ impl BookmarkPanel {
         self.comment_input.update(cx, |input, cx| {
             input.set_value(current_comment, window, cx);
             input.focus(window, cx);
+            input.select_all(window, cx);
         });
         cx.notify();
     }
@@ -268,6 +349,14 @@ impl BookmarkPanel {
     }
 
     fn delete_bookmark(&mut self, id: &str, cx: &mut Context<Self>) {
+        let next_selection = if self.selected_id.as_deref() == Some(id) {
+            let current = self.filtered_bookmarks(cx);
+            let ids: Vec<&str> = current.iter().map(|b| b.id.as_str()).collect();
+            next_selection_after_delete(&ids, id)
+        } else {
+            self.selected_id.clone()
+        };
+
         if let Some(ed) = &self.editor {
             ed.update(cx, |editor, cx| {
                 editor.bookmarks_mut().remove_by_id(id);
@@ -275,9 +364,7 @@ impl BookmarkPanel {
             });
             self.notify_document_changed(cx);
         }
-        if self.selected_id.as_deref() == Some(id) {
-            self.selected_id = None;
-        }
+        self.selected_id = next_selection;
         if self.editing_id.as_deref() == Some(id) {
             self.editing_id = None;
         }
@@ -358,8 +445,7 @@ impl BookmarkPanel {
         if self.editing_id.is_some() {
             return;
         }
-        let Some(ed) = &self.editor else { return };
-        let bookmarks = ed.read(cx).bookmarks().snapshot();
+        let bookmarks = self.filtered_bookmarks(cx);
         if bookmarks.is_empty() {
             return;
         }
@@ -381,8 +467,7 @@ impl BookmarkPanel {
         if self.editing_id.is_some() {
             return;
         }
-        let Some(ed) = &self.editor else { return };
-        let bookmarks = ed.read(cx).bookmarks().snapshot();
+        let bookmarks = self.filtered_bookmarks(cx);
         if bookmarks.is_empty() {
             return;
         }
@@ -405,8 +490,7 @@ impl BookmarkPanel {
         if self.editing_id.is_some() {
             return;
         }
-        let Some(ed) = &self.editor else { return };
-        let bookmarks = ed.read(cx).bookmarks().snapshot();
+        let bookmarks = self.filtered_bookmarks(cx);
         if bookmarks.is_empty() {
             return;
         }
@@ -421,8 +505,7 @@ impl BookmarkPanel {
         if self.editing_id.is_some() {
             return;
         }
-        let Some(ed) = &self.editor else { return };
-        let bookmarks = ed.read(cx).bookmarks().snapshot();
+        let bookmarks = self.filtered_bookmarks(cx);
         if bookmarks.is_empty() {
             return;
         }
@@ -438,8 +521,7 @@ impl BookmarkPanel {
         if self.editing_id.is_some() {
             return;
         }
-        let Some(ed) = &self.editor else { return };
-        let bookmarks = ed.read(cx).bookmarks().snapshot();
+        let bookmarks = self.filtered_bookmarks(cx);
         if bookmarks.is_empty() {
             return;
         }
@@ -456,8 +538,7 @@ impl BookmarkPanel {
         if self.editing_id.is_some() {
             return;
         }
-        let Some(ed) = &self.editor else { return };
-        let bookmarks = ed.read(cx).bookmarks().snapshot();
+        let bookmarks = self.filtered_bookmarks(cx);
         if bookmarks.is_empty() {
             return;
         }
@@ -475,8 +556,7 @@ impl BookmarkPanel {
         if self.editing_id.is_some() {
             return;
         }
-        let Some(ed) = &self.editor else { return };
-        let bookmarks = ed.read(cx).bookmarks().snapshot();
+        let bookmarks = self.filtered_bookmarks(cx);
         if let Some(item) = self.selected_id.as_ref().and_then(|id| bookmarks.iter().find(|h| &h.id == id)) {
             self.navigate_to_bookmark(item.offset, item.size, cx);
         } else if let Some(first) = bookmarks.first() {
@@ -513,10 +593,14 @@ impl Focusable for BookmarkPanel {
 impl Render for BookmarkPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let is_input_focused = self.comment_input.read(cx).focus_handle(cx).is_focused(window);
-        let is_focused = self.focus_handle.is_focused(window) || is_input_focused;
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
+        let is_comment_focused = self.comment_input.read(cx).focus_handle(cx).is_focused(window);
+        let is_filter_focused = self.filter_input.read(cx).focus_handle(cx).is_focused(window);
+        let is_focused = self.focus_handle.is_focused(window) || is_comment_focused || is_filter_focused;
+        let filter_query = self.filter_input.read(cx).value().to_string();
+        let is_filtering = !filter_query.trim().is_empty();
 
-        let (bookmarks, has_editor, address_map, item_visibility) = if let Some(ed) = &self.editor {
+        let (all_bookmarks, has_editor, address_map, all_visibility) = if let Some(ed) = &self.editor {
             let editor = ed.read(cx);
             let address_map = editor.document.read().ok().map(|d| d.address_map.clone()).unwrap_or_default();
             let bms = editor.bookmarks().snapshot();
@@ -526,10 +610,26 @@ impl Render for BookmarkPanel {
             (Vec::new(), false, crate::core::address_map::AddressMap::default(), Vec::new())
         };
 
-        let count = bookmarks.len();
+        let total_count = all_bookmarks.len();
+        let visible_bookmarks: Vec<(&BookmarkItem, bool)> = all_bookmarks
+            .iter()
+            .zip(all_visibility.iter().copied())
+            .filter(|(item, _)| {
+                if !is_filtering {
+                    return true;
+                }
+                let addr_str = format_bookmark_address(address_map.offset_to_address(item.offset), hex_case);
+                bookmark_matches_filter(item, &addr_str, &filter_query)
+            })
+            .collect();
 
         // Header toolbar
-        let badge = Some(crate::ui::panels::panel_badge(count.to_string(), &theme).into_any_element());
+        let badge_text = if is_filtering && total_count > 0 {
+            format!("{}/{}", visible_bookmarks.len(), total_count)
+        } else {
+            total_count.to_string()
+        };
+        let badge = Some(crate::ui::panels::panel_badge(badge_text, &theme).into_any_element());
 
         let actions = h_flex()
             .items_center()
@@ -562,7 +662,7 @@ impl Render for BookmarkPanel {
                     .icon(IconName::HardDriveDownload)
                     .with_size(Size::XSmall)
                     .tooltip("Export bookmarks to YAML file")
-                    .disabled(!has_editor || count == 0)
+                    .disabled(!has_editor || total_count == 0)
                     .on_click(cx.listener(|_, _, _window, cx| {
                         cx.emit(BookmarkPanelEvent::Export);
                     })),
@@ -573,7 +673,7 @@ impl Render for BookmarkPanel {
                     .icon(IconName::Eraser)
                     .with_size(Size::XSmall)
                     .tooltip("Clear all bookmarks")
-                    .disabled(!has_editor || count == 0)
+                    .disabled(!has_editor || total_count == 0)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.clear_all_bookmarks(window, cx);
                     })),
@@ -581,13 +681,13 @@ impl Render for BookmarkPanel {
 
         let header = crate::ui::panels::panel_header("BOOKMARKS", is_focused, &theme, badge, Some(actions.into_any_element()));
 
-        let filter_toolbar = if !has_editor || bookmarks.is_empty() {
+        let filter_toolbar = if !has_editor || all_bookmarks.is_empty() {
             None
         } else {
-            let mut chips_row = h_flex().items_center().gap_1().flex_wrap();
+            let mut chips_row = h_flex().flex_1().min_w_0().items_center().gap_1().flex_wrap();
 
             for &preset_color in BookmarkColor::ALL_PRESETS {
-                let color_count = bookmarks.iter().filter(|b| b.color == preset_color).count();
+                let color_count = all_bookmarks.iter().filter(|b| b.color == preset_color).count();
                 if color_count == 0 {
                     continue;
                 }
@@ -620,11 +720,18 @@ impl Render for BookmarkPanel {
                         h_flex()
                             .items_center()
                             .gap_1()
-                            .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(badge_hsla))
+                            .child(
+                                div()
+                                    .w(px(8.0))
+                                    .h(px(8.0))
+                                    .rounded_full()
+                                    .bg(if is_color_hidden { badge_hsla.opacity(0.35) } else { badge_hsla }),
+                            )
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(if is_color_hidden { theme.muted_foreground } else { theme.foreground })
+                                    .when(is_color_hidden, |el| el.line_through().text_color(theme.muted_foreground))
+                                    .when(!is_color_hidden, |el| el.text_color(theme.foreground))
                                     .child(color_count.to_string()),
                             ),
                     );
@@ -635,6 +742,7 @@ impl Render for BookmarkPanel {
             let is_hide_unbookmarked = self.editor.as_ref().map(|ed| ed.read(cx).bookmarks().is_hide_unbookmarked()).unwrap_or(false);
 
             let filter_actions = h_flex()
+                .flex_shrink_0()
                 .items_center()
                 .gap_0p5()
                 .child({
@@ -693,19 +801,27 @@ impl Render for BookmarkPanel {
                         })),
                 );
 
-            let filter_row = h_flex()
+            let toolbar = v_flex()
                 .w_full()
-                .items_center()
-                .justify_between()
+                .flex_shrink_0()
+                .gap_1p5()
                 .px_2()
-                .py_1()
-                .bg(theme.secondary)
+                .py_1p5()
+                .bg(theme.secondary.opacity(0.65))
                 .border_b_1()
                 .border_color(theme.border)
-                .child(chips_row)
-                .child(filter_actions);
+                .child(Input::new(&self.filter_input).small().cleanable(true))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .justify_between()
+                        .gap_1()
+                        .child(chips_row)
+                        .child(filter_actions),
+                );
 
-            Some(filter_row)
+            Some(toolbar)
         };
 
         // Content body
@@ -718,7 +834,7 @@ impl Render for BookmarkPanel {
                 &theme,
             )
             .into_any_element()
-        } else if bookmarks.is_empty() {
+        } else if all_bookmarks.is_empty() {
             crate::ui::panels::panel_empty_state(
                 IconName::Bookmark,
                 "No Bookmarks",
@@ -727,11 +843,20 @@ impl Render for BookmarkPanel {
                 &theme,
             )
             .into_any_element()
+        } else if visible_bookmarks.is_empty() {
+            crate::ui::panels::panel_empty_state(
+                IconName::Search,
+                "No Matching Bookmarks",
+                Some("Try a different comment, color name, or hex address"),
+                None,
+                &theme,
+            )
+            .into_any_element()
         } else {
             let mut list = v_flex().id("bookmarks-scroll").flex_1().min_h_0().overflow_y_scroll().gap_1().p_1();
 
-            for (item, &is_hidden) in bookmarks.iter().zip(item_visibility.iter()) {
-                list = list.child(self.render_bookmark_item(item, &theme, &address_map, is_hidden, window, cx));
+            for (item, is_hidden) in visible_bookmarks {
+                list = list.child(self.render_bookmark_item(item, &theme, &address_map, hex_case, is_hidden, window, cx));
             }
 
             list.into_any_element()
@@ -761,11 +886,13 @@ impl Render for BookmarkPanel {
 }
 
 impl BookmarkPanel {
+    #[allow(clippy::too_many_arguments)]
     fn render_bookmark_item(
         &self,
         item: &BookmarkItem,
         theme: &gpui_kit::component::Theme,
         address_map: &crate::core::address_map::AddressMap,
+        hex_case: HexCase,
         is_item_hidden: bool,
         _window: &mut Window,
         cx: &mut Context<Self>,
@@ -778,14 +905,17 @@ impl BookmarkPanel {
         let offset = item.offset;
         let size = item.size;
         let badge_color = item.color.to_badge_hsla();
+        let formatted_addr = format_bookmark_address(address_map.offset_to_address(item.offset), hex_case);
+        let formatted_size = format_bookmark_size(item.size);
 
         let item_id_edit = item_id.clone();
         let item_id_del = item_id.clone();
         let item_id_color = item_id.clone();
         let item_id_select = item_id.clone();
+        let item_id_nav = item_id.clone();
+        let item_id_vis = item_id.clone();
 
         let bg_color = if is_selected { theme.selection } else { theme.sidebar };
-        let item_id_vis = item_id.clone();
 
         let mut row_container = v_flex()
             .w_full()
@@ -793,6 +923,7 @@ impl BookmarkPanel {
             .border_1()
             .border_color(if is_selected { theme.list_active_border } else { theme.border })
             .bg(bg_color)
+            .when(is_item_hidden && !is_selected, |el| el.opacity(0.72))
             .p_2()
             .gap_1p5();
 
@@ -800,10 +931,14 @@ impl BookmarkPanel {
         let font_family = cx.global::<Appearance>().font_family.clone();
         let header_row = h_flex()
             .w_full()
+            .min_w_0()
             .justify_between()
             .items_center()
+            .gap_1()
             .child(
                 h_flex()
+                    .flex_1()
+                    .min_w_0()
                     .items_center()
                     .gap_2()
                     .child(
@@ -811,9 +946,11 @@ impl BookmarkPanel {
                             .id(SharedString::from(format!("color-badge-{}", item_id)))
                             .w(px(12.0))
                             .h(px(12.0))
+                            .flex_shrink_0()
                             .rounded_full()
                             .bg(badge_color)
                             .cursor_pointer()
+                            .tooltip(|_window, cx| cx.new(|_| Tooltip::new("Click to change color")).into())
                             .on_click(cx.listener({
                                 let item_id = item_id_color.clone();
                                 move |this, _, _window, cx| {
@@ -829,8 +966,10 @@ impl BookmarkPanel {
                     .child(
                         h_flex()
                             .id(SharedString::from(format!("nav-link-{}", item_id)))
+                            .flex_1()
+                            .min_w_0()
                             .items_center()
-                            .gap_2()
+                            .gap_1p5()
                             .cursor_pointer()
                             .on_click(cx.listener({
                                 let item_id = item_id_select.clone();
@@ -842,27 +981,44 @@ impl BookmarkPanel {
                             }))
                             .child(
                                 div()
+                                    .min_w_0()
+                                    .truncate()
                                     .font_family(font_family.clone())
                                     .text_xs()
                                     .font_semibold()
-                                    .text_color(theme.foreground)
-                                    .child(format!("0x{:08X}", address_map.offset_to_address(item.offset))),
+                                    .text_color(if is_item_hidden { theme.muted_foreground } else { theme.foreground })
+                                    .child(formatted_addr),
                             )
                             .child(
                                 div()
                                     .px_1()
                                     .py_0p5()
+                                    .flex_shrink_0()
                                     .rounded_sm()
                                     .bg(theme.secondary)
                                     .text_xs()
-                                    .font_family(font_family.clone())
+                                    .font_family(font_family)
                                     .text_color(theme.muted_foreground)
-                                    .child(format!("{} B", item.size)),
-                            ),
+                                    .child(formatted_size),
+                            )
+                            .when(is_item_hidden, |el| {
+                                el.child(
+                                    div()
+                                        .px_1()
+                                        .py_0p5()
+                                        .flex_shrink_0()
+                                        .rounded_sm()
+                                        .bg(theme.muted)
+                                        .text_size(px(10.0))
+                                        .text_color(theme.muted_foreground)
+                                        .child("Folded"),
+                                )
+                            }),
                     ),
             )
             .child(
                 h_flex()
+                    .flex_shrink_0()
                     .items_center()
                     .gap_0p5()
                     .child(
@@ -897,6 +1053,7 @@ impl BookmarkPanel {
                             .tooltip("Go to address")
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.focus_handle.focus(window, cx);
+                                this.selected_id = Some(item_id_nav.clone());
                                 this.navigate_to_bookmark(offset, size, cx);
                             })),
                     )
@@ -905,7 +1062,7 @@ impl BookmarkPanel {
                             .ghost()
                             .icon(IconName::PenLine)
                             .with_size(Size::XSmall)
-                            .tooltip("Edit comment")
+                            .tooltip("Edit comment (F2)")
                             .on_click(cx.listener({
                                 let item_id = item_id_edit.clone();
                                 move |this, _, window, cx| {
@@ -937,6 +1094,7 @@ impl BookmarkPanel {
                 let p_badge = preset.to_badge_hsla();
                 let item_id_for_preset = item_id.clone();
                 let is_current = item.color == preset;
+                let color_name = preset.name().to_string();
 
                 picker_row = picker_row.child(
                     div()
@@ -948,6 +1106,7 @@ impl BookmarkPanel {
                         .cursor_pointer()
                         .border_1()
                         .border_color(if is_current { theme.foreground } else { hsla(0.0, 0.0, 0.0, 0.0) })
+                        .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(color_name.clone())).into())
                         .on_click(cx.listener({
                             let item_id = item_id_for_preset.clone();
                             move |this, _, _window, cx| {
@@ -1053,6 +1212,11 @@ fn resolve_bookmark_selection_at_cursor<'a>(bookmarks: &'a [BookmarkItem], selec
 
 #[cfg(test)]
 mod tests {
+    use super::{bookmark_matches_filter, format_bookmark_address, next_selection_after_delete, resolve_bookmark_selection_at_cursor};
+    use crate::core::address_map::AddressMap;
+    use crate::core::bookmark::model::{BookmarkColor, BookmarkItem};
+    use crate::core::format::HexCase;
+
     #[test]
     fn test_bookmark_navigation_indices() {
         let count = 15;
@@ -1080,16 +1244,35 @@ mod tests {
 
     #[test]
     fn test_bookmark_address_mapping_display() {
-        use crate::core::address_map::AddressMap;
         let map = AddressMap::default();
-        let display = format!("0x{:08X}", map.offset_to_address(42));
-        assert_eq!(display, "0x0000002A");
+        assert_eq!(format_bookmark_address(map.offset_to_address(42), HexCase::Upper), "0x0000002A");
+        assert_eq!(format_bookmark_address(map.offset_to_address(42), HexCase::Lower), "0x0000002a");
+    }
+
+    #[test]
+    fn test_next_selection_after_delete() {
+        let ids = ["a", "b", "c"];
+        assert_eq!(next_selection_after_delete(&ids, "a"), Some("b".to_string()));
+        assert_eq!(next_selection_after_delete(&ids, "b"), Some("c".to_string()));
+        assert_eq!(next_selection_after_delete(&ids, "c"), Some("b".to_string()));
+        assert_eq!(next_selection_after_delete(&["only"], "only"), None);
+        assert_eq!(next_selection_after_delete(&ids, "missing"), None);
+    }
+
+    #[test]
+    fn test_bookmark_matches_filter() {
+        let item = BookmarkItem::new(0x40, 16, BookmarkColor::Red, "ELF Header Magic");
+        let addr = format_bookmark_address(0x40, HexCase::Upper);
+
+        assert!(bookmark_matches_filter(&item, &addr, ""));
+        assert!(bookmark_matches_filter(&item, &addr, "elf"));
+        assert!(bookmark_matches_filter(&item, &addr, "RED"));
+        assert!(bookmark_matches_filter(&item, &addr, "0x00000040"));
+        assert!(!bookmark_matches_filter(&item, &addr, "payload"));
     }
 
     #[test]
     fn test_resolve_bookmark_selection_at_cursor() {
-        use crate::core::bookmark::model::{BookmarkColor, BookmarkItem};
-
         fn mk(id: &str, offset: usize, size: usize) -> BookmarkItem {
             let mut item = BookmarkItem::new(offset, size, BookmarkColor::Yellow, id);
             item.id = id.to_string();
@@ -1097,21 +1280,21 @@ mod tests {
         }
 
         let empty: [BookmarkItem; 0] = [];
-        assert_eq!(super::resolve_bookmark_selection_at_cursor(&empty, Some("a"), 10), None);
+        assert_eq!(resolve_bookmark_selection_at_cursor(&empty, Some("a"), 10), None);
 
         // Sorted by (offset, size) like BookmarkStore.items
         let items = vec![mk("outer", 10, 30), mk("inner", 20, 5), mk("point", 50, 0), mk("later", 60, 10)];
 
-        assert_eq!(super::resolve_bookmark_selection_at_cursor(&items, None, 5), None);
-        assert_eq!(super::resolve_bookmark_selection_at_cursor(&items, None, 15), Some("outer"));
+        assert_eq!(resolve_bookmark_selection_at_cursor(&items, None, 5), None);
+        assert_eq!(resolve_bookmark_selection_at_cursor(&items, None, 15), Some("outer"));
         // Preserves currently selected overlapping bookmark when it still contains the cursor
-        assert_eq!(super::resolve_bookmark_selection_at_cursor(&items, Some("inner"), 22), Some("inner"));
+        assert_eq!(resolve_bookmark_selection_at_cursor(&items, Some("inner"), 22), Some("inner"));
         // Falls back to first enclosing bookmark once cursor leaves the selected inner bookmark
-        assert_eq!(super::resolve_bookmark_selection_at_cursor(&items, Some("inner"), 26), Some("outer"));
+        assert_eq!(resolve_bookmark_selection_at_cursor(&items, Some("inner"), 26), Some("outer"));
         // Exclusive upper bound
-        assert_eq!(super::resolve_bookmark_selection_at_cursor(&items, None, 40), None);
+        assert_eq!(resolve_bookmark_selection_at_cursor(&items, None, 40), None);
         // Zero-size bookmark matches exact offset
-        assert_eq!(super::resolve_bookmark_selection_at_cursor(&items, None, 50), Some("point"));
-        assert_eq!(super::resolve_bookmark_selection_at_cursor(&items, None, 51), None);
+        assert_eq!(resolve_bookmark_selection_at_cursor(&items, None, 50), Some("point"));
+        assert_eq!(resolve_bookmark_selection_at_cursor(&items, None, 51), None);
     }
 }
