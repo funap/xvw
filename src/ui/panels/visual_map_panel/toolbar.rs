@@ -52,7 +52,7 @@ impl VisualMapPanel {
                 this.cols < 4096
             } else {
                 this.decrement_width(cx);
-                this.cols > 1
+                this.cols > this.min_cols()
             }
         }));
     }
@@ -176,6 +176,59 @@ impl VisualMapPanel {
     pub(crate) fn render_width_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let muted_color = theme.muted_foreground;
         let font_family = cx.global::<Appearance>().font_family.clone();
+        let is_at_min = self.cols <= self.min_cols();
+        let is_at_max = self.cols >= 4096;
+
+        let mut dec_btn = Button::new("dec_w").label("-").ghost().with_size(Size::XSmall).tooltip("Decrease width");
+        if is_at_min {
+            dec_btn = dec_btn.disabled(true);
+        } else {
+            dec_btn = dec_btn
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.start_width_repeat(false, cx);
+                    }),
+                )
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.stop_width_repeat();
+                    }),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.stop_width_repeat();
+                    }),
+                );
+        }
+
+        let mut inc_btn = Button::new("inc_w").label("+").ghost().with_size(Size::XSmall).tooltip("Increase width");
+        if is_at_max {
+            inc_btn = inc_btn.disabled(true);
+        } else {
+            inc_btn = inc_btn
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.start_width_repeat(true, cx);
+                    }),
+                )
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.stop_width_repeat();
+                    }),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.stop_width_repeat();
+                    }),
+                );
+        }
+
         h_flex()
             .justify_between()
             .items_center()
@@ -191,31 +244,7 @@ impl VisualMapPanel {
                 h_flex()
                     .items_center()
                     .gap_1()
-                    .child(
-                        Button::new("dec_w")
-                            .label("-")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .tooltip("Decrease width")
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.start_width_repeat(false, cx);
-                                }),
-                            )
-                            .on_mouse_up(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, _| {
-                                    this.stop_width_repeat();
-                                }),
-                            )
-                            .on_mouse_up_out(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, _| {
-                                    this.stop_width_repeat();
-                                }),
-                            ),
-                    )
+                    .child(dec_btn)
                     .child(
                         div()
                             .px_2()
@@ -239,31 +268,7 @@ impl VisualMapPanel {
                                 format!("{} B", self.cols)
                             }),
                     )
-                    .child(
-                        Button::new("inc_w")
-                            .label("+")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .tooltip("Increase width")
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.start_width_repeat(true, cx);
-                                }),
-                            )
-                            .on_mouse_up(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, _| {
-                                    this.stop_width_repeat();
-                                }),
-                            )
-                            .on_mouse_up_out(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, _| {
-                                    this.stop_width_repeat();
-                                }),
-                            ),
-                    ),
+                    .child(inc_btn),
             )
             .into_any_element()
     }
@@ -299,6 +304,8 @@ impl VisualMapPanel {
             )
             .child(
                 h_flex()
+                    .flex_wrap()
+                    .justify_end()
                     .gap_1()
                     .child(pixel_button(1, "x1", cx))
                     .child(pixel_button(2, "x2", cx))
@@ -400,6 +407,8 @@ impl VisualMapPanel {
             )
             .child(
                 h_flex()
+                    .flex_wrap()
+                    .justify_end()
                     .gap_1()
                     .child(window_button(64, "64B", cx))
                     .child(window_button(128, "128B", cx))
