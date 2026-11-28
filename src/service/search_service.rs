@@ -1,47 +1,41 @@
 use crate::core::buffer::Buffer;
 use crate::core::editor::Editor;
-use crate::core::search::{self, SearchMode, SearchOptions};
+use crate::core::search::{self, SearchMode, SearchOptions, SearchParseError, TextSearchFlags};
 use gpui_kit::{App, Entity, Task};
 use std::ops::Range;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
-/// Pure helper executing segmented text or hex search queries on a byte buffer.
+/// Pure helper executing segmented text, hex, case-insensitive, or regex search queries on a byte buffer.
 #[allow(dead_code)]
 pub fn execute_search(data: &[u8], query: &str, options: &SearchOptions, segments: &[Range<usize>]) -> Vec<usize> {
-    if query.is_empty() {
+    let Ok(compiled) = search::compile_search(query, options.mode, options.encoding, options.flags) else {
         return Vec::new();
-    }
-
-    match options.mode {
-        SearchMode::Text => {
-            if let Some(pattern) = search::parse_text_pattern(query, options.encoding) {
-                search::find_occurrences_segmented(data, &pattern, options.limit, segments, options.range.clone())
-            } else {
-                Vec::new()
-            }
-        }
-        SearchMode::Hex => {
-            if let Some(pattern) = search::parse_hex_pattern(query) {
-                search::find_occurrences_segmented(data, &pattern, options.limit, segments, options.range.clone())
-            } else {
-                Vec::new()
-            }
-        }
-    }
+    };
+    search::find_ranges_segmented(data, &compiled, options.limit, segments, options.range.clone(), None)
+        .into_iter()
+        .map(|r| r.start)
+        .collect()
 }
 
 /// A service for executing asynchronous text and hex search queries across document buffers.
 #[derive(Debug, Clone, Default)]
 pub struct SearchService;
 
-/// Query parameters for searching with a limit.
+/// Query parameters for searching with a limit and optional cancellation.
 pub struct LimitedSearchQuery {
     pub buffer: Buffer,
     pub query: String,
     pub mode: SearchMode,
     pub encoding: crate::core::encoding::Encoding,
+    pub flags: TextSearchFlags,
     pub segments: Vec<Range<usize>>,
     pub max_results: usize,
+    pub cancel: Option<Arc<AtomicBool>>,
 }
+
+/// Result of a bounded background search: `Ok((matched_ranges, is_truncated))` or `Err(SearchParseError)`.
+pub type LimitedSearchResult = Result<(Vec<Range<usize>>, bool), SearchParseError>;
 
 impl SearchService {
     /// Creates a new `SearchService` instance.
@@ -63,40 +57,26 @@ impl SearchService {
             .spawn(async move { execute_search(buffer.data(), &query, &options, &segments) })
     }
 
-    /// Searches for a query with truncation limit (e.g. for SearchPanel).
-    /// Returns a Task yielding `(offsets, is_truncated)`.
-    pub fn search_with_limit(&self, params: LimitedSearchQuery, cx: &App) -> Task<(Vec<usize>, bool)> {
+    /// Searches for a query with truncation limit and cancellation (for SearchPanel & SearchBar match counting).
+    /// Returns a Task yielding `Ok((ranges, is_truncated))` or `Err(SearchParseError)`.
+    pub fn search_with_limit(&self, params: LimitedSearchQuery, cx: &App) -> Task<LimitedSearchResult> {
         cx.background_executor().spawn(async move {
-            let pattern = match params.mode {
-                SearchMode::Text => {
-                    if let Some(p) = search::parse_text_pattern(&params.query, params.encoding) {
-                        p
-                    } else {
-                        return (Vec::new(), false);
-                    }
-                }
-                SearchMode::Hex => {
-                    if let Some(p) = search::parse_hex_pattern(&params.query) {
-                        p
-                    } else {
-                        return (Vec::new(), false);
-                    }
-                }
-            };
-            let raw_offsets = crate::core::search::find_occurrences_segmented(
+            let compiled = search::compile_search(&params.query, params.mode, params.encoding, params.flags)?;
+            let raw_ranges = search::find_ranges_segmented(
                 params.buffer.data(),
-                &pattern,
-                crate::core::search::SearchLimit::Count(params.max_results + 1),
+                &compiled,
+                search::SearchLimit::Count(params.max_results + 1),
                 &params.segments,
                 None,
+                params.cancel.as_deref(),
             );
-            let truncated = raw_offsets.len() > params.max_results;
-            let capped_offsets = if truncated {
-                raw_offsets.into_iter().take(params.max_results).collect()
+            let truncated = raw_ranges.len() > params.max_results;
+            let capped_ranges = if truncated {
+                raw_ranges.into_iter().take(params.max_results).collect()
             } else {
-                raw_offsets
+                raw_ranges
             };
-            (capped_offsets, truncated)
+            Ok((capped_ranges, truncated))
         })
     }
 
@@ -126,15 +106,16 @@ impl SearchService {
     /// Performs an incremental search: immediate viewport search followed by background full search.
     #[allow(dead_code)]
     pub fn incremental_search(&self, editor: Entity<Editor>, query: String, mode: SearchMode, viewport_range: Range<usize>, cx: &App) -> (Task<()>, Task<()>) {
-        let (generation, encoding) = {
+        let (generation, encoding, flags) = {
             let ed = editor.read(cx);
-            (ed.search_state.generation, ed.options.encoding)
+            (ed.search_state.generation, ed.options.encoding, ed.search_state.flags)
         };
 
         let viewport_options = SearchOptions {
             mode,
             encoding,
-            limit: crate::core::search::SearchLimit::Unlimited,
+            flags,
+            limit: search::SearchLimit::Unlimited,
             range: Some(viewport_range),
         };
         let viewport_task = self.perform_search(editor.clone(), query.clone(), viewport_options, generation, false, cx);
@@ -142,7 +123,8 @@ impl SearchService {
         let full_options = SearchOptions {
             mode,
             encoding,
-            limit: crate::core::search::SearchLimit::Unlimited,
+            flags,
+            limit: search::SearchLimit::Unlimited,
             range: None,
         };
         let full_task = self.perform_search(editor, query, full_options, generation, true, cx);
@@ -166,12 +148,7 @@ mod tests {
     #[test]
     fn test_execute_search_empty_query() {
         let data = b"Hello, World!";
-        let options = SearchOptions {
-            mode: SearchMode::Text,
-            encoding: Encoding::Utf8,
-            limit: crate::core::search::SearchLimit::Unlimited,
-            range: None,
-        };
+        let options = SearchOptions::new(SearchMode::Text).with_encoding(Encoding::Utf8);
         let results = execute_search(data, "", &options, &[]);
         assert!(results.is_empty());
     }
@@ -179,25 +156,31 @@ mod tests {
     #[test]
     fn test_execute_search_text() {
         let data = b"Hello, World! Hello!";
-        let options = SearchOptions {
-            mode: SearchMode::Text,
-            encoding: Encoding::Utf8,
-            limit: crate::core::search::SearchLimit::Unlimited,
-            range: None,
-        };
+        let options = SearchOptions::new(SearchMode::Text).with_encoding(Encoding::Utf8);
         let results = execute_search(data, "Hello", &options, &[]);
         assert_eq!(results, vec![0, 14]);
     }
 
     #[test]
+    fn test_execute_search_case_insensitive_and_regex() {
+        let data = b"Hello, world! HELLO!";
+        let ci_options = SearchOptions::new(SearchMode::Text).with_encoding(Encoding::Utf8).with_flags(TextSearchFlags {
+            case_insensitive: true,
+            regex: false,
+        });
+        assert_eq!(execute_search(data, "hello", &ci_options, &[]), vec![0, 14]);
+
+        let re_options = SearchOptions::new(SearchMode::Text).with_encoding(Encoding::Utf8).with_flags(TextSearchFlags {
+            case_insensitive: true,
+            regex: true,
+        });
+        assert_eq!(execute_search(data, r"h[a-z]+o", &re_options, &[]), vec![0, 14]);
+    }
+
+    #[test]
     fn test_execute_search_hex() {
         let data = [0xAA, 0xBB, 0xCC, 0xAA, 0xBB];
-        let options = SearchOptions {
-            mode: SearchMode::Hex,
-            encoding: Encoding::Utf8,
-            limit: crate::core::search::SearchLimit::Unlimited,
-            range: None,
-        };
+        let options = SearchOptions::new(SearchMode::Hex).with_encoding(Encoding::Utf8);
         let results = execute_search(&data, "AA BB", &options, &[]);
         assert_eq!(results, vec![0, 3]);
     }

@@ -547,6 +547,7 @@ fn build_edit_menu() -> MenuDef {
             MenuItemDef::action_with_condition_and_os_action("Select All", crate::actions::SelectAll, |s| s.has_doc, OsAction::SelectAll),
             MenuItemDef::separator(),
             MenuItemDef::action_with_condition("Find", crate::actions::ToggleSearch, |s| s.has_doc),
+            MenuItemDef::action_with_condition("Replace...", crate::actions::ToggleReplace, |s| s.has_doc),
             MenuItemDef::action_with_condition("Find in File (Scan All)", crate::actions::ToggleSearchPanel, |s| s.has_doc),
             MenuItemDef::action_with_condition("Find Next", crate::actions::SearchNext, |s| s.has_doc),
             MenuItemDef::action_with_condition("Find Previous", crate::actions::SearchPrev, |s| s.has_doc),

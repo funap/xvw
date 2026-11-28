@@ -8599,6 +8599,7 @@ dependencies = [
  "image",
  "lsp-types",
  "memmap2",
+ "regex",
  "rust-embed",
  "schemars",
  "serde",

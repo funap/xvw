@@ -74,6 +74,9 @@ pub struct LoadChildren {
 pub struct ToggleSearch;
 
 #[derive(Clone, PartialEq, Action)]
+pub struct ToggleReplace;
+
+#[derive(Clone, PartialEq, Action)]
 pub struct ToggleSearchPanel;
 
 #[derive(Clone, PartialEq, Action)]

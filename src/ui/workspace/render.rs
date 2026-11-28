@@ -40,6 +40,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_action_toggle_edit_column))
             .on_action(cx.listener(Self::on_action_toggle_goto_address))
             .on_action(cx.listener(Self::on_action_toggle_search))
+            .on_action(cx.listener(Self::on_action_toggle_replace))
             .on_action(cx.listener(Self::on_action_toggle_search_panel))
             .on_action(cx.listener(Self::on_action_search_next))
             .on_action(cx.listener(Self::on_action_search_prev))

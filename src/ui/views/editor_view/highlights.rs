@@ -1,8 +1,10 @@
 use crate::core::editor::Editor;
 use crate::core::encoding::Encoding;
-use crate::core::search::{PatternByte, SearchMode};
+use crate::core::search::{CompiledSearch, SearchLimit, SearchMode, TextSearchFlags, compile_search, find_ranges_segmented};
 use gpui_kit::Hsla;
 use std::ops::Range;
+
+const REGEX_VIEWPORT_PAD: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct HighlightSyncState {
@@ -48,27 +50,27 @@ pub(super) struct CachedSearchPattern {
     query: String,
     mode: SearchMode,
     encoding: Encoding,
-    pattern: Option<Vec<PatternByte>>,
+    flags: TextSearchFlags,
+    compiled: Option<CompiledSearch>,
 }
 
 impl CachedSearchPattern {
-    pub(super) fn resolve(&mut self, query: &str, mode: SearchMode, encoding: Encoding) -> Option<&[PatternByte]> {
+    pub(super) fn resolve_compiled(&mut self, query: &str, mode: SearchMode, encoding: Encoding, flags: TextSearchFlags) -> Option<&CompiledSearch> {
         let encoding_relevant = mode == SearchMode::Text;
-        if self.query != query || self.mode != mode || (encoding_relevant && self.encoding != encoding) {
+        let effective_flags = if encoding_relevant { flags } else { TextSearchFlags::default() };
+        if self.query != query || self.mode != mode || (encoding_relevant && (self.encoding != encoding || self.flags != effective_flags)) {
             self.query.clear();
             self.query.push_str(query);
             self.mode = mode;
             self.encoding = encoding;
-            self.pattern = if query.is_empty() {
+            self.flags = effective_flags;
+            self.compiled = if query.is_empty() {
                 None
             } else {
-                match mode {
-                    SearchMode::Text => crate::core::search::parse_text_pattern(query, encoding),
-                    SearchMode::Hex => crate::core::search::parse_hex_pattern(query),
-                }
+                compile_search(query, mode, encoding, effective_flags).ok()
             };
         }
-        self.pattern.as_deref().filter(|p| !p.is_empty())
+        self.compiled.as_ref()
     }
 }
 
@@ -83,11 +85,25 @@ pub(super) fn viewport_match_slice(results: &[usize], pattern_len: usize, viewpo
     if lo >= hi { &[] } else { &results[lo..hi] }
 }
 
-pub(super) fn scan_viewport_matches(data: &[u8], pattern: &[PatternByte], segments: &[Range<usize>], start: usize, end: usize) -> Vec<usize> {
-    let pattern_len = pattern.len();
-    let scan_start = start.saturating_sub(pattern_len);
-    let scan_end = end.saturating_add(pattern_len);
-    crate::core::search::find_occurrences_segmented(data, pattern, crate::core::search::SearchLimit::Unlimited, segments, Some(scan_start..scan_end))
+/// Returns the subslice of sorted non-overlapping match ranges that intersect `viewport`.
+#[inline]
+pub(super) fn viewport_range_slice(ranges: &[Range<usize>], viewport: Range<usize>) -> &[Range<usize>] {
+    if ranges.is_empty() || viewport.is_empty() {
+        return &[];
+    }
+    let lo = ranges.partition_point(|r| r.end <= viewport.start);
+    let hi = ranges.partition_point(|r| r.start < viewport.end);
+    if lo >= hi { &[] } else { &ranges[lo..hi] }
+}
+
+pub(super) fn scan_viewport_ranges(data: &[u8], compiled: &CompiledSearch, segments: &[Range<usize>], start: usize, end: usize) -> Vec<Range<usize>> {
+    let pad = compiled.fixed_len().unwrap_or(REGEX_VIEWPORT_PAD);
+    let scan_start = start.saturating_sub(pad);
+    let scan_end = end.saturating_add(pad);
+    find_ranges_segmented(data, compiled, SearchLimit::Unlimited, segments, Some(scan_start..scan_end), None)
+        .into_iter()
+        .filter(|r| r.end > start && r.start < end)
+        .collect()
 }
 
 /// Composes search panel highlights and find widget highlights, giving precedence

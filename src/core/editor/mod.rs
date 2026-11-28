@@ -1001,49 +1001,153 @@ impl Editor {
         self.find_state.search_pattern(self.options.encoding)
     }
 
-    /// Finds and navigates to the next occurrence matching the find bar query,
-    /// updating the cursor offset and unfolding hidden ranges if needed.
-    pub fn next_find_result(&mut self) -> Option<usize> {
-        let pattern = self.find_pattern()?;
+    /// Finds and navigates to the next occurrence matching the find bar query (including case-insensitive/regex),
+    /// returning `(matched_range, wrapped)`.
+    pub fn next_find_result_range(&mut self) -> Option<(Range<usize>, bool)> {
+        let compiled = self.find_state.compiled_search(self.options.encoding).ok()?;
+        let anchor = self.selection_range().map(|r| r.start).unwrap_or(self.cursor.offset);
         let doc = self.document.read().ok()?;
         let data = doc.buffer.data();
         let segments = doc.address_map.segment_ranges();
-        let from_offset = self.cursor.offset.saturating_add(1);
-        let next_offset = crate::core::search::find_next_occurrence_segmented(data, &pattern, from_offset, &segments)?;
+        let from_offset = anchor.saturating_add(1);
+        let (range, wrapped) = crate::core::search::find_next_range_segmented(data, &compiled, from_offset, &segments)?;
         drop(doc);
         let origin = self.cursor.offset;
-        self.auto_unfold_if_needed(next_offset);
-        self.cursor.offset = next_offset;
-        self.nav_history.record_jump(origin, next_offset);
-        Some(next_offset)
+        self.auto_unfold_if_needed(range.start);
+        self.set_cursor_offset(range.start);
+        self.nav_history.record_jump(origin, range.start);
+        Some((range, wrapped))
+    }
+
+    /// Finds and navigates to the previous occurrence matching the find bar query (including case-insensitive/regex),
+    /// returning `(matched_range, wrapped)`.
+    pub fn prev_find_result_range(&mut self) -> Option<(Range<usize>, bool)> {
+        let compiled = self.find_state.compiled_search(self.options.encoding).ok()?;
+        let anchor = self.selection_range().map(|r| r.start).unwrap_or(self.cursor.offset);
+        let doc = self.document.read().ok()?;
+        let data = doc.buffer.data();
+        let segments = doc.address_map.segment_ranges();
+        let (range, wrapped) = crate::core::search::find_prev_range_segmented(data, &compiled, anchor, &segments)?;
+        drop(doc);
+        let origin = self.cursor.offset;
+        self.auto_unfold_if_needed(range.start);
+        self.set_cursor_offset(range.start);
+        self.nav_history.record_jump(origin, range.start);
+        Some((range, wrapped))
+    }
+
+    /// Finds and navigates to the next occurrence matching the find bar query,
+    /// updating the cursor offset and unfolding hidden ranges if needed.
+    pub fn next_find_result(&mut self) -> Option<usize> {
+        self.next_find_result_range().map(|(r, _)| r.start)
     }
 
     /// Finds and navigates to the previous occurrence matching the find bar query,
     /// updating the cursor offset and unfolding hidden ranges if needed.
     pub fn prev_find_result(&mut self) -> Option<usize> {
-        let pattern = self.find_pattern()?;
-        let doc = self.document.read().ok()?;
-        let data = doc.buffer.data();
-        let segments = doc.address_map.segment_ranges();
-        let prev_offset = crate::core::search::find_prev_occurrence_segmented(data, &pattern, self.cursor.offset, &segments)?;
-        drop(doc);
-        let origin = self.cursor.offset;
-        self.auto_unfold_if_needed(prev_offset);
-        self.cursor.offset = prev_offset;
-        self.nav_history.record_jump(origin, prev_offset);
-        Some(prev_offset)
+        self.prev_find_result_range().map(|(r, _)| r.start)
+    }
+
+    /// Replaces the current find-bar match at the cursor/selection with `replacement` bytes
+    /// and advances to the next match (or selects the next match if the cursor is not on a match).
+    /// Returns `(was_replaced, target_range, wrapped)`.
+    pub fn replace_current_find_match(&mut self, replacement: &[u8]) -> Option<(bool, Option<Range<usize>>, bool)> {
+        if self.is_read_only() {
+            return None;
+        }
+        let compiled = self.find_state.compiled_search(self.options.encoding).ok()?;
+        let candidate_offset = self.selection_range().map(|r| r.start).unwrap_or(self.cursor.offset);
+        let current_match = {
+            let doc = self.document.read().ok()?;
+            let segments = doc.address_map.segment_ranges();
+            crate::core::search::match_at_offset(doc.buffer.data(), &compiled, candidate_offset, &segments)
+        };
+
+        if let Some(matched_range) = current_match {
+            let start = matched_range.start;
+            let after_replace = start.saturating_add(replacement.len());
+            let _ = self.replace_range_with_cursor(matched_range, replacement.to_vec(), start);
+            // Advance to the next match after the replaced bytes
+            let next = {
+                let doc = self.document.read().ok()?;
+                let segments = doc.address_map.segment_ranges();
+                crate::core::search::find_next_range_segmented(doc.buffer.data(), &compiled, after_replace, &segments)
+            };
+            if let Some((next_range, wrapped)) = next {
+                self.auto_unfold_if_needed(next_range.start);
+                self.set_selection_range(next_range.clone());
+                Some((true, Some(next_range), wrapped))
+            } else {
+                let total = self.total_size();
+                let clamped = start.min(total.saturating_sub(1));
+                self.set_cursor_offset(clamped);
+                Some((true, None, false))
+            }
+        } else {
+            // Cursor is not currently sitting on a match: find & select the next match starting at cursor
+            let next = {
+                let doc = self.document.read().ok()?;
+                let segments = doc.address_map.segment_ranges();
+                crate::core::search::find_next_range_segmented(doc.buffer.data(), &compiled, candidate_offset, &segments)
+            }?;
+            self.auto_unfold_if_needed(next.0.start);
+            self.set_selection_range(next.0.clone());
+            Some((false, Some(next.0), next.1))
+        }
+    }
+
+    /// Replaces all non-overlapping matches for the find bar query as a single atomic Undo step.
+    /// Returns the number of occurrences replaced.
+    pub fn replace_all_find_matches(&mut self, replacement: &[u8]) -> usize {
+        if self.is_read_only() {
+            return 0;
+        }
+        let Ok(compiled) = self.find_state.compiled_search(self.options.encoding) else {
+            return 0;
+        };
+        let edits: Vec<(usize, Vec<u8>, Vec<u8>)> = {
+            let Ok(doc) = self.document.read() else {
+                return 0;
+            };
+            let data = doc.buffer.data();
+            let segments = doc.address_map.segment_ranges();
+            let all_ranges = crate::core::search::find_ranges_segmented(data, &compiled, crate::core::search::SearchLimit::Unlimited, &segments, None, None);
+            let mut non_overlapping = Vec::with_capacity(all_ranges.len());
+            let mut last_end = 0usize;
+            for r in all_ranges {
+                if r.start >= last_end && r.end > r.start {
+                    let old = data[r.start..r.end].to_vec();
+                    non_overlapping.push((r.start, old, replacement.to_vec()));
+                    last_end = r.end;
+                }
+            }
+            non_overlapping
+        };
+        let count = edits.iter().filter(|(_, old, new)| old != new).count();
+        if count == 0 {
+            return 0;
+        }
+        let first_offset = edits[0].0;
+        if self.execute_command(Box::new(crate::core::command::BatchReplaceCommand::new(edits))) {
+            let total = self.total_size();
+            let clamped = first_offset.min(total.saturating_sub(1));
+            self.set_cursor_offset(clamped);
+            count
+        } else {
+            0
+        }
     }
 
     /// Finds and navigates to the next occurrence starting after the current cursor offset,
     /// wrapping around if necessary. Updates cursor offset and returns the match offset.
     pub fn find_and_navigate_next(&mut self) -> Option<usize> {
-        let pattern = self.search_pattern()?;
+        let compiled = self.search_state.compiled_search(self.options.encoding).ok()?;
         let next_offset = {
             let doc = self.document.read().ok()?;
             let data = doc.buffer.data();
             let segments = doc.address_map.segment_ranges();
             let from_offset = self.cursor.offset.saturating_add(1);
-            crate::core::search::find_next_occurrence_segmented(data, &pattern, from_offset, &segments)?
+            crate::core::search::find_next_range_segmented(data, &compiled, from_offset, &segments)?.0.start
         };
         let origin = self.cursor.offset;
         self.auto_unfold_if_needed(next_offset);
@@ -1055,12 +1159,14 @@ impl Editor {
     /// Finds and navigates to the previous occurrence starting before the current cursor offset,
     /// wrapping around if necessary. Updates cursor offset and returns the match offset.
     pub fn find_and_navigate_prev(&mut self) -> Option<usize> {
-        let pattern = self.search_pattern()?;
+        let compiled = self.search_state.compiled_search(self.options.encoding).ok()?;
         let prev_offset = {
             let doc = self.document.read().ok()?;
             let data = doc.buffer.data();
             let segments = doc.address_map.segment_ranges();
-            crate::core::search::find_prev_occurrence_segmented(data, &pattern, self.cursor.offset, &segments)?
+            crate::core::search::find_prev_range_segmented(data, &compiled, self.cursor.offset, &segments)?
+                .0
+                .start
         };
         let origin = self.cursor.offset;
         self.auto_unfold_if_needed(prev_offset);

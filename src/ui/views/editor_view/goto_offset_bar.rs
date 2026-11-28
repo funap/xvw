@@ -2,25 +2,22 @@ use std::ops::Range;
 
 use crate::core::address_map::AddressMap;
 use crate::core::format::HexCase;
-use crate::core::goto::{GotoParseError, GotoRadix, ParsedGotoOffset, parse_goto_offset_with_map};
+use crate::core::goto::{GotoParseError, GotoRadix, ParsedGotoOffset, parse_goto_offset_with_context};
 use crate::ui::components::EventInterceptionExt;
 use crate::ui::icon::IconName;
 use gpui_kit::component::{
-    ActiveTheme, Icon,
+    ActiveTheme, Icon, Sizable, Size,
     button::{Button, ButtonVariants},
     input::{self, Input, InputState},
 };
 use gpui_kit::prelude::*;
-use gpui_kit::*;
+use gpui_kit::{App, Context, Entity, EventEmitter, IntoElement, KeyBinding, Render, Window, actions, div, px};
 
-#[derive(Clone, PartialEq, Action)]
-pub struct GotoJump;
+use super::history::InputHistory;
 
-#[derive(Clone, PartialEq, Action)]
-pub struct GotoJumpExtend;
+const MAX_GOTO_HISTORY_ENTRIES: usize = 30;
 
-#[derive(Clone, PartialEq, Action)]
-pub struct GotoDismiss;
+actions!(goto_offset_bar, [GotoJump, GotoJumpExtend, GotoDismiss, GotoHistoryPrev, GotoHistoryNext]);
 
 pub enum GotoBarEvent {
     Jump { offset: usize, extend_selection: bool },
@@ -30,10 +27,14 @@ pub enum GotoBarEvent {
 
 pub struct GotoOffsetBar {
     input: Entity<InputState>,
+    radix: GotoRadix,
     current_cursor: usize,
     total_size: usize,
+    bytes_per_row: usize,
     address_map: AddressMap,
     parsed_result: Option<Result<ParsedGotoOffset, GotoParseError>>,
+    history: InputHistory,
+    suppress_history_reset: bool,
 }
 
 impl EventEmitter<GotoBarEvent> for GotoOffsetBar {}
@@ -45,6 +46,9 @@ impl GotoOffsetBar {
         // Subscribe to input changes
         cx.subscribe(&input, |this, input, event: &input::InputEvent, cx| {
             if let input::InputEvent::Change = event {
+                if !this.suppress_history_reset {
+                    this.history.reset_navigation();
+                }
                 let query = input.read(cx).value().to_string();
                 this.update_parsed_result(&query, cx);
             }
@@ -53,19 +57,41 @@ impl GotoOffsetBar {
 
         Self {
             input,
+            radix: GotoRadix::Hex,
             current_cursor: 0,
             total_size: 0,
+            bytes_per_row: 16,
             address_map: AddressMap::default(),
             parsed_result: None,
+            history: InputHistory::new(MAX_GOTO_HISTORY_ENTRIES),
+            suppress_history_reset: false,
         }
     }
 
-    pub fn set_context_info(&mut self, current_cursor: usize, total_size: usize, address_map: AddressMap, cx: &mut Context<Self>) {
+    pub fn set_context_info(&mut self, current_cursor: usize, total_size: usize, bytes_per_row: usize, address_map: AddressMap, cx: &mut Context<Self>) {
         self.current_cursor = current_cursor;
         self.total_size = total_size;
+        self.bytes_per_row = bytes_per_row.max(1);
         self.address_map = address_map;
         let query = self.input.read(cx).value().to_string();
         self.update_parsed_result(&query, cx);
+    }
+
+    pub fn set_bytes_per_row(&mut self, bytes_per_row: usize, cx: &mut Context<Self>) {
+        let effective = bytes_per_row.max(1);
+        if self.bytes_per_row != effective {
+            self.bytes_per_row = effective;
+            let query = self.input.read(cx).value().to_string();
+            self.update_parsed_result(&query, cx);
+        }
+    }
+
+    fn set_radix(&mut self, radix: GotoRadix, cx: &mut Context<Self>) {
+        if self.radix != radix {
+            self.radix = radix;
+            let query = self.input.read(cx).value().to_string();
+            self.update_parsed_result(&query, cx);
+        }
     }
 
     fn update_parsed_result(&mut self, query: &str, cx: &mut Context<Self>) {
@@ -73,12 +99,13 @@ impl GotoOffsetBar {
         if trimmed.is_empty() {
             self.parsed_result = None;
         } else {
-            self.parsed_result = Some(parse_goto_offset_with_map(
+            self.parsed_result = Some(parse_goto_offset_with_context(
                 trimmed,
                 self.current_cursor,
                 self.total_size,
-                GotoRadix::Dec,
+                self.radix,
                 &self.address_map,
+                self.bytes_per_row,
             ));
         }
         cx.notify();
@@ -87,12 +114,28 @@ impl GotoOffsetBar {
     pub fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         self.input.update(cx, |input, cx| {
             input.focus(window, cx);
+            input.select_all(window, cx);
         });
+    }
+
+    fn navigate_history(&mut self, older: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self.input.read(cx).value().to_string();
+        let entry = if older { self.history.prev(&current) } else { self.history.next() }.map(str::to_string);
+        if let Some(value) = entry {
+            self.suppress_history_reset = true;
+            self.input.update(cx, |input, cx| {
+                input.set_value(value.clone(), window, cx);
+            });
+            self.suppress_history_reset = false;
+            self.update_parsed_result(&value, cx);
+        }
     }
 
     pub fn execute_jump(&mut self, extend_selection: bool, cx: &mut Context<Self>) {
         let query = self.input.read(cx).value().to_string();
-        if let Ok(parsed) = parse_goto_offset_with_map(&query, self.current_cursor, self.total_size, GotoRadix::Dec, &self.address_map) {
+        let trimmed = query.trim();
+        if let Ok(parsed) = parse_goto_offset_with_context(trimmed, self.current_cursor, self.total_size, self.radix, &self.address_map, self.bytes_per_row) {
+            self.history.push(trimmed);
             if let Some(range) = parsed.selection_range {
                 cx.emit(GotoBarEvent::SelectRange { range });
             } else {
@@ -110,12 +153,12 @@ impl Render for GotoOffsetBar {
         let theme = cx.theme();
 
         let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
+        let hint_text = match self.radix {
+            GotoRadix::Hex => "Hex default — e.g. 100, 100..1FF, +20, 50%, L10",
+            GotoRadix::Dec => "Dec default — e.g. 256, 0x100..0x1FF, +32, 50%, L10",
+        };
         let bottom_info = match &self.parsed_result {
-            None => div()
-                .px_1()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child("e.g. 0x100, 0x100..0x1FF, +0x20, 50%"),
+            None => div().px_1().text_xs().text_color(theme.muted_foreground).child(hint_text),
             Some(Ok(parsed)) => {
                 let text = if let Some(range) = &parsed.selection_range {
                     let len = range.len();
@@ -158,18 +201,77 @@ impl Render for GotoOffsetBar {
             Some(Err(err)) => div().px_1().text_xs().text_color(theme.danger).child(format!("{}", err)),
         };
 
+        let header_strip = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .bg(theme.secondary.opacity(0.35))
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .p(px(2.0))
+                            .rounded_md()
+                            .bg(theme.background)
+                            .border_1()
+                            .border_color(theme.border)
+                            .child(
+                                if self.radix == GotoRadix::Hex {
+                                    Button::new("goto_radix_hex").label("Hex").primary().with_size(Size::XSmall)
+                                } else {
+                                    Button::new("goto_radix_hex").label("Hex").ghost().with_size(Size::XSmall)
+                                }
+                                .tooltip("Interpret bare numbers as hexadecimal")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.set_radix(GotoRadix::Hex, cx);
+                                })),
+                            )
+                            .child(
+                                if self.radix == GotoRadix::Dec {
+                                    Button::new("goto_radix_dec").label("Dec").primary().with_size(Size::XSmall)
+                                } else {
+                                    Button::new("goto_radix_dec").label("Dec").ghost().with_size(Size::XSmall)
+                                }
+                                .tooltip("Interpret bare numbers as decimal")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.set_radix(GotoRadix::Dec, cx);
+                                })),
+                            ),
+                    )
+                    .child(div().text_xs().text_color(theme.muted_foreground).child("Go to Address")),
+            )
+            .child(
+                Button::new("close")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Close)
+                    .tooltip("Close (Esc)")
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.emit(GotoBarEvent::Dismiss);
+                    })),
+            );
+
         div()
             .flex()
             .flex_col()
-            .gap_1p5()
-            .p_2()
-            .w(px(400.0))
+            .w(px(460.0))
             .max_w_full()
             .bg(theme.background)
             .border_1()
             .border_color(theme.border)
             .rounded_lg()
             .shadow_xl()
+            .overflow_hidden()
             .key_context("GotoOffsetBar")
             .occlude_and_block_input()
             .on_action(cx.listener(|this, _: &GotoJump, _, cx| {
@@ -181,24 +283,50 @@ impl Render for GotoOffsetBar {
             .on_action(cx.listener(|_, _: &GotoDismiss, _, cx| {
                 cx.emit(GotoBarEvent::Dismiss);
             }))
+            .on_action(cx.listener(|this, _: &GotoHistoryPrev, window, cx| {
+                this.navigate_history(true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &GotoHistoryNext, window, cx| {
+                this.navigate_history(false, window, cx);
+            }))
+            .child(header_strip)
             .child(
                 div()
                     .flex()
-                    .items_center()
-                    .gap_2()
+                    .flex_col()
+                    .gap_1p5()
+                    .p_2()
                     .child(
                         div()
-                            .flex_1()
-                            .child(Input::new(&self.input).prefix(Icon::new(IconName::Hash).size_3p5()).cleanable(true)),
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .child(
+                                div().flex_1().min_w_0().child(
+                                    Input::new(&self.input)
+                                        .small()
+                                        .prefix(Icon::new(IconName::Hash).size_3p5().text_color(theme.muted_foreground))
+                                        .cleanable(true),
+                                ),
+                            )
+                            .child(
+                                div()
+                                    .w(px(56.0))
+                                    .flex_shrink_0()
+                                    .child(
+                                        Button::new("go_jump")
+                                            .w_full()
+                                            .label("Go")
+                                            .primary()
+                                            .small()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.execute_jump(false, cx);
+                                            })),
+                                    ),
+                            ),
                     )
-                    .child(Button::new("go_jump").label("Go").primary().on_click(cx.listener(|this, _, _, cx| {
-                        this.execute_jump(false, cx);
-                    })))
-                    .child(Button::new("close").ghost().icon(IconName::Close).on_click(cx.listener(|_, _, _, cx| {
-                        cx.emit(GotoBarEvent::Dismiss);
-                    }))),
+                    .child(bottom_info),
             )
-            .child(bottom_info)
     }
 }
 
@@ -207,5 +335,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("enter", GotoJump, Some("GotoOffsetBar")),
         KeyBinding::new("shift-enter", GotoJumpExtend, Some("GotoOffsetBar")),
         KeyBinding::new("escape", GotoDismiss, Some("GotoOffsetBar")),
+        KeyBinding::new("up", GotoHistoryPrev, Some("GotoOffsetBar > Input")),
+        KeyBinding::new("down", GotoHistoryNext, Some("GotoOffsetBar > Input")),
     ]);
 }
