@@ -109,6 +109,7 @@ pub struct StructTreePanel {
     needs_editor_sync: bool,
     _table_subscription: Option<Subscription>,
     _editor_subscription: Option<Subscription>,
+    _hex_case_subscription: Subscription,
 }
 
 impl EventEmitter<StructTreePanelEvent> for StructTreePanel {}
@@ -178,6 +179,11 @@ impl StructTreePanel {
             _ => {}
         });
 
+        let hex_case_subscription = cx.observe_global::<crate::core::radix::HexCase>(|this, cx| {
+            this.sync_table_state(cx);
+            cx.notify();
+        });
+
         let mut this = Self {
             parse_result,
             flattened_fields: flattened,
@@ -199,6 +205,7 @@ impl StructTreePanel {
             needs_editor_sync: false,
             _table_subscription: Some(table_subscription),
             _editor_subscription: None,
+            _hex_case_subscription: hex_case_subscription,
         };
 
         if let Some(ed) = editor {
@@ -496,16 +503,19 @@ impl StructTreePanel {
         .detach();
     }
 
-    fn copy_field_value(&mut self, action: &CopyFieldValue, _window: &mut Window, cx: &mut Context<Self>) {
+    fn copy_field_value(&mut self, action: &CopyFieldValue, window: &mut Window, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(action.value.clone()));
+        window.push_notification(crate::ui::notification::info("Field value copied to clipboard"), cx);
     }
 
-    fn copy_field_name(&mut self, action: &CopyFieldName, _window: &mut Window, cx: &mut Context<Self>) {
+    fn copy_field_name(&mut self, action: &CopyFieldName, window: &mut Window, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(action.name.clone()));
+        window.push_notification(crate::ui::notification::info("Field name copied to clipboard"), cx);
     }
 
-    fn copy_field_offset(&mut self, action: &CopyFieldOffset, _window: &mut Window, cx: &mut Context<Self>) {
+    fn copy_field_offset(&mut self, action: &CopyFieldOffset, window: &mut Window, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(action.offset.clone()));
+        window.push_notification(crate::ui::notification::info("Field offset copied to clipboard"), cx);
     }
 
     fn export_structure_yaml(&mut self, _: &crate::actions::ExportStructureYaml, window: &mut Window, cx: &mut Context<Self>) {
@@ -1078,9 +1088,9 @@ impl Render for StructTreePanel {
                     .icon(IconName::FolderOpen)
                     .with_size(gpui_kit::component::Size::XSmall)
                     .tooltip(if cfg!(target_os = "macos") {
-                        "Load Structure Definition (cmd-shift-s)"
+                        "Load Structure Definition (⌘⇧S)"
                     } else {
-                        "Load Structure Definition (ctrl-shift-s)"
+                        "Load Structure Definition (Ctrl+Shift+S)"
                     })
                     .on_click(cx.listener(|_, _, window, cx| {
                         window.dispatch_action(Box::new(crate::actions::LoadStructureDefinition), cx);
@@ -1107,6 +1117,27 @@ impl Render for StructTreePanel {
                     .child(
                         Toolbar::new("structure-toolbar")
                             .with_size(gpui_kit::component::Size::XSmall)
+                            .child(
+                                gpui_kit::component::button::Button::new("copy-structure-result-btn")
+                                    .ghost()
+                                    .icon(IconName::Copy)
+                                    .disabled(export_is_busy)
+                                    .tooltip("Copy Structure Analysis")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.copy_structure_result(&crate::actions::CopyStructureResult, window, cx);
+                                    })),
+                            )
+                            .child(
+                                gpui_kit::component::button::Button::new("export-structure-yaml-btn")
+                                    .ghost()
+                                    .icon(IconName::HardDriveDownload)
+                                    .disabled(export_is_busy)
+                                    .tooltip("Export Structure as YAML")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.export_structure_yaml(&crate::actions::ExportStructureYaml, window, cx);
+                                    })),
+                            )
+                            .content(div().w(px(1.0)).h(px(12.0)).mx_0p5().bg(theme.border))
                             .child(
                                 gpui_kit::component::button::Button::new("expand-all-struct-btn")
                                     .ghost()
@@ -1245,6 +1276,7 @@ impl Render for StructTreePanel {
                         .map(|(index, path)| {
                             let path = path.to_string_lossy().into_owned();
                             let label = path_from_string_file_name(&path);
+                            let tooltip_path = path.clone();
                             let load_path = path.clone();
                             let remove_path = path.clone();
 
@@ -1261,17 +1293,19 @@ impl Render for StructTreePanel {
                                         .items_center()
                                         .gap_1()
                                         .px_1()
-                                        .cursor_pointer()
-                                        .hover(|style| style.bg(theme.list_hover))
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            if has_active_editor {
-                                                this.focus_handle.focus(window, cx);
-                                                window.dispatch_action(
-                                                    Box::new(crate::actions::LoadStructureDefinitionFromHistory { path: load_path.clone() }),
-                                                    cx,
-                                                );
-                                            }
-                                        }))
+                                        .when(has_active_editor, |el| {
+                                            el.cursor_pointer()
+                                                .hover(|style| style.bg(theme.list_hover))
+                                                .on_click(cx.listener(move |this, _, window, cx| {
+                                                    this.focus_handle.focus(window, cx);
+                                                    window.dispatch_action(
+                                                        Box::new(crate::actions::LoadStructureDefinitionFromHistory { path: load_path.clone() }),
+                                                        cx,
+                                                    );
+                                                }))
+                                        })
+                                        .when(!has_active_editor, |el| el.opacity(0.55))
+                                        .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tooltip_path.clone()).build(window, cx))
                                         .child(Icon::new(IconName::FileCode).with_size(gpui_kit::component::Size::XSmall))
                                         .child(div().flex_1().min_w_0().text_xs().truncate().whitespace_nowrap().child(label)),
                                 )
@@ -1306,7 +1340,15 @@ impl Render for StructTreePanel {
                                     .items_start()
                                     .gap_1()
                                     .child(div().px_1().text_xs().font_semibold().text_color(theme.muted_foreground).child("Recents"))
-                                    .children(recent_buttons),
+                                    .child(
+                                        v_flex()
+                                            .id("recent-definitions-scroll")
+                                            .w_full()
+                                            .max_h(px(360.0))
+                                            .overflow_y_scroll()
+                                            .gap_1()
+                                            .children(recent_buttons),
+                                    ),
                             )
                             .into_any_element(),
                     )
