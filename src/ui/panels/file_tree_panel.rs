@@ -1,33 +1,75 @@
-use crate::actions::{LoadChildren, OpenDiff, OpenFile, Rename, SelectForCompare, SelectItem};
+use crate::actions::{LoadChildren, OpenDiff, OpenFile, SelectForCompare, SelectItem};
 use crate::core::format::FileFormat;
 use crate::core::recent_history::RecentFileEntry;
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-
 use crate::ui::icon::IconName;
+use crate::ui::notification;
 use autocorrect::ignorer::Ignorer;
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, Sizable as _, StyledExt as _,
-    button::ButtonVariants as _,
+    ActiveTheme as _, Icon, Sizable as _, Size, StyledExt as _, WindowExt as _,
+    button::{Button, ButtonVariants as _},
     h_flex,
     list::ListItem,
     menu::ContextMenuExt,
+    tooltip::Tooltip,
     tree::{TreeItem, TreeState, tree},
     v_flex,
 };
 use gpui_kit::{
-    App, AppContext, AsyncApp, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding, MouseButton,
-    ParentElement, PathPromptOptions, Render, ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window, actions, div,
-    prelude::FluentBuilder as _, px, relative,
+    Action, App, AppContext, AsyncApp, ClickEvent, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    KeyBinding, MouseButton, ParentElement, PathPromptOptions, Render, ScrollStrategy, SharedString, StatefulInteractiveElement, Styled, WeakEntity, Window,
+    actions, div, prelude::FluentBuilder as _, px, relative,
 };
+use schemars::JsonSchema;
+use serde::Deserialize;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
-actions!(file_tree_panel, [MoveUp, MoveDown, MoveTop, MoveBottom, PageUp, PageDown, Dismiss]);
+actions!(
+    file_tree_panel,
+    [
+        MoveUp,
+        MoveDown,
+        MoveTop,
+        MoveBottom,
+        PageUp,
+        PageDown,
+        ExpandItem,
+        CollapseItem,
+        Dismiss,
+        ClearPendingCompare
+    ]
+);
+
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[action(namespace = file_tree_panel)]
+struct CopyTreeItemPath {
+    path: String,
+}
+
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[action(namespace = file_tree_panel)]
+struct CopyTreeItemName {
+    name: String,
+}
+
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[action(namespace = file_tree_panel)]
+struct RevealTreeItem {
+    path: String,
+}
+
+#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
+#[action(namespace = file_tree_panel)]
+struct RefreshTreeFolder {
+    path: String,
+}
 
 const CONTEXT: &str = "FileTreePanel";
 
 fn path_file_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().to_string())
+        .filter(|s| !s.is_empty())
         .unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
@@ -38,6 +80,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("down", MoveDown, Some("FileTreePanel && !Input")),
         KeyBinding::new("k", MoveUp, Some("FileTreePanel && !Input")),
         KeyBinding::new("j", MoveDown, Some("FileTreePanel && !Input")),
+        KeyBinding::new("right", ExpandItem, Some("FileTreePanel && !Input")),
+        KeyBinding::new("l", ExpandItem, Some("FileTreePanel && !Input")),
+        KeyBinding::new("left", CollapseItem, Some("FileTreePanel && !Input")),
+        KeyBinding::new("h", CollapseItem, Some("FileTreePanel && !Input")),
         KeyBinding::new("home", MoveTop, Some("FileTreePanel && !Input")),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-home", MoveTop, Some("FileTreePanel && !Input")),
@@ -152,12 +198,20 @@ pub struct FileTreePanel {
     root_path: Option<PathBuf>,
     loaded_paths: HashSet<String>,
     items: Vec<TreeItem>,
+    load_generation: u64,
     recent_history: RecentDisplayHistory,
     pub pending_compare_path: Option<String>,
 }
 
-fn build_file_items(ignorer: &Ignorer, root: &PathBuf, path: &PathBuf) -> Vec<TreeItem> {
-    let mut items = Vec::new();
+#[derive(Clone, Debug)]
+struct ScannedFileEntry {
+    id: String,
+    label: String,
+    is_dir: bool,
+}
+
+fn scan_directory_entries(ignorer: &Ignorer, root: &Path, path: &Path) -> Vec<ScannedFileEntry> {
+    let mut entries_out = Vec::new();
     if let Ok(entries) = std::fs::read_dir(path) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -165,17 +219,27 @@ fn build_file_items(ignorer: &Ignorer, root: &PathBuf, path: &PathBuf) -> Vec<Tr
             if ignorer.is_ignored(&relative_path.to_string_lossy()) || relative_path.ends_with(".git") {
                 continue;
             }
-            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("Unknown").to_string();
+            let label = path.file_name().and_then(|n| n.to_str()).unwrap_or("Unknown").to_string();
             let id = path.to_string_lossy().to_string();
-            if path.is_dir() {
-                items.push(TreeItem::new(id, file_name).child(TreeItem::new("loading", "Loading...")));
-            } else {
-                items.push(TreeItem::new(id, file_name));
-            }
+            let is_dir = path.is_dir();
+            entries_out.push(ScannedFileEntry { id, label, is_dir });
         }
     }
-    items.sort_by(|a, b| b.is_folder().cmp(&a.is_folder()).then(a.label.cmp(&b.label)));
-    items
+    entries_out.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.label.cmp(&b.label)));
+    entries_out
+}
+
+fn scanned_entries_to_tree_items(entries: Vec<ScannedFileEntry>) -> Vec<TreeItem> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            if entry.is_dir {
+                TreeItem::new(entry.id, entry.label).child(TreeItem::new("loading", "Loading..."))
+            } else {
+                TreeItem::new(entry.id, entry.label)
+            }
+        })
+        .collect()
 }
 
 fn update_item_children(items: &mut [TreeItem], target_id: &str, children: Vec<TreeItem>) -> bool {
@@ -197,6 +261,41 @@ fn update_item_children(items: &mut [TreeItem], target_id: &str, children: Vec<T
     false
 }
 
+/// Sets the expanded state on the tree item matching `target_id`. Returns `true` if found.
+fn set_item_expanded(items: &mut [TreeItem], target_id: &str, expanded: bool) -> bool {
+    let mut pending = vec![items];
+    while let Some(slice) = pending.pop() {
+        for item in slice.iter_mut() {
+            if item.id == target_id {
+                let placeholder = TreeItem::new("", "");
+                let taken = std::mem::replace(item, placeholder);
+                *item = taken.expanded(expanded);
+                return true;
+            }
+            if item.is_folder() {
+                pending.push(item.children.as_mut_slice());
+            }
+        }
+    }
+    false
+}
+
+/// Finds the parent item of `target_id` within `items`, if any.
+fn find_parent_item(items: &[TreeItem], target_id: &str) -> Option<TreeItem> {
+    let mut stack: Vec<(&TreeItem, Option<&TreeItem>)> = items.iter().rev().map(|i| (i, None)).collect();
+    while let Some((item, parent)) = stack.pop() {
+        if item.id == target_id {
+            return parent.cloned();
+        }
+        if item.is_expanded() {
+            for child in item.children.iter().rev() {
+                stack.push((child, Some(item)));
+            }
+        }
+    }
+    None
+}
+
 impl FileTreePanel {
     pub fn new(title: impl Into<SharedString>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let tree_state = cx.new(|cx| TreeState::new(cx));
@@ -214,7 +313,7 @@ impl FileTreePanel {
         .detach();
 
         Self {
-            tree_state: tree_state.clone(),
+            tree_state,
             selected_item: None,
             selected_items: Vec::new(),
             _title: title.into(),
@@ -222,6 +321,7 @@ impl FileTreePanel {
             root_path: None,
             loaded_paths: HashSet::new(),
             items: Vec::new(),
+            load_generation: 0,
             recent_history: RecentDisplayHistory::new(),
             pending_compare_path: None,
         }
@@ -239,14 +339,32 @@ impl FileTreePanel {
         self.root_path.as_ref()
     }
 
+    /// Reloads the currently opened folder tree from disk.
+    pub fn refresh_root(&mut self, cx: &mut Context<Self>) {
+        if let Some(path) = self.root_path.clone() {
+            self.loaded_paths.clear();
+            self.loaded_paths.insert(path.to_string_lossy().to_string());
+            self.load_root(path, cx);
+        }
+    }
+
     fn load_root(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        cx.spawn(|view: WeakEntity<FileTreePanel>, cx: &mut AsyncApp| {
+        self.load_generation = self.load_generation.wrapping_add(1);
+        let generation = self.load_generation;
+        let bg_task = cx.background_executor().spawn(async move {
+            let ignorer = Ignorer::new(&path.to_string_lossy());
+            scan_directory_entries(&ignorer, &path, &path)
+        });
+
+        cx.spawn(move |view: WeakEntity<FileTreePanel>, cx: &mut AsyncApp| {
             let mut cx = cx.clone();
             async move {
-                let ignorer = Ignorer::new(&path.to_string_lossy());
-                let items = build_file_items(&ignorer, &path, &path);
-
+                let scanned = bg_task.await;
                 view.update(&mut cx, |this, cx| {
+                    if this.load_generation != generation {
+                        return;
+                    }
+                    let items = scanned_entries_to_tree_items(scanned);
                     this.items = items.clone();
                     this.tree_state.update(cx, |tree, cx| {
                         tree.set_items(items, cx);
@@ -259,37 +377,59 @@ impl FileTreePanel {
         .detach();
     }
 
-    fn load_children(&mut self, item_id: &str, cx: &mut Context<Self>) {
-        if self.loaded_paths.contains(item_id) {
+    fn load_children(&mut self, item_id: &str, force: bool, cx: &mut Context<Self>) {
+        if !force && self.loaded_paths.contains(item_id) {
             return;
         }
 
         let path = PathBuf::from(item_id);
         if path.is_dir() {
             let item_id_clone = item_id.to_string();
-            let root_path = self.root_path.clone();
+            let Some(root_path) = self.root_path.clone() else {
+                return;
+            };
+            let generation = self.load_generation;
+            let dir_path = path.clone();
+            let bg_task = cx.background_executor().spawn(async move {
+                let ignorer = Ignorer::new(&root_path.to_string_lossy());
+                scan_directory_entries(&ignorer, &root_path, &dir_path)
+            });
 
-            cx.spawn(|view: WeakEntity<FileTreePanel>, cx: &mut AsyncApp| {
+            self.loaded_paths.insert(item_id.to_string());
+
+            cx.spawn(move |view: WeakEntity<FileTreePanel>, cx: &mut AsyncApp| {
                 let mut cx = cx.clone();
                 async move {
-                    if let Some(root_path) = root_path {
-                        let ignorer = Ignorer::new(&root_path.to_string_lossy());
-                        let children = build_file_items(&ignorer, &root_path, &PathBuf::from(&item_id_clone));
-
-                        view.update(&mut cx, |this, cx| {
-                            if update_item_children(&mut this.items, &item_id_clone, children) {
-                                this.tree_state.update(cx, |state, cx| {
-                                    state.set_items(this.items.clone(), cx);
-                                });
-                            }
-                        })
-                        .ok();
-                    }
+                    let scanned = bg_task.await;
+                    view.update(&mut cx, |this, cx| {
+                        if this.load_generation != generation {
+                            return;
+                        }
+                        let children = scanned_entries_to_tree_items(scanned);
+                        if update_item_children(&mut this.items, &item_id_clone, children) {
+                            this.tree_state.update(cx, |state, cx| {
+                                state.set_items(this.items.clone(), cx);
+                            });
+                            cx.notify();
+                        }
+                    })
+                    .ok();
                 }
             })
             .detach();
+        }
+    }
 
-            self.loaded_paths.insert(item_id.to_string());
+    fn set_folder_expanded(&mut self, item_id: &str, expanded: bool, cx: &mut Context<Self>) {
+        if set_item_expanded(&mut self.items, item_id, expanded) {
+            if expanded {
+                self.load_children(item_id, false, cx);
+            }
+            self.tree_state.update(cx, |state, cx| {
+                state.set_items(self.items.clone(), cx);
+            });
+            self.clear_tree_selection(cx);
+            cx.notify();
         }
     }
 
@@ -300,18 +440,83 @@ impl FileTreePanel {
             .or_else(|| self.tree_state.read(cx).selected_entry().map(|entry| entry.item().clone()));
 
         if let Some(item) = item {
+            if item.is_folder() {
+                let next_expanded = !item.is_expanded();
+                let item_id = item.id.to_string();
+                self.set_folder_expanded(&item_id, next_expanded, cx);
+                if let Some(updated) = self.visible_items().into_iter().find(|v| v.id == item.id) {
+                    self.selected_item = Some(updated.clone());
+                    self.selected_items = vec![updated];
+                }
+                cx.notify();
+                return;
+            }
+
             self.selected_item = Some(item.clone());
             self.selected_items = vec![item.clone()];
             self.clear_tree_selection(cx);
 
-            if !item.is_folder() {
-                cx.emit(FileTreePanelEvent::OpenFile {
-                    path: PathBuf::from(item.id.to_string()),
-                    format: None,
-                    record_recent: true,
-                });
+            cx.emit(FileTreePanelEvent::OpenFile {
+                path: PathBuf::from(item.id.to_string()),
+                format: None,
+                record_recent: true,
+            });
+            cx.notify();
+        }
+    }
+
+    fn expand_item(&mut self, _: &ExpandItem, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(item) = self.selected_item.clone() else {
+            return;
+        };
+        if !item.is_folder() {
+            return;
+        }
+        if !item.is_expanded() {
+            let item_id = item.id.to_string();
+            self.set_folder_expanded(&item_id, true, cx);
+            if let Some(updated) = self.visible_items().into_iter().find(|v| v.id == item.id) {
+                self.selected_item = Some(updated.clone());
+                self.selected_items = vec![updated];
             }
             cx.notify();
+        } else if let Some(first_child) = item.children.first().cloned() {
+            let visible = self.visible_items();
+            if let Some(idx) = visible.iter().position(|v| v.id == first_child.id) {
+                self.selected_item = Some(first_child.clone());
+                self.selected_items = vec![first_child];
+                self.tree_state.update(cx, |state, _| {
+                    state.scroll_to_item(idx, ScrollStrategy::Bottom);
+                });
+                self.clear_tree_selection(cx);
+                cx.notify();
+            }
+        }
+    }
+
+    fn collapse_item(&mut self, _: &CollapseItem, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(item) = self.selected_item.clone() else {
+            return;
+        };
+        if item.is_folder() && item.is_expanded() {
+            let item_id = item.id.to_string();
+            self.set_folder_expanded(&item_id, false, cx);
+            if let Some(updated) = self.visible_items().into_iter().find(|v| v.id == item.id) {
+                self.selected_item = Some(updated.clone());
+                self.selected_items = vec![updated];
+            }
+            cx.notify();
+        } else if let Some(parent) = find_parent_item(&self.items, &item.id) {
+            let visible = self.visible_items();
+            if let Some(idx) = visible.iter().position(|v| v.id == parent.id) {
+                self.selected_item = Some(parent.clone());
+                self.selected_items = vec![parent];
+                self.tree_state.update(cx, |state, _| {
+                    state.scroll_to_item(idx, ScrollStrategy::Top);
+                });
+                self.clear_tree_selection(cx);
+                cx.notify();
+            }
         }
     }
 
@@ -319,15 +524,28 @@ impl FileTreePanel {
         window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
-    fn on_action_rename(&mut self, _: &Rename, _: &mut Window, cx: &mut Context<Self>) {
-        let item = self
-            .selected_item
-            .clone()
-            .or_else(|| self.tree_state.read(cx).selected_entry().map(|entry| entry.item().clone()));
+    fn on_copy_tree_item_path(&mut self, action: &CopyTreeItemPath, window: &mut Window, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(action.path.clone()));
+        window.push_notification(notification::info("Copied path"), cx);
+    }
 
-        if let Some(item) = item {
-            println!("Renaming item: {} ({})", item.label, item.id);
-        }
+    fn on_copy_tree_item_name(&mut self, action: &CopyTreeItemName, window: &mut Window, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(action.name.clone()));
+        window.push_notification(notification::info(format!("Copied {}", action.name)), cx);
+    }
+
+    fn on_reveal_tree_item(&mut self, action: &RevealTreeItem, _: &mut Window, _: &mut Context<Self>) {
+        crate::ui::workspace::reveal_in_file_explorer(Path::new(&action.path));
+    }
+
+    fn on_refresh_tree_folder(&mut self, action: &RefreshTreeFolder, _: &mut Window, cx: &mut Context<Self>) {
+        self.load_children(&action.path, true, cx);
+    }
+
+    fn on_clear_pending_compare(&mut self, _: &ClearPendingCompare, _: &mut Window, cx: &mut Context<Self>) {
+        self.pending_compare_path = None;
+        crate::app_state::PendingCompareState::set(None, cx);
+        cx.notify();
     }
 
     pub fn prompt_open_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -354,6 +572,7 @@ impl FileTreePanel {
     }
 
     pub fn close_folder(&mut self, cx: &mut Context<Self>) {
+        self.load_generation = self.load_generation.wrapping_add(1);
         self.root_path = None;
         self.loaded_paths.clear();
         self.items.clear();
@@ -383,7 +602,7 @@ impl FileTreePanel {
     }
 
     fn on_action_load_children(&mut self, action: &LoadChildren, _: &mut Window, cx: &mut Context<Self>) {
-        self.load_children(&action.path, cx);
+        self.load_children(&action.path, false, cx);
     }
 
     fn move_up(&mut self, _: &MoveUp, _: &mut Window, cx: &mut Context<Self>) {
@@ -536,25 +755,51 @@ impl Render for FileTreePanel {
         let is_empty = self.root_path.is_none();
         let is_focused = self.focus_handle.is_focused(window);
         let theme = cx.theme();
+        let pending_compare = crate::app_state::PendingCompareState::path(cx).or_else(|| self.pending_compare_path.clone());
 
         let header_actions = if !is_empty {
             Some(
-                gpui_kit::component::button::Button::new("close-folder")
-                    .ghost()
-                    .icon(IconName::Eraser)
-                    .with_size(gpui_kit::component::Size::XSmall)
-                    .tooltip("Close Folder")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.close_folder(cx);
-                    }))
+                h_flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(
+                        Button::new("refresh-folder")
+                            .ghost()
+                            .icon(IconName::Redo)
+                            .with_size(Size::XSmall)
+                            .tooltip("Refresh Folder")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.refresh_root(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("open-folder-switch")
+                            .ghost()
+                            .icon(IconName::FolderOpen)
+                            .with_size(Size::XSmall)
+                            .tooltip("Open Different Folder")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.prompt_open_folder(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("close-folder")
+                            .ghost()
+                            .icon(IconName::Close)
+                            .with_size(Size::XSmall)
+                            .tooltip("Close Folder")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_folder(cx);
+                            })),
+                    )
                     .into_any_element(),
             )
         } else {
             Some(
-                gpui_kit::component::button::Button::new("open-folder-header")
+                Button::new("open-folder-header")
                     .ghost()
                     .icon(IconName::FolderOpen)
-                    .with_size(gpui_kit::component::Size::XSmall)
+                    .with_size(Size::XSmall)
                     .tooltip("Open Folder")
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.prompt_open_folder(window, cx);
@@ -564,6 +809,73 @@ impl Render for FileTreePanel {
         };
 
         let header = crate::ui::panels::panel_header("FILES", is_focused, theme, None, header_actions);
+
+        let root_strip = self.root_path.as_ref().map(|root| {
+            let folder_name = path_file_name(root);
+            let full_path = root.display().to_string();
+            h_flex()
+                .id("file-tree-root-strip")
+                .w_full()
+                .flex_shrink_0()
+                .items_center()
+                .gap_1p5()
+                .px_3()
+                .py_1()
+                .bg(theme.secondary.opacity(0.45))
+                .border_b_1()
+                .border_color(theme.border)
+                .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(full_path.clone())).into())
+                .child(Icon::new(IconName::FolderOpen).size_3p5().flex_shrink_0().text_color(theme.muted_foreground))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .whitespace_nowrap()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(theme.foreground)
+                        .child(folder_name),
+                )
+        });
+
+        let compare_banner = pending_compare.as_ref().map(|path_str| {
+            let file_name = path_file_name(Path::new(path_str));
+            let full_tooltip = format!("Compare base: {path_str}");
+            h_flex()
+                .id("pending-compare-banner")
+                .w_full()
+                .flex_shrink_0()
+                .items_center()
+                .gap_1p5()
+                .px_2p5()
+                .py_1()
+                .bg(theme.primary.opacity(0.12))
+                .border_t_1()
+                .border_color(theme.border)
+                .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(full_tooltip.clone())).into())
+                .child(Icon::new(IconName::GitCompare).size_3().flex_shrink_0().text_color(theme.primary))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .whitespace_nowrap()
+                        .text_xs()
+                        .text_color(theme.foreground)
+                        .child(format!("Compare: {file_name}")),
+                )
+                .child(
+                    Button::new("clear-pending-compare-btn")
+                        .ghost()
+                        .icon(IconName::Close)
+                        .with_size(Size::XSmall)
+                        .tooltip("Clear selected compare file")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.on_clear_pending_compare(&ClearPendingCompare, window, cx);
+                        })),
+                )
+        });
 
         let container = crate::ui::panels::panel_container(is_focused, theme);
 
@@ -583,23 +895,30 @@ impl Render for FileTreePanel {
             .on_action(cx.listener(Self::move_bottom))
             .on_action(cx.listener(Self::page_up))
             .on_action(cx.listener(Self::page_down))
+            .on_action(cx.listener(Self::expand_item))
+            .on_action(cx.listener(Self::collapse_item))
             .on_action(cx.listener(Self::dismiss))
-            .on_action(cx.listener(Self::on_action_rename))
             .on_action(cx.listener(Self::on_action_select_item))
             .on_action(cx.listener(Self::on_action_set_file_tree_folder))
             .on_action(cx.listener(Self::on_action_load_children))
+            .on_action(cx.listener(Self::on_copy_tree_item_path))
+            .on_action(cx.listener(Self::on_copy_tree_item_name))
+            .on_action(cx.listener(Self::on_reveal_tree_item))
+            .on_action(cx.listener(Self::on_refresh_tree_folder))
+            .on_action(cx.listener(Self::on_clear_pending_compare))
             .child(header)
+            .when_some(root_strip, |el, strip| el.child(strip))
             .child(div().flex_1().min_h_0().w_full().overflow_hidden().child(if is_empty {
-                let open_btn = gpui_kit::component::button::Button::new("open-folder-btn")
+                let open_btn = Button::new("open-folder-btn")
                     .label("Open Folder")
                     .primary()
-                    .with_size(gpui_kit::component::Size::Small)
+                    .with_size(Size::Small)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.prompt_open_folder(window, cx);
                     }))
                     .into_any_element();
 
-                let mut empty_actions = v_flex().w_full().items_center().child(open_btn);
+                let mut empty_actions = v_flex().w_full().min_h_0().items_center().child(open_btn);
                 if !self.recent_history.displayed_entries().is_empty() {
                     let recent_items = self
                         .recent_history
@@ -625,8 +944,9 @@ impl Render for FileTreePanel {
                                 .items_center()
                                 .gap_1()
                                 .px_1()
+                                .rounded_sm()
                                 .cursor_pointer()
-                                .tooltip(move |_window, cx| cx.new(|_| gpui_kit::component::tooltip::Tooltip::new(tooltip_text.clone())).into())
+                                .tooltip(move |_window, cx| cx.new(|_| Tooltip::new(tooltip_text.clone())).into())
                                 .hover(|style| style.bg(theme.list_hover))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.focus_handle.focus(window, cx);
@@ -636,7 +956,7 @@ impl Render for FileTreePanel {
                                         record_recent: false,
                                     });
                                 }))
-                                .child(Icon::new(IconName::File).with_size(gpui_kit::component::Size::XSmall))
+                                .child(Icon::new(IconName::File).with_size(Size::XSmall).flex_shrink_0())
                                 .child(div().flex_1().min_w_0().text_xs().truncate().whitespace_nowrap().child(label));
 
                             if let Some(format) = entry.format
@@ -645,6 +965,7 @@ impl Render for FileTreePanel {
                                 item_content = item_content.child(
                                     div()
                                         .px_1()
+                                        .flex_shrink_0()
                                         .text_xs()
                                         .font_semibold()
                                         .text_color(theme.muted_foreground)
@@ -658,10 +979,10 @@ impl Render for FileTreePanel {
                                 .gap_1()
                                 .child(item_content)
                                 .child(
-                                    gpui_kit::component::button::Button::new(SharedString::from(format!("remove-recent-file-{index}")))
+                                    Button::new(SharedString::from(format!("remove-recent-file-{index}")))
                                         .ghost()
                                         .icon(IconName::Close)
-                                        .with_size(gpui_kit::component::Size::XSmall)
+                                        .with_size(Size::XSmall)
                                         .tooltip("Remove from recents")
                                         .on_click(cx.listener(move |_, _, window, cx| {
                                             window.dispatch_action(Box::new(crate::actions::RemoveFileFromHistory { path: remove_path.clone() }), cx);
@@ -672,9 +993,12 @@ impl Render for FileTreePanel {
                         .collect::<Vec<_>>();
 
                     empty_actions = empty_actions.child(
-                        h_flex().w_full().justify_start().child(
+                        h_flex().w_full().min_h_0().justify_start().child(
                             v_flex()
+                                .id("recent-files-scroll")
                                 .w(relative(0.95))
+                                .max_h(px(360.0))
+                                .overflow_y_scroll()
                                 .mt_4()
                                 .pt_3()
                                 .border_t_1()
@@ -728,90 +1052,119 @@ impl Render for FileTreePanel {
                             .rounded(cx.theme().radius)
                             .px_3()
                             .pl(px(16.) * entry.depth() + px(12.))
-                            .child(h_flex().gap_2().child(icon).child(item.label.clone()).size_full().context_menu({
-                                let view = view.clone();
-                                let item_id = item.id.clone();
-                                let is_folder = item.is_folder();
-                                move |menu, window, cx| {
-                                    let (can_compare, left_path, right_path, pending_compare) = view.update(cx, |this, cx| {
-                                        let can_compare = this.selected_items.len() == 2 && this.selected_items.iter().all(|item| !item.is_folder());
-                                        let (lp, rp) = if can_compare {
-                                            (Some(this.selected_items[0].id.to_string()), Some(this.selected_items[1].id.to_string()))
-                                        } else {
-                                            (None, None)
-                                        };
-                                        let pending = crate::app_state::PendingCompareState::path(cx).or_else(|| this.pending_compare_path.clone());
-                                        (can_compare, lp, rp, pending)
-                                    });
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .size_full()
+                                    .min_w_0()
+                                    .child(Icon::new(icon).size_3p5().flex_shrink_0())
+                                    .child(div().flex_1().min_w_0().truncate().whitespace_nowrap().child(item.label.clone()))
+                                    .context_menu({
+                                        let view = view.clone();
+                                        let item_id = item.id.clone();
+                                        let item_label = item.label.clone();
+                                        let is_folder = item.is_folder();
+                                        let context_focus = focus_handle.clone();
+                                        move |menu, window, cx| {
+                                            let (can_compare, left_path, right_path, pending_compare) = view.update(cx, |this, cx| {
+                                                let can_compare = this.selected_items.len() == 2 && this.selected_items.iter().all(|item| !item.is_folder());
+                                                let (lp, rp) = if can_compare {
+                                                    (Some(this.selected_items[0].id.to_string()), Some(this.selected_items[1].id.to_string()))
+                                                } else {
+                                                    (None, None)
+                                                };
+                                                let pending = crate::app_state::PendingCompareState::path(cx).or_else(|| this.pending_compare_path.clone());
+                                                (can_compare, lp, rp, pending)
+                                            });
 
-                                    let mut menu = menu.menu_with_icon("Open", IconName::FolderOpen, Box::new(OpenFile::new(item_id.to_string())));
+                                            let item_path_str = item_id.to_string();
+                                            let item_name_str = item_label.to_string();
+                                            let mut menu = menu.action_context(context_focus.clone());
 
-                                    if !is_folder {
-                                        let open_path = item_id.to_string();
-                                        let open_path_b64 = open_path.clone();
-                                        menu = menu.submenu("Import", window, cx, move |menu, _window, _cx| {
-                                            menu.menu(
-                                                "Motorola S-Record / Intel HEX",
-                                                Box::new(OpenFile::with_format(open_path.clone(), Some(crate::core::format::FileFormat::HexOrMot))),
-                                            )
-                                            .menu(
-                                                "Base64",
-                                                Box::new(OpenFile::with_format(open_path_b64.clone(), Some(crate::core::format::FileFormat::Base64))),
-                                            )
-                                        });
-
-                                        menu = menu.separator();
-                                        if let Some(ref pending_path) = pending_compare
-                                            && pending_path != &item_id.to_string()
-                                        {
-                                            let pending_file_name = std::path::Path::new(pending_path)
-                                                .file_name()
-                                                .map(|n| n.to_string_lossy().to_string())
-                                                .unwrap_or_else(|| "Selected".to_string());
-                                            menu = menu.menu_with_icon(
-                                                format!("Compare with '{}'", pending_file_name),
-                                                IconName::GitCompare,
-                                                Box::new(OpenDiff {
-                                                    left_path: pending_path.clone(),
-                                                    right_path: item_id.to_string(),
-                                                }),
-                                            );
-                                        }
-
-                                        menu = menu.menu_with_icon(
-                                            "Select for Compare",
-                                            IconName::GitCompare,
-                                            Box::new(SelectForCompare { path: item_id.to_string() }),
-                                        );
-
-                                        if can_compare {
-                                            menu = menu.menu_with_icon(
-                                                "Compare Selected Files",
-                                                IconName::GitCompare,
-                                                Box::new(OpenDiff {
-                                                    left_path: left_path.unwrap_or_default(),
-                                                    right_path: right_path.unwrap_or_default(),
-                                                }),
-                                            );
-                                        }
-                                    }
-
-                                    menu.separator()
-                                        .menu_with_icon("Copy Path", IconName::Copy, Box::new(crate::actions::CopyPath))
-                                        .menu_with_icon("Copy File Name", IconName::FileText, Box::new(crate::actions::CopyFileName))
-                                        .menu_with_icon(
-                                            if cfg!(target_os = "macos") {
-                                                "Reveal in Finder"
+                                            if is_folder {
+                                                menu = menu
+                                                    .menu_with_icon(
+                                                        "Open as Root Folder",
+                                                        IconName::FolderOpen,
+                                                        Box::new(crate::actions::SetFileTreeFolder { path: item_path_str.clone() }),
+                                                    )
+                                                    .menu_with_icon(
+                                                        "Refresh Folder",
+                                                        IconName::Redo,
+                                                        Box::new(RefreshTreeFolder { path: item_path_str.clone() }),
+                                                    );
                                             } else {
-                                                "Reveal in File Explorer"
-                                            },
-                                            IconName::FolderSearch,
-                                            Box::new(crate::actions::RevealInExplorer),
-                                        )
-                                        .separator()
-                                        .menu_with_icon("Rename", IconName::PenLine, Box::new(Rename))
-                                }
-                            }))
+                                                let open_path = item_path_str.clone();
+                                                let open_path_b64 = open_path.clone();
+                                                menu = menu
+                                                    .menu_with_icon("Open", IconName::FolderOpen, Box::new(OpenFile::new(item_path_str.clone())))
+                                                    .submenu("Import", window, cx, move |menu, _window, _cx| {
+                                                        menu.menu(
+                                                            "Motorola S-Record / Intel HEX",
+                                                            Box::new(OpenFile::with_format(open_path.clone(), Some(crate::core::format::FileFormat::HexOrMot))),
+                                                        )
+                                                        .menu(
+                                                            "Base64",
+                                                            Box::new(OpenFile::with_format(
+                                                                open_path_b64.clone(),
+                                                                Some(crate::core::format::FileFormat::Base64),
+                                                            )),
+                                                        )
+                                                    })
+                                                    .separator();
+
+                                                if let Some(ref pending_path) = pending_compare
+                                                    && pending_path != &item_path_str
+                                                {
+                                                    let pending_file_name = path_file_name(Path::new(pending_path));
+                                                    menu = menu.menu_with_icon(
+                                                        format!("Compare with '{pending_file_name}'"),
+                                                        IconName::GitCompare,
+                                                        Box::new(OpenDiff {
+                                                            left_path: pending_path.clone(),
+                                                            right_path: item_path_str.clone(),
+                                                        }),
+                                                    );
+                                                }
+
+                                                menu = menu.menu_with_icon(
+                                                    "Select for Compare",
+                                                    IconName::GitCompare,
+                                                    Box::new(SelectForCompare { path: item_path_str.clone() }),
+                                                );
+
+                                                if can_compare {
+                                                    menu = menu.menu_with_icon(
+                                                        "Compare Selected Files",
+                                                        IconName::GitCompare,
+                                                        Box::new(OpenDiff {
+                                                            left_path: left_path.unwrap_or_default(),
+                                                            right_path: right_path.unwrap_or_default(),
+                                                        }),
+                                                    );
+                                                }
+                                            }
+
+                                            menu.separator()
+                                                .menu_with_icon("Copy Path", IconName::Copy, Box::new(CopyTreeItemPath { path: item_path_str.clone() }))
+                                                .menu_with_icon(
+                                                    if is_folder { "Copy Folder Name" } else { "Copy File Name" },
+                                                    IconName::FileText,
+                                                    Box::new(CopyTreeItemName { name: item_name_str }),
+                                                )
+                                                .menu_with_icon(
+                                                    if cfg!(target_os = "macos") {
+                                                        "Reveal in Finder"
+                                                    } else {
+                                                        "Reveal in File Explorer"
+                                                    },
+                                                    IconName::FolderSearch,
+                                                    Box::new(RevealTreeItem { path: item_path_str }),
+                                                )
+                                        }
+                                    }),
+                            )
                             .on_click(window.listener_for(&view, {
                                 let item = item.clone();
                                 let focus_handle = focus_handle.clone();
@@ -839,6 +1192,7 @@ impl Render for FileTreePanel {
                 })
                 .into_any_element()
             }))
+            .when_some(compare_banner, |el, banner| el.child(banner))
     }
 }
 
@@ -869,9 +1223,10 @@ impl FileTreePanelState {
 
 #[cfg(test)]
 mod tests {
-    use super::RecentDisplayHistory;
+    use super::{RecentDisplayHistory, find_parent_item, set_item_expanded};
     use crate::core::format::FileFormat;
     use crate::core::recent_history::RecentFileEntry;
+    use gpui_kit::component::tree::TreeItem;
     use std::path::PathBuf;
 
     #[test]
@@ -1024,6 +1379,25 @@ mod tests {
         assert_eq!(page_up(4), 0);
         assert_eq!(page_down(2), 12);
         assert_eq!(page_down(10), 14);
+    }
+
+    #[test]
+    fn test_file_tree_expand_and_find_parent() {
+        let mut items = vec![
+            TreeItem::new("/dir", "dir").child(TreeItem::new("/dir/a.bin", "a.bin")),
+            TreeItem::new("/root.bin", "root.bin"),
+        ];
+
+        assert!(!items[0].is_expanded());
+        assert!(find_parent_item(&items, "/dir/a.bin").is_none());
+
+        assert!(set_item_expanded(&mut items, "/dir", true));
+        assert!(items[0].is_expanded());
+
+        let parent = find_parent_item(&items, "/dir/a.bin");
+        assert_eq!(parent.map(|p| p.id.to_string()), Some("/dir".to_string()));
+        assert!(find_parent_item(&items, "/root.bin").is_none());
+        assert!(!set_item_expanded(&mut items, "/missing", true));
     }
 
     #[test]
