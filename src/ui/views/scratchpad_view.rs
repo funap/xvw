@@ -4,16 +4,19 @@ use std::rc::Rc;
 use crate::core::format::HexCase;
 use crate::settings::{DEFAULT_SCRATCHPAD_PANEL_WIDTH, DEFAULT_SPLIT_RATIO, MAX_SPLIT_RATIO, MIN_SPLIT_RATIO, ScratchpadSettings};
 use gpui_kit::component::{
-    ActiveTheme, Icon, Sizable, StyledExt,
+    ActiveTheme, Icon, Sizable, StyledExt, WindowExt as _,
     button::{Button, ButtonVariants},
     dock::{Panel, PanelControl, PanelEvent},
     input::{self, DefinitionProvider, Editor, EditorState, Rope, RopeExt as _},
     menu::{ContextMenuExt as _, DropdownMenu as _},
     resizable::{ResizablePanelEvent, ResizableState, h_resizable, resizable_panel},
     text::{FrontmatterPlugin, MarkdownExtensions, SelectionFormat, TextView, TextViewState},
+    tooltip::Tooltip,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+
+actions!(scratchpad_view, [Dismiss]);
 
 /// Definition provider that recognizes offset-like tokens (e.g. `0x1040`, `0x1000..0x1040`, `@0x300`, `#0x300`)
 /// and provides Go-to-Definition navigation and Cmd-hover pointing hand cursor.
@@ -87,6 +90,11 @@ pub fn calculate_text_stats(text: &str) -> (usize, usize, usize) {
     (lines, words, chars)
 }
 
+/// Formats a count with singular/plural noun labels for the scratchpad footer.
+fn format_count_label(count: usize, singular: &'static str, plural: &'static str) -> String {
+    format!("{count} {}", if count == 1 { singular } else { plural })
+}
+
 pub struct ScratchpadView {
     id: usize,
     file_path: PathBuf,
@@ -95,6 +103,7 @@ pub struct ScratchpadView {
     cached_content: String,
     debounce_task: Option<Task<()>>,
     is_dirty: bool,
+    save_error: Option<String>,
     focus_handle: FocusHandle,
     editor: Entity<EditorState>,
     text_view_state: Entity<TextViewState>,
@@ -168,25 +177,11 @@ impl ScratchpadView {
                 this.title = crate::service::ScratchService::extract_title(&content).unwrap_or_else(|| format!("Scratchpad {}", this.id));
                 this.target_file = crate::service::ScratchService::extract_target_file(&content);
                 this.is_dirty = true;
+                this.save_error = None;
                 this.text_view_state.update(cx, |tv, cx| {
                     tv.set_text(&content, cx);
                 });
-
-                // Debounced auto-save (500ms)
-                this.debounce_task = None;
-                let task = cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
-                    if let Some(this) = this.upgrade() {
-                        this.update(cx, |this, cx| {
-                            if this.save_sync() {
-                                crate::ui::menus::update_application_menus(cx);
-                            }
-                            cx.notify();
-                        });
-                    }
-                });
-                this.debounce_task = Some(task);
-
+                this.schedule_auto_save(cx);
                 cx.notify();
             }
         });
@@ -232,6 +227,7 @@ impl ScratchpadView {
             cached_content,
             debounce_task: None,
             is_dirty: false,
+            save_error: None,
             focus_handle,
             editor,
             text_view_state,
@@ -260,6 +256,7 @@ impl ScratchpadView {
         self.target_file = crate::service::ScratchService::extract_target_file(&content);
         self.cached_content = content.clone();
         self.is_dirty = false;
+        self.save_error = None;
         self.debounce_task = None;
         self.editor.update(cx, |ed, cx| {
             ed.set_value(content.clone(), window, cx);
@@ -308,7 +305,23 @@ impl ScratchpadView {
 
     /// Returns true if this scratchpad has not been modified and has not been saved to disk.
     pub fn is_untouched(&self) -> bool {
-        !self.is_dirty && !self.file_path.exists()
+        !self.is_dirty && self.save_error.is_none() && !self.file_path.exists()
+    }
+
+    fn schedule_auto_save(&mut self, cx: &mut Context<Self>) {
+        self.debounce_task = None;
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+            if let Some(this) = this.upgrade() {
+                this.update(cx, |this, cx| {
+                    if this.save_sync() {
+                        crate::ui::menus::update_application_menus(cx);
+                    }
+                    cx.notify();
+                });
+            }
+        });
+        self.debounce_task = Some(task);
     }
 
     pub fn save_sync(&mut self) -> bool {
@@ -317,15 +330,18 @@ impl ScratchpadView {
         }
         if let Err(e) = crate::service::ScratchService::save_scratch_atomic(&self.file_path, &self.cached_content) {
             eprintln!("Failed to save scratchpad to {}: {}", self.file_path.display(), e);
+            self.save_error = Some(e.to_string());
             false
         } else {
             self.is_dirty = false;
+            self.save_error = None;
             true
         }
     }
 
     pub fn mark_deleted(&mut self) {
         self.is_dirty = false;
+        self.save_error = None;
         self.debounce_task = None;
     }
 
@@ -392,25 +408,13 @@ impl ScratchpadView {
         let content = self.editor.read(cx).value().to_string();
         self.cached_content = content.clone();
         self.title = crate::service::ScratchService::extract_title(&content).unwrap_or_else(|| format!("Scratchpad {}", self.id));
+        self.target_file = crate::service::ScratchService::extract_target_file(&content);
         self.is_dirty = true;
+        self.save_error = None;
         self.text_view_state.update(cx, |tv, cx| {
             tv.set_text(&content, cx);
         });
-
-        // Debounced auto-save (500ms)
-        self.debounce_task = None;
-        let task = cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
-            if let Some(this) = this.upgrade() {
-                this.update(cx, |this, cx| {
-                    if this.save_sync() {
-                        crate::ui::menus::update_application_menus(cx);
-                    }
-                    cx.notify();
-                });
-            }
-        });
-        self.debounce_task = Some(task);
+        self.schedule_auto_save(cx);
         cx.notify();
     }
 
@@ -426,6 +430,10 @@ impl ScratchpadView {
                 ed.focus(window, cx);
             });
         }
+    }
+
+    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        window.dispatch_action(Box::new(crate::actions::FocusHexView), cx);
     }
 
     fn render_text_view(&self) -> TextView {
@@ -444,8 +452,9 @@ impl ScratchpadView {
                     .xsmall()
                     .icon(IconName::Copy)
                     .tooltip("Copy code")
-                    .on_click(move |_event, _window, cx| {
+                    .on_click(move |_event, window, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
+                        window.push_notification(crate::ui::notification::info("Copied code block"), cx);
                     })
             })
             .table_actions(|table, _window, _cx| {
@@ -460,8 +469,9 @@ impl ScratchpadView {
                             .xsmall()
                             .icon(IconName::Copy)
                             .label("Copy Table")
-                            .on_click(move |_event, _window, cx| {
+                            .on_click(move |_event, window, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(md.clone()));
+                                window.push_notification(crate::ui::notification::info("Copied table as Markdown"), cx);
                             }),
                     )
             })
@@ -487,23 +497,30 @@ impl Render for ScratchpadView {
         let mode = self.mode;
 
         let filename_str = self.file_path.file_name().and_then(|n| n.to_str()).unwrap_or("scratch.md").to_string();
+        let current_file_path = self.file_path.clone();
 
         let title_str = self.title.clone();
         let target_file_opt = self.target_file_path();
         let target_file_name = target_file_opt.and_then(|p| p.file_name()).and_then(|n| n.to_str()).map(|s| s.to_string());
         let target_file_tooltip = target_file_opt.map(|p| format!("Linked binary: {}", p.display()));
 
-        let mut switcher = Button::new("scratchpad-switcher").ghost().xsmall();
+        let switcher_shortcut = if cfg!(target_os = "macos") { "⌘P" } else { "Ctrl+P" };
+        let mode_shortcut = if cfg!(target_os = "macos") { "⌘E" } else { "Ctrl+E" };
+
+        let mut switcher = Button::new("scratchpad-switcher").ghost().xsmall().max_w_full();
         if let Some(ref tt) = target_file_tooltip {
             switcher = switcher.tooltip(tt.clone());
+        } else {
+            switcher = switcher.tooltip(format!("Switch scratchpad ({switcher_shortcut})"));
         }
         let switcher = switcher
             .child(
                 div()
                     .flex()
                     .items_center()
+                    .min_w_0()
                     .gap_1p5()
-                    .child(Icon::new(IconName::FileText).size_3p5().text_color(theme.muted_foreground))
+                    .child(Icon::new(IconName::FileText).size_3p5().flex_shrink_0().text_color(theme.muted_foreground))
                     .child(
                         div()
                             .text_xs()
@@ -518,6 +535,8 @@ impl Render for ScratchpadView {
                             div()
                                 .px_1()
                                 .py_0p5()
+                                .max_w(px(110.0))
+                                .truncate()
                                 .rounded_md()
                                 .bg(theme.secondary)
                                 .text_xs()
@@ -529,36 +548,46 @@ impl Render for ScratchpadView {
                         div()
                             .px_1()
                             .py_0p5()
+                            .flex_shrink_0()
                             .rounded_md()
                             .bg(theme.secondary)
                             .text_xs()
                             .text_color(theme.muted_foreground)
                             .child(filename_str),
                     )
-                    .child(Icon::new(IconName::ChevronDown).size_3().text_color(theme.muted_foreground)),
+                    .child(Icon::new(IconName::ChevronDown).size_3().flex_shrink_0().text_color(theme.muted_foreground)),
             )
-            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
+            .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _window, _cx| {
                 let recent = crate::service::ScratchService::list_scratches();
                 let mut menu = menu
-                    .menu_with_icon("Switch Note Palette... (Cmd/Ctrl+P)", IconName::Search, Box::new(crate::actions::QuickOpen))
+                    .menu_with_icon(
+                        format!("Switch Note Palette... ({switcher_shortcut})"),
+                        IconName::Search,
+                        Box::new(crate::actions::QuickOpen),
+                    )
                     .separator()
                     .menu_with_icon("New Scratchpad", IconName::Plus, Box::new(crate::actions::NewScratchpad));
                 menu = menu.separator();
                 if recent.is_empty() {
-                    menu = menu.menu_with_icon("No Saved Scratches", IconName::FileText, Box::new(crate::actions::NewScratchpad));
+                    menu = menu.label("No saved scratchpads yet");
                 } else {
                     for entry in recent.into_iter().take(15) {
+                        let is_current = entry.path == current_file_path;
                         let label = if entry.title != entry.filename {
                             format!("{} ({})", entry.title, entry.filename)
                         } else {
                             entry.title
                         };
-                        menu = menu.menu(label, Box::new(crate::actions::OpenScratchpadFile { path: entry.path }));
+                        menu = menu.menu_with_check(label, is_current, Box::new(crate::actions::OpenScratchpadFile { path: entry.path }));
                     }
                 }
                 menu = menu.separator();
                 menu.menu_with_icon(
-                    "Reveal in File Manager",
+                    if cfg!(target_os = "macos") {
+                        "Reveal in Finder"
+                    } else {
+                        "Reveal in File Manager"
+                    },
                     IconName::FolderSearch,
                     Box::new(crate::actions::RevealScratchesInExplorer),
                 )
@@ -572,6 +601,7 @@ impl Render for ScratchpadView {
 
         let mode_controls = div()
             .flex()
+            .flex_shrink_0()
             .items_center()
             .rounded_md()
             .bg(theme.muted)
@@ -580,7 +610,7 @@ impl Render for ScratchpadView {
             .child(
                 Button::new("mode-edit")
                     .icon(IconName::PenLine)
-                    .tooltip("Edit (Markdown source)")
+                    .tooltip(format!("Edit — Markdown source ({mode_shortcut} to cycle)"))
                     .xsmall()
                     .when(mode == ScratchpadMode::Edit, |btn| btn.primary())
                     .when(mode != ScratchpadMode::Edit, |btn| btn.ghost())
@@ -591,7 +621,7 @@ impl Render for ScratchpadView {
             .child(
                 Button::new("mode-split")
                     .icon(IconName::SplitPreview)
-                    .tooltip("Split (Editor & Preview)")
+                    .tooltip(format!("Split — Editor & Preview ({mode_shortcut} to cycle)"))
                     .xsmall()
                     .when(mode == ScratchpadMode::Split, |btn| btn.primary())
                     .when(mode != ScratchpadMode::Split, |btn| btn.ghost())
@@ -602,7 +632,7 @@ impl Render for ScratchpadView {
             .child(
                 Button::new("mode-preview")
                     .icon(IconName::Eye)
-                    .tooltip("Preview (Rendered document)")
+                    .tooltip(format!("Preview — Rendered document ({mode_shortcut} to cycle)"))
                     .xsmall()
                     .when(mode == ScratchpadMode::Preview, |btn| btn.primary())
                     .when(mode != ScratchpadMode::Preview, |btn| btn.ghost())
@@ -616,12 +646,13 @@ impl Render for ScratchpadView {
             .flex_row()
             .items_center()
             .justify_between()
+            .gap_1()
             .px_2()
             .py_1()
             .border_b_1()
             .border_color(theme.border)
             .bg(theme.muted)
-            .child(switcher)
+            .child(div().flex_1().min_w_0().overflow_hidden().child(switcher))
             .child(mode_controls);
 
         let left_panel_size = if let Some(w) = self.split_width {
@@ -702,16 +733,77 @@ impl Render for ScratchpadView {
                 .min_h_0()
                 .overflow_hidden()
                 .p_4()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        this.focus_handle.focus(window, cx);
+                    }),
+                )
                 .child(self.render_text_view())
                 .into_any_element(),
         };
 
         let (lines, words, chars) = calculate_text_stats(&self.cached_content);
+        let save_status: AnyElement = if let Some(err) = &self.save_error {
+            let tooltip_err = format!("Failed to save scratchpad: {err}. Click to retry.");
+            div()
+                .id("scratchpad-save-error")
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap_1()
+                .cursor_pointer()
+                .text_color(theme.danger)
+                .tooltip(move |window, cx| Tooltip::new(tooltip_err.clone()).build(window, cx))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if this.save_sync() {
+                        crate::ui::menus::update_application_menus(cx);
+                        window.push_notification(crate::ui::notification::success("Scratchpad saved"), cx);
+                    } else if let Some(err) = &this.save_error {
+                        window.push_notification(crate::ui::notification::error(format!("Save failed: {err}")), cx);
+                    }
+                    cx.notify();
+                }))
+                .child(Icon::new(IconName::TriangleAlert).size_3())
+                .child("Save failed")
+                .into_any_element()
+        } else if self.is_dirty {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap_1()
+                .child(Icon::new(IconName::LoaderCircle).size_3())
+                .child("Saving...")
+                .into_any_element()
+        } else if self.is_untouched() {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap_1()
+                .child(Icon::new(IconName::FileText).size_3())
+                .child("Draft")
+                .into_any_element()
+        } else {
+            div()
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap_1()
+                .child(Icon::new(IconName::Check).size_3())
+                .child("Saved")
+                .into_any_element()
+        };
+
         let footer = div()
             .flex()
             .flex_row()
+            .flex_wrap()
             .items_center()
             .justify_between()
+            .gap_x_2()
+            .gap_y_0p5()
             .px_2p5()
             .py_1()
             .border_t_1()
@@ -724,20 +816,13 @@ impl Render for ScratchpadView {
                     .flex()
                     .items_center()
                     .gap_1p5()
-                    .child(format!("{lines} lines"))
+                    .child(format_count_label(lines, "line", "lines"))
                     .child(div().w_px().h_3().bg(theme.border))
-                    .child(format!("{words} words"))
+                    .child(format_count_label(words, "word", "words"))
                     .child(div().w_px().h_3().bg(theme.border))
-                    .child(format!("{chars} chars")),
+                    .child(format_count_label(chars, "char", "chars")),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(Icon::new(if self.is_dirty { IconName::LoaderCircle } else { IconName::Check }).size_3())
-                    .child(if self.is_dirty { "Saving..." } else { "Saved" }),
-            );
+            .child(save_status);
 
         div()
             .flex()
@@ -752,11 +837,12 @@ impl Render for ScratchpadView {
             .on_action(cx.listener(|this, _: &crate::actions::ToggleScratchpadMode, _, cx| {
                 this.cycle_mode(cx);
             }))
+            .on_action(cx.listener(Self::dismiss))
             .child(toolbar)
             .child(
                 div()
                     .flex_1()
-                    .size_full()
+                    .w_full()
                     .min_w_0()
                     .min_h_0()
                     .overflow_hidden()
@@ -786,6 +872,7 @@ impl Render for ScratchpadView {
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("escape", Dismiss, Some("ScratchpadView && !Input")),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-e", crate::actions::ToggleScratchpadMode, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
@@ -1092,5 +1179,16 @@ mod tests {
         let off3 = note.find("@0x300").unwrap() + 1;
         let token3 = find_offset_token_at(note, off3).expect("must find @ token");
         assert_eq!(token3.1, OffsetLinkTarget::Offset(0x300));
+    }
+
+    #[test]
+    fn test_format_count_label_singular_and_plural() {
+        use super::format_count_label;
+
+        assert_eq!(format_count_label(0, "line", "lines"), "0 lines");
+        assert_eq!(format_count_label(1, "line", "lines"), "1 line");
+        assert_eq!(format_count_label(2, "line", "lines"), "2 lines");
+        assert_eq!(format_count_label(1, "word", "words"), "1 word");
+        assert_eq!(format_count_label(1, "char", "chars"), "1 char");
     }
 }
