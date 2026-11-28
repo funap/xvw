@@ -26,6 +26,26 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use std::sync::Arc;
 
+fn header_clip_indicator(is_left: bool, theme: &gpui_kit::component::Theme) -> Div {
+    let base = div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .w(px(16.0))
+        .flex()
+        .items_center()
+        .bg(theme.sidebar)
+        .text_xs()
+        .font_semibold()
+        .text_color(theme.muted_foreground)
+        .child("…");
+    if is_left {
+        base.left_0().justify_start().pl(px(2.0))
+    } else {
+        base.right_0().justify_end().pr(px(2.0))
+    }
+}
+
 impl Render for HexView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity().clone();
@@ -35,6 +55,9 @@ impl Render for HexView {
         let theme = cx.theme();
         let font_family = self.font_family_prop.clone();
         let font_size = self.font_size_prop;
+        let row_height = self.row_height();
+        let header_height = self.header_height();
+        let ascii_cell_width = self.ascii_cell_width();
 
         let (total_rows, bytes_per_row, max_bytes_per_row, is_struct_mode, total_size, line_starts, reveal_cursor_offset) = {
             let editor = self.editor.read(cx);
@@ -56,13 +79,15 @@ impl Render for HexView {
         if bytes_per_row_changed {
             self.last_bytes_per_row = Some(bytes_per_row);
             self.last_max_bytes_per_row = Some(max_bytes_per_row);
-            self.ascii_col_width = Self::default_ascii_col_width(max_bytes_per_row);
+            self.ascii_col_width = self.default_ascii_col_width(max_bytes_per_row);
             self.cursor_reveal_pending = true;
             self.row_cache.borrow_mut().clear();
         }
         let ascii_col_width = self.effective_ascii_col_width(max_bytes_per_row);
 
         let container = div()
+            .id(("hex-view-root", cx.entity_id()))
+            .relative()
             .flex()
             .flex_col()
             .bg(theme.background)
@@ -191,43 +216,28 @@ impl Render for HexView {
                 );
             }
 
+            let can_switch_edit_col = self.show_ascii && !is_struct_mode;
+            let active_is_hex = self.input.is_hex();
+            let active_is_ascii = self.input.is_ascii();
+
             let comment_header_el = |width: f32, can_scroll_left: bool, can_scroll_right: bool, theme: &gpui_kit::component::Theme| {
                 h_flex()
+                    .h(px(header_height))
                     .w(px(width + SECTION_GAP))
                     .child(
                         div()
                             .w(px(width))
+                            .h_full()
+                            .flex()
+                            .items_center()
                             .overflow_hidden()
                             .relative()
                             .text_xs()
                             .text_color(theme.muted_foreground)
+                            .when(can_scroll_left, |el| el.pl(px(16.0)))
                             .child("Comment")
-                            .when(can_scroll_left, |el| {
-                                el.child(
-                                    div()
-                                        .absolute()
-                                        .left_0()
-                                        .top_0()
-                                        .bottom_0()
-                                        .w(px(14.0))
-                                        .bg(theme.sidebar)
-                                        .text_color(theme.muted_foreground)
-                                        .child("…"),
-                                )
-                            })
-                            .when(can_scroll_right, |el| {
-                                el.child(
-                                    div()
-                                        .absolute()
-                                        .right_0()
-                                        .top_0()
-                                        .bottom_0()
-                                        .w(px(14.0))
-                                        .bg(theme.sidebar)
-                                        .text_color(theme.muted_foreground)
-                                        .child("…"),
-                                )
-                            })
+                            .when(can_scroll_left, |el| el.child(header_clip_indicator(true, theme)))
+                            .when(can_scroll_right, |el| el.child(header_clip_indicator(false, theme)))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, event: &MouseDownEvent, _window, cx| {
@@ -266,7 +276,7 @@ impl Render for HexView {
                 .flex()
                 .flex_row()
                 .items_center()
-                .h(px(HEADER_HEIGHT))
+                .h(px(header_height))
                 .bg(theme.sidebar)
                 .border_b_1()
                 .border_color(theme.border)
@@ -275,13 +285,18 @@ impl Render for HexView {
                 .pr(px(VERTICAL_SCROLLBAR_WIDTH))
                 .min_w_0()
                 .overflow_hidden()
-                .child(if is_struct_mode {
+                .child(if is_struct_mode || self.show_offset {
                     h_flex()
                         .flex_shrink_0()
+                        .h(px(header_height))
                         .w(px(self.address_col_width + SECTION_GAP))
                         .child(
                             div()
                                 .w(px(self.address_col_width))
+                                .h_full()
+                                .flex()
+                                .items_center()
+                                .overflow_hidden()
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
                                 .child("Address")
@@ -318,89 +333,48 @@ impl Render for HexView {
                                 ),
                         )
                         .into_any_element()
-                } else if self.show_offset {
-                    h_flex()
-                        .flex_shrink_0()
-                        .w(px(OFFSET_WIDTH + SECTION_GAP))
-                        .child(div().w(px(OFFSET_WIDTH)).text_xs().text_color(theme.muted_foreground).child("Address"))
-                        .child(
-                            div()
-                                .w(px(SECTION_GAP))
-                                .h_full()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border)),
-                        )
-                        .into_any_element()
                 } else {
                     div().flex_shrink_0().w(px(SECTION_GAP)).into_any_element()
                 })
                 .child(
-                    h_flex().flex_1().min_w_0().h(px(HEADER_HEIGHT)).overflow_hidden().relative().child(
+                    h_flex().flex_1().min_w_0().h(px(header_height)).overflow_hidden().relative().child(
                         h_flex()
                             .relative()
                             .left(px(-self.scroll.outer_scroll_x))
-                            .h(px(HEADER_HEIGHT))
+                            .h(px(header_height))
                             .flex_shrink_0()
                             .child(
                                 h_flex()
-                                    .h(px(HEADER_HEIGHT))
+                                    .h(px(header_height))
                                     .flex_shrink_0()
                                     .w(px(self.hex_col_width + SECTION_GAP))
                                     .child(
                                         div()
                                             .w(px(self.hex_col_width))
-                                            .h(px(HEADER_HEIGHT))
+                                            .h(px(header_height))
                                             .overflow_hidden()
                                             .relative()
+                                            .when(can_switch_edit_col, |el| el.cursor_pointer())
                                             .children(hex_cols)
+                                            .when(can_switch_edit_col && active_is_hex, |el| {
+                                                el.child(div().absolute().left_0().right_0().bottom_0().h(px(2.0)).bg(theme.primary))
+                                            })
                                             .on_mouse_down(
                                                 MouseButton::Left,
-                                                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                                                     if event.click_count >= 2 {
                                                         this.auto_fit_column(ResizingColumn::Hex, cx);
+                                                    } else if can_switch_edit_col && !this.input.is_hex() {
+                                                        this.focus_handle.focus(window, cx);
+                                                        this.commit_pending_hex_with_zero(cx);
+                                                        this.input.set_active_column(EditColumn::Hex);
+                                                        this.pause_cursor_blink(cx);
+                                                        cx.notify();
                                                     }
                                                 }),
                                             )
-                                            .when(is_hex_clipped_left, |el| {
-                                                el.child(
-                                                    div()
-                                                        .absolute()
-                                                        .top_0()
-                                                        .left_0()
-                                                        .bottom_0()
-                                                        .w(px(18.0))
-                                                        .flex()
-                                                        .items_center()
-                                                        .justify_start()
-                                                        .pl_1()
-                                                        .bg(theme.sidebar)
-                                                        .text_xs()
-                                                        .font_semibold()
-                                                        .text_color(theme.muted_foreground)
-                                                        .child("…"),
-                                                )
-                                            })
-                                            .when(is_hex_clipped_right, |el| {
-                                                el.child(
-                                                    div()
-                                                        .absolute()
-                                                        .top_0()
-                                                        .right_0()
-                                                        .bottom_0()
-                                                        .w(px(18.0))
-                                                        .flex()
-                                                        .items_center()
-                                                        .justify_end()
-                                                        .pr_1()
-                                                        .bg(theme.sidebar)
-                                                        .text_xs()
-                                                        .font_semibold()
-                                                        .text_color(theme.muted_foreground)
-                                                        .child("…"),
-                                                )
-                                            }),
+                                            .when(is_hex_clipped_left, |el| el.child(header_clip_indicator(true, theme)))
+                                            .when(is_hex_clipped_right, |el| el.child(header_clip_indicator(false, theme))),
                                     )
                                     .child(
                                         div()
@@ -428,52 +402,45 @@ impl Render for HexView {
                             )
                             .when(self.show_ascii, |el| {
                                 let label = self.encoding.label();
+                                let ascii_label_color = if can_switch_edit_col && active_is_ascii {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                };
                                 el.child(
                                     h_flex()
+                                        .h(px(header_height))
                                         .w(px(ascii_col_width + SECTION_GAP))
                                         .child(
                                             div()
                                                 .w(px(ascii_col_width))
+                                                .h_full()
+                                                .flex()
+                                                .items_center()
                                                 .overflow_hidden()
                                                 .relative()
                                                 .text_xs()
-                                                .text_color(theme.muted_foreground)
+                                                .text_color(ascii_label_color)
+                                                .when(can_switch_edit_col && active_is_ascii, |el| el.font_semibold())
+                                                .when(can_switch_edit_col, |el| el.cursor_pointer())
+                                                .when(is_ascii_clipped_left, |el| el.pl(px(16.0)))
                                                 .child(label)
-                                                .when(is_ascii_clipped_left, |el| {
-                                                    el.child(
-                                                        div()
-                                                            .absolute()
-                                                            .left_0()
-                                                            .top_0()
-                                                            .bottom_0()
-                                                            .w(px(18.0))
-                                                            .bg(theme.sidebar)
-                                                            .text_xs()
-                                                            .font_semibold()
-                                                            .text_color(theme.muted_foreground)
-                                                            .child("…"),
-                                                    )
+                                                .when(can_switch_edit_col && active_is_ascii, |el| {
+                                                    el.child(div().absolute().left_0().right_0().bottom_0().h(px(2.0)).bg(theme.primary))
                                                 })
-                                                .when(is_ascii_clipped_right, |el| {
-                                                    el.child(
-                                                        div()
-                                                            .absolute()
-                                                            .right_0()
-                                                            .top_0()
-                                                            .bottom_0()
-                                                            .w(px(18.0))
-                                                            .bg(theme.sidebar)
-                                                            .text_xs()
-                                                            .font_semibold()
-                                                            .text_color(theme.muted_foreground)
-                                                            .child("…"),
-                                                    )
-                                                })
+                                                .when(is_ascii_clipped_left, |el| el.child(header_clip_indicator(true, theme)))
+                                                .when(is_ascii_clipped_right, |el| el.child(header_clip_indicator(false, theme)))
                                                 .on_mouse_down(
                                                     MouseButton::Left,
-                                                    cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                                                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                                                         if event.click_count >= 2 {
                                                             this.auto_fit_column(ResizingColumn::Ascii, cx);
+                                                        } else if can_switch_edit_col && !this.input.is_ascii() {
+                                                            this.focus_handle.focus(window, cx);
+                                                            this.commit_pending_hex_with_zero(cx);
+                                                            this.input.set_active_column(EditColumn::Ascii);
+                                                            this.pause_cursor_blink(cx);
+                                                            cx.notify();
                                                         }
                                                     }),
                                                 ),
@@ -506,21 +473,22 @@ impl Render for HexView {
                             .when(is_struct_mode, |el| {
                                 el.child(
                                     h_flex()
+                                        .h(px(header_height))
                                         .w(px(self.desc_col_width + SECTION_GAP))
                                         .child(
                                             div()
                                                 .w(px(self.desc_col_width))
+                                                .h_full()
+                                                .flex()
+                                                .items_center()
                                                 .text_xs()
                                                 .text_color(theme.muted_foreground)
                                                 .overflow_hidden()
                                                 .relative()
+                                                .when(is_desc_clipped_left, |el| el.pl(px(16.0)))
                                                 .child("Description")
-                                                .when(is_desc_clipped_left, |el| {
-                                                    el.child(div().absolute().left_0().top_0().bottom_0().w(px(14.0)).bg(theme.sidebar).child("…"))
-                                                })
-                                                .when(is_desc_clipped_right, |el| {
-                                                    el.child(div().absolute().right_0().top_0().bottom_0().w(px(14.0)).bg(theme.sidebar).child("…"))
-                                                })
+                                                .when(is_desc_clipped_left, |el| el.child(header_clip_indicator(true, theme)))
+                                                .when(is_desc_clipped_right, |el| el.child(header_clip_indicator(false, theme)))
                                                 .on_mouse_down(
                                                     MouseButton::Left,
                                                     cx.listener(|this, event: &MouseDownEvent, _window, cx| {
@@ -706,11 +674,20 @@ impl Render for HexView {
             .on_action(cx.listener(Self::clear_bookmark))
             .on_action(cx.listener(Self::clear_all_bookmarks))
             .on_key_down(cx.listener(Self::on_key_down))
+            .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                if !*hovered && this.hovered_desc_tooltip.is_some() {
+                    this.hovered_desc_tooltip = None;
+                    cx.notify();
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     this.focus_handle.focus(window, cx);
                     this.pause_cursor_blink(cx);
+                    if this.hovered_desc_tooltip.is_some() {
+                        this.hovered_desc_tooltip = None;
+                    }
 
                     // スクロールバー領域（右端12px）でのクリック判定
                     if let Some(list_b) = this.list_bounds.get() {
@@ -727,7 +704,7 @@ impl Render for HexView {
                             let total_rows = this.effective_total_rows(cx);
 
                             if let Some(geom) =
-                                crate::ui::components::scrollbar::calculate_scrollbar_geometry(list_h, this.scroll.scroll_offset, total_rows, ROW_HEIGHT)
+                                crate::ui::components::scrollbar::calculate_scrollbar_geometry(list_h, this.scroll.scroll_offset, total_rows, this.row_height())
                             {
                                 let max_thumb_top = (list_h - geom.thumb_height).max(0.0);
                                 if rel_y >= geom.thumb_top && rel_y <= geom.thumb_top + geom.thumb_height {
@@ -890,10 +867,11 @@ impl Render for HexView {
                                 && !parse_res.is_live()
                                 && let Some(list_bounds) = this.list_bounds.get()
                             {
+                                let row_height = this.row_height();
                                 let rel_y = f32::from(event.position.y - list_bounds.top()).max(0.0);
-                                let top_overscroll_px = this.scroll.top_overscroll_rows as f32 * ROW_HEIGHT;
+                                let top_overscroll_px = this.scroll.top_overscroll_rows as f32 * row_height;
                                 if rel_y >= top_overscroll_px {
-                                    let row_offset_in_view = ((rel_y - top_overscroll_px) / ROW_HEIGHT).floor() as usize;
+                                    let row_offset_in_view = ((rel_y - top_overscroll_px) / row_height).floor() as usize;
                                     let row_idx = this.scroll.scroll_offset + row_offset_in_view;
                                     if row_idx < line_starts.len() {
                                         let line_offset = line_starts.get(row_idx).unwrap_or(0);
@@ -1091,6 +1069,7 @@ impl Render for HexView {
                 }
 
                 if let Some((col, start_x, start_w)) = this.resizing_column {
+                    this.hovered_desc_tooltip = None;
                     let current_x: f32 = event.position.x.into();
                     let delta = current_x - start_x;
                     match col {
@@ -1116,16 +1095,18 @@ impl Render for HexView {
                     return;
                 }
                 if this.is_selecting && event.dragging() {
+                    this.hovered_desc_tooltip = None;
+                    let row_height = this.row_height();
                     if let Some(list_b) = this.list_bounds.get() {
                         let y = f32::from(event.position.y);
                         let list_top = f32::from(list_b.top());
                         let list_bottom = f32::from(list_b.bottom());
                         if y < list_top {
-                            let rows_up = ((list_top - y) / ROW_HEIGHT).ceil() as usize;
+                            let rows_up = ((list_top - y) / row_height).ceil() as usize;
                             let new_row = this.scroll.scroll_offset.saturating_sub(rows_up.min(5));
                             this.scroll_to_row(new_row, cx);
                         } else if y > list_bottom {
-                            let rows_down = ((y - list_bottom) / ROW_HEIGHT).ceil() as usize;
+                            let rows_down = ((y - list_bottom) / row_height).ceil() as usize;
                             let total_rows = this.effective_total_rows(cx);
                             let max_top_row = total_rows.saturating_sub(1);
                             let new_row = (this.scroll.scroll_offset + rows_down.min(5)).min(max_top_row);
@@ -1170,6 +1151,69 @@ impl Render for HexView {
                             }
                         });
                     }
+                    return;
+                }
+
+                // Hover tooltip for truncated Description cells in inline structure mode
+                let next_tooltip = if !this.scroll.is_dragging_scrollbar
+                    && let Some(root_b) = this.bounds.get()
+                    && let Some(list_b) = this.list_bounds.get()
+                    && event.position.y >= list_b.top()
+                    && event.position.y < list_b.bottom()
+                    && event.position.x < list_b.right() - px(VERTICAL_SCROLLBAR_WIDTH)
+                {
+                    let layout = this.current_layout(cx);
+                    let base_x = f32::from(list_b.left()) + 8.0;
+                    let relative_x = f32::from(event.position.x) - base_x;
+                    let world_x = relative_x + this.scroll.outer_scroll_x;
+                    if let Some(desc_col) = layout.description
+                        && relative_x >= layout.fixed_width
+                        && world_x >= desc_col.start
+                        && world_x < desc_col.end()
+                    {
+                        let row_height = this.row_height();
+                        let rel_y = f32::from(event.position.y - list_b.top());
+                        let top_overscroll_px = this.scroll.top_overscroll_rows as f32 * row_height;
+                        if rel_y >= top_overscroll_px {
+                            let row_offset_in_view = ((rel_y - top_overscroll_px) / row_height).floor() as usize;
+                            let row_idx = this.scroll.scroll_offset + row_offset_in_view;
+                            let cache = this.row_cache.borrow();
+                            cache.get(row_idx).and_then(|cached| cached.desc.as_ref()).and_then(|desc| {
+                                if desc.desc_text_width > this.desc_col_width + 1.0 && !desc.full_text.is_empty() {
+                                    let root_w = f32::from(root_b.size.width);
+                                    let root_h = f32::from(root_b.size.height);
+                                    let desc_screen_left = (base_x + desc_col.start - this.scroll.outer_scroll_x - f32::from(root_b.left())).max(8.0);
+                                    let tooltip_x = desc_screen_left.min((root_w - 320.0).max(8.0));
+                                    let row_top_in_root =
+                                        f32::from(list_b.top() - root_b.top()) + (row_offset_in_view + this.scroll.top_overscroll_rows) as f32 * row_height;
+                                    let tooltip_y = if row_top_in_root + row_height + 44.0 > root_h {
+                                        (row_top_in_root - 32.0).max(4.0)
+                                    } else {
+                                        row_top_in_root + row_height + 2.0
+                                    };
+                                    Some((row_idx, desc.full_text.clone(), point(px(tooltip_x), px(tooltip_y))))
+                                } else {
+                                    None
+                                }
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let tooltip_changed = match (&this.hovered_desc_tooltip, &next_tooltip) {
+                    (Some((r1, t1, _)), Some((r2, t2, _))) => r1 != r2 || t1 != t2,
+                    (None, None) => false,
+                    _ => true,
+                };
+                if tooltip_changed {
+                    this.hovered_desc_tooltip = next_tooltip;
+                    cx.notify();
                 }
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
@@ -1301,7 +1345,7 @@ impl Render for HexView {
                         let doc = doc_arc.read().expect("document read lock");
 
                         let list_h = f32::from(bounds.size.height);
-                        let visible_rows = (list_h / ROW_HEIGHT).ceil() as usize + 1;
+                        let visible_rows = (list_h / row_height).ceil() as usize + 1;
                         let top_row = scroll_offset.min(total_rows.saturating_sub(1));
                         let end_row = (top_row + visible_rows).min(total_rows);
                         let total_size = doc.buffer.len();
@@ -1380,7 +1424,7 @@ impl Render for HexView {
                         });
 
                         for (k, row_idx) in (top_row..end_row).enumerate() {
-                            let row_y = bounds.top() + px((k + top_overscroll_rows) as f32 * ROW_HEIGHT);
+                            let row_y = bounds.top() + px((k + top_overscroll_rows) as f32 * row_height);
                             if row_y >= bounds.bottom() {
                                 break;
                             }
@@ -1397,7 +1441,7 @@ impl Render for HexView {
                             }
                             let row_bookmark_comments = &visible_comment_bookmarks[comment_cursor..comment_end];
                             comment_cursor = comment_end;
-                            let row_bounds = Bounds::new(point(bounds.left(), row_y), size(bounds.size.width, px(ROW_HEIGHT)));
+                            let row_bounds = Bounds::new(point(bounds.left(), row_y), size(bounds.size.width, px(row_height)));
                             paint_hex_row(
                                 RowPaintParams {
                                     row_idx,
@@ -1441,6 +1485,8 @@ impl Render for HexView {
                                     comment_col_width,
                                     font: &row_font,
                                     font_size,
+                                    row_height,
+                                    ascii_cell_width,
                                     desc_palette,
                                     active_leaf_field,
                                     has_folded_bookmarks,
@@ -1457,7 +1503,7 @@ impl Render for HexView {
                         flush_column_fade_runs(&scratch_borrow.fade_runs, theme_colors.bg_color_theme, window);
 
                         let theme = cx.theme();
-                        paint_scrollbar(bounds, top_row, total_rows, is_dragging_scrollbar, scrollbar_hovered, theme, window);
+                        paint_scrollbar(bounds, top_row, total_rows, row_height, is_dragging_scrollbar, scrollbar_hovered, theme, window);
                     },
                 )
                 .size_full()
@@ -1480,6 +1526,27 @@ impl Render for HexView {
                     .into_any_element()
             } else {
                 div().h(px(0.0)).into_any_element()
+            })
+            .when_some(self.hovered_desc_tooltip.clone(), |el, (_, tooltip_text, tooltip_pos)| {
+                let theme = cx.theme();
+                el.child(
+                    div()
+                        .absolute()
+                        .left(tooltip_pos.x)
+                        .top(tooltip_pos.y)
+                        .max_w(px(480.0))
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(theme.popover)
+                        .text_color(theme.popover_foreground)
+                        .border_1()
+                        .border_color(theme.border)
+                        .shadow_md()
+                        .text_xs()
+                        .font_family(self.font_family_prop.clone())
+                        .child(tooltip_text),
+                )
             })
             .context_menu({
                 let focus_handle = self.focus_handle.clone();

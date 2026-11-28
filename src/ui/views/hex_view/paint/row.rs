@@ -118,6 +118,8 @@ pub struct RowPaintParams<'a> {
     pub comment_col_width: f32,
     pub font: &'a Font,
     pub font_size: Pixels,
+    pub row_height: f32,
+    pub ascii_cell_width: f32,
     pub desc_palette: DescriptionPalette,
     pub active_leaf_field: Option<&'a IndexedField>,
     pub has_folded_bookmarks: bool,
@@ -244,7 +246,7 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
                 strikethrough: None,
             };
             let shaped = window.text_system().shape_line(SharedString::from(ascii_text), params.font_size, &[run], None);
-            Some(build_cached_ascii_glyphs(&shaped, &ascii_cells, &cell_spans))
+            Some(build_cached_ascii_glyphs(&shaped, &ascii_cells, &cell_spans, params.ascii_cell_width))
         } else {
             None
         }
@@ -375,7 +377,7 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
 
             let text_offset_px = indent_px + chevron_width;
             let expr_shared = SharedString::from(desc_full_text);
-            let shaped_base_desc = window.text_system().shape_line(expr_shared, params.font_size, &desc_runs, None);
+            let shaped_base_desc = window.text_system().shape_line(expr_shared.clone(), params.font_size, &desc_runs, None);
             let desc_text_width = f32::from(shaped_base_desc.width) + text_offset_px + 8.0;
             let leaf_field_spans = leaf_byte_ranges
                 .into_iter()
@@ -386,6 +388,7 @@ pub fn build_cached_row(params: &RowPaintParams, offset: usize, next_offset: usi
                 .collect();
 
             Some(CachedRowDesc {
+                full_text: expr_shared,
                 indent_level,
                 indent_px,
                 chevron_icon_path,
@@ -428,33 +431,35 @@ struct BannerRowSpec<'a> {
     label_color: Hsla,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_special_banner_row(
     spec: BannerRowSpec<'_>,
     bounds: Bounds<Pixels>,
+    row_height: f32,
     font: &Font,
     font_size: Pixels,
     row_cache: &mut RowRenderCache,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let line_height = px(ROW_HEIGHT);
+    let line_height = px(row_height);
     let base_x = bounds.left() + px(8.0);
     if spec.show_left_col {
-        let (shaped, _) = row_cache.get_or_shape_special(spec.addr_text, spec.addr_color, font, font_size, window);
-        let addr_pos = point(base_x, bounds.top() + px(2.0));
-        let _ = shaped.paint(addr_pos, line_height, TextAlign::Left, None, window, cx);
+        let addr_mask = Bounds::new(point(base_x, bounds.top()), size(px(spec.offset_w), line_height));
+        window.with_content_mask(Some(ContentMask { bounds: addr_mask }), |window| {
+            let (shaped, _) = row_cache.get_or_shape_special(spec.addr_text, spec.addr_color, font, font_size, window);
+            let addr_pos = point(base_x, bounds.top() + px(2.0));
+            let _ = shaped.paint(addr_pos, line_height, TextAlign::Left, None, window, cx);
+        });
 
         let div1_x = base_x + px(spec.offset_w + (spec.gap / 2.0));
-        window.paint_quad(fill(
-            Bounds::new(point(div1_x, bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
-            spec.divider_color,
-        ));
+        window.paint_quad(fill(Bounds::new(point(div1_x, bounds.top()), size(px(1.0), line_height)), spec.divider_color));
     }
 
     let bar_start_x = base_x + px(spec.offset_w + spec.gap);
     let bar_end_x = bounds.right() - px(VERTICAL_SCROLLBAR_WIDTH + 8.0);
     let bar_width = (bar_end_x - bar_start_x).max(px(0.0));
-    let bar_bounds = Bounds::new(point(bar_start_x, bounds.top() + px(2.0)), size(bar_width, px(ROW_HEIGHT - 4.0)));
+    let bar_bounds = Bounds::new(point(bar_start_x, bounds.top() + px(2.0)), size(bar_width, px(row_height - 4.0)));
     window.paint_quad(fill(bar_bounds, spec.fill_bg));
     paint_border_box(window, bar_bounds, px(1.0), spec.border_tint);
 
@@ -507,6 +512,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let active_row_highlights = params.highlights;
     let desc_palette = params.desc_palette;
     let selection_bg = params.theme_colors.selection_bg;
+    let active_row_bg = params.theme_colors.active_row_bg;
     let caret_color = params.theme_colors.caret_color;
     let muted_color = params.theme_colors.muted_color;
     let fg_color = params.theme_colors.fg_color;
@@ -514,7 +520,9 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     let border_color = params.theme_colors.border_color;
     let border_line_color = params.theme_colors.border_line_color;
 
-    let line_height = px(ROW_HEIGHT);
+    let row_height = params.row_height;
+    let line_height = px(row_height);
+    let ascii_cell_width = params.ascii_cell_width;
     let font = params.font;
     let insert_cursor_active = params.insert_mode && params.is_focused && window.is_window_active();
     let insert_selection_active = params.min_sel <= params.max_sel;
@@ -532,10 +540,10 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     };
 
     if let Some((fold_end, color, comment, is_unbookmarked)) = fold_summary {
-        let (offset_w, gap) = if is_struct_mode {
+        let (offset_w, gap) = if is_struct_mode || params.show_offset {
             (params.address_col_width, SECTION_GAP)
         } else {
-            (if params.show_offset { OFFSET_WIDTH } else { 0.0 }, SECTION_GAP)
+            (0.0, SECTION_GAP)
         };
 
         let fold_start_addr = params.doc.offset_to_address(offset);
@@ -604,6 +612,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 label_color: text_tint,
             },
             params.bounds,
+            row_height,
             font,
             params.font_size,
             params.row_cache,
@@ -621,10 +630,10 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     };
 
     if let Some((gap_start, gap_end)) = gap_info {
-        let (offset_w, gap) = if is_struct_mode {
+        let (offset_w, gap) = if is_struct_mode || params.show_offset {
             (params.address_col_width, SECTION_GAP)
         } else {
-            (if params.show_offset { OFFSET_WIDTH } else { 0.0 }, SECTION_GAP)
+            (0.0, SECTION_GAP)
         };
 
         let gap_size = gap_end.saturating_sub(gap_start);
@@ -650,6 +659,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 label_color: accent_fg_color,
             },
             params.bounds,
+            row_height,
             font,
             params.font_size,
             params.row_cache,
@@ -680,29 +690,38 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
         None
     };
 
+    // Subtle full-row tint for the active cursor row (painted beneath text, highlights, and selections)
+    if is_cursor_row && !is_structure_header_row && !is_collapsed_struct_row && active_row_bg.a > 0.0 {
+        let row_fill_width = (params.bounds.size.width - px(VERTICAL_SCROLLBAR_WIDTH)).max(px(0.0));
+        window.paint_quad(fill(Bounds::new(params.bounds.origin, size(row_fill_width, line_height)), active_row_bg));
+    }
+
     // 1. Draw Left Columns (Address OR Offset)
     let addr_color = if is_cursor_row { fg_color } else { muted_color };
-    let (offset_w, gap) = if is_struct_mode {
+    let (offset_w, gap) = if is_struct_mode || params.show_offset {
         (params.address_col_width, SECTION_GAP)
     } else {
-        (if params.show_offset { OFFSET_WIDTH } else { 0.0 }, SECTION_GAP)
+        (0.0, SECTION_GAP)
     };
     if is_struct_mode || params.show_offset {
         let addr_pos = point(params.bounds.left() + px(8.0), params.bounds.top() + px(2.0));
-        paint_row_address(
-            is_cursor_row,
-            physical_address,
-            addr_color,
-            params.hex_case,
-            font,
-            params.font_size,
-            line_height,
-            addr_pos,
-            cached.shaped_addr.as_ref(),
-            cursor_addr_cache,
-            window,
-            cx,
-        );
+        let addr_mask = Bounds::new(point(params.bounds.left() + px(8.0), params.bounds.top()), size(px(offset_w), line_height));
+        window.with_content_mask(Some(ContentMask { bounds: addr_mask }), |window| {
+            paint_row_address(
+                is_cursor_row,
+                physical_address,
+                addr_color,
+                params.hex_case,
+                font,
+                params.font_size,
+                line_height,
+                addr_pos,
+                cached.shaped_addr.as_ref(),
+                cursor_addr_cache,
+                window,
+                cx,
+            );
+        });
     }
 
     let base_x = params.bounds.left() + px(8.0);
@@ -729,14 +748,14 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     if is_struct_mode || params.show_offset {
         let div1_x = base_x + px(offset_w + (gap / 2.0));
         window.paint_quad(fill(
-            Bounds::new(point(div1_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+            Bounds::new(point(div1_x, params.bounds.top()), size(px(1.0), line_height)),
             border_line_color,
         ));
     }
     let scrollable_mask_bounds = {
         let left = base_x + px(offset_w + gap);
         let right = params.bounds.right() - px(VERTICAL_SCROLLBAR_WIDTH);
-        Bounds::new(point(left, params.bounds.top()), size((right - left).max(px(0.0)), px(ROW_HEIGHT)))
+        Bounds::new(point(left, params.bounds.top()), size((right - left).max(px(0.0)), line_height))
     };
     window.with_content_mask(
         Some(ContentMask {
@@ -747,13 +766,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 let bar_start_x = hex_start_x;
                 let bar_end_x = params.bounds.right() - px(VERTICAL_SCROLLBAR_WIDTH + 8.0);
                 let bar_width = (bar_end_x - bar_start_x).max(px(0.0));
-                let banner_bounds = Bounds::new(point(bar_start_x, params.bounds.top() + px(1.0)), size(bar_width, px(ROW_HEIGHT - 2.0)));
+                let banner_bounds = Bounds::new(point(bar_start_x, params.bounds.top() + px(1.0)), size(bar_width, px(row_height - 2.0)));
                 window.paint_quad(fill(banner_bounds, desc_palette.active_bg));
 
-                let pip_bounds = Bounds::new(point(bar_start_x + px(2.0), params.bounds.top() + px(3.0)), size(px(3.0), px(ROW_HEIGHT - 6.0)));
+                let pip_bounds = Bounds::new(point(bar_start_x + px(2.0), params.bounds.top() + px(3.0)), size(px(3.0), px(row_height - 6.0)));
                 window.paint_quad(fill(pip_bounds, desc_palette.type_name));
 
-                let line_y = params.bounds.top() + px(ROW_HEIGHT / 2.0);
+                let line_y = params.bounds.top() + px(row_height / 2.0);
                 let leader_end_x = desc_start_x - px(8.0);
                 if leader_end_x > bar_start_x + px(16.0) {
                     let leader_bounds = Bounds::new(point(bar_start_x + px(10.0), line_y), size(leader_end_x - bar_start_x - px(10.0), px(1.0)));
@@ -763,26 +782,26 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
             let div2_x = hex_start_x + px(params.hex_col_width + (gap / 2.0));
             window.paint_quad(fill(
-                Bounds::new(point(div2_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+                Bounds::new(point(div2_x, params.bounds.top()), size(px(1.0), line_height)),
                 border_line_color,
             ));
             if params.show_ascii {
                 let div_ascii_x = ascii_end_x + px(gap / 2.0);
                 window.paint_quad(fill(
-                    Bounds::new(point(div_ascii_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+                    Bounds::new(point(div_ascii_x, params.bounds.top()), size(px(1.0), line_height)),
                     border_line_color,
                 ));
             }
             if is_struct_mode {
                 let div_desc_x = desc_end_x + px(gap / 2.0);
                 window.paint_quad(fill(
-                    Bounds::new(point(div_desc_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+                    Bounds::new(point(div_desc_x, params.bounds.top()), size(px(1.0), line_height)),
                     border_line_color,
                 ));
             }
             let div_comment_x = comment_start_x + px(params.comment_col_width + (gap / 2.0));
             window.paint_quad(fill(
-                Bounds::new(point(div_comment_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+                Bounds::new(point(div_comment_x, params.bounds.top()), size(px(1.0), line_height)),
                 border_line_color,
             ));
         },
@@ -947,7 +966,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     // 2. Background Quads Pass for Data Items (with clipped single content mask)
     let hex_mask_bounds = clip_column_mask(
         scrollable_mask_bounds,
-        Bounds::new(point(hex_start_x, params.bounds.top()), size(px(params.hex_col_width), px(ROW_HEIGHT))),
+        Bounds::new(point(hex_start_x, params.bounds.top()), size(px(params.hex_col_width), line_height)),
     );
 
     if hex_mask_bounds.size.width > px(0.0) {
@@ -959,7 +978,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     if af_range.contains(&item_start_offset) {
                         let (group_start_x, group_end_x) = hex_group_x(*group, text_origin_x, params.hex_cell_width);
                         let underline_bounds = Bounds::new(
-                            point(group_start_x, params.bounds.top() + px(ROW_HEIGHT - 2.0)),
+                            point(group_start_x, params.bounds.top() + px(row_height - 2.0)),
                             size(group_end_x - group_start_x, px(2.0)),
                         );
                         window.paint_quad(fill(underline_bounds, field_hsla));
@@ -985,7 +1004,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 };
                 let hl_fill_bounds = Bounds::new(
                     point(hl_start_x, params.bounds.top() + px(1.0)),
-                    size(hl_end_x - hl_start_x, px(ROW_HEIGHT - 2.0)),
+                    size(hl_end_x - hl_start_x, px(row_height - 2.0)),
                 );
                 window.paint_quad(fill(hl_fill_bounds, color));
             };
@@ -1005,7 +1024,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         (Some(start), false) => {
                             let start_x = hex_group_x(hex_source_ref.groups[start], text_origin_x, params.hex_cell_width).0;
                             let end_x = hex_group_x(hex_source_ref.groups[item_idx - 1], text_origin_x, params.hex_cell_width).1;
-                            let sel_fill_bounds = Bounds::new(point(start_x, params.bounds.top() + px(1.0)), size(end_x - start_x, px(ROW_HEIGHT - 2.0)));
+                            let sel_fill_bounds = Bounds::new(point(start_x, params.bounds.top() + px(1.0)), size(end_x - start_x, px(row_height - 2.0)));
                             window.paint_quad(fill(sel_fill_bounds, selection_bg));
                             sel_start = None;
                         }
@@ -1038,7 +1057,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         let byte_char_start = group.text_start + visual_byte * 2;
                         let byte_start_x = text_origin_x + hex_grid_x(byte_char_start, params.hex_cell_width);
                         let byte_width = hex_grid_x(2, params.hex_cell_width);
-                        let byte_box_bounds = Bounds::new(point(byte_start_x, params.bounds.top() + px(1.0)), size(byte_width, px(ROW_HEIGHT - 2.0)));
+                        let byte_box_bounds = Bounds::new(point(byte_start_x, params.bounds.top() + px(1.0)), size(byte_width, px(row_height - 2.0)));
 
                         if params.active_column == EditColumn::Hex {
                             paint_cursor_border(window, byte_box_bounds, cursor_border_color);
@@ -1078,7 +1097,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             (group_start_x, group_end_x)
                         };
                         let cursor_width = cursor_end_x - cursor_start_x;
-                        let item_box_bounds = Bounds::new(point(cursor_start_x, params.bounds.top() + px(1.0)), size(cursor_width, px(ROW_HEIGHT - 2.0)));
+                        let item_box_bounds = Bounds::new(point(cursor_start_x, params.bounds.top() + px(1.0)), size(cursor_width, px(row_height - 2.0)));
                         if params.active_column == EditColumn::Hex {
                             paint_cursor_border(window, item_box_bounds, cursor_border_color);
                         } else {
@@ -1105,7 +1124,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             hex_grid_x(2, params.hex_cell_width),
                         )
                     };
-                    let byte_box_bounds = Bounds::new(point(eof_start_x, params.bounds.top() + px(1.0)), size(eof_width, px(ROW_HEIGHT - 2.0)));
+                    let byte_box_bounds = Bounds::new(point(eof_start_x, params.bounds.top() + px(1.0)), size(eof_width, px(row_height - 2.0)));
                     if params.active_column == EditColumn::Hex {
                         paint_cursor_border(window, byte_box_bounds, cursor_border_color);
                     } else {
@@ -1143,7 +1162,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     let (group_start_x, group_end_x) = hex_group_x(*group, text_origin_x, params.hex_cell_width);
                     let item_box_bounds = Bounds::new(
                         point(group_start_x, params.bounds.top() + px(1.0)),
-                        size(group_end_x - group_start_x, px(ROW_HEIGHT - 2.0)),
+                        size(group_end_x - group_start_x, px(row_height - 2.0)),
                     );
                     let item_start_offset = offset + group.chunk_start;
                     let item_end_offset = offset + group.chunk_end;
@@ -1162,7 +1181,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     if let Some((cursor_x, cursor_width)) = cursor_geometry {
                         match params.active_column {
                             EditColumn::Hex if params.cursor_visible => {
-                                paint_insert_cursor_at(window, item_box_bounds, cursor_x, cursor_border_color);
+                                paint_insert_cursor_at(window, item_box_bounds, cursor_x, row_height, cursor_border_color);
                             }
                             EditColumn::Ascii => {
                                 paint_underscore_cursor_at(window, item_box_bounds, cursor_x, cursor_width, cursor_border_color);
@@ -1176,13 +1195,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     let cursor_border_color = caret_color;
                     let item_box_bounds = Bounds::new(
                         point(text_origin_x, params.bounds.top() + px(1.0)),
-                        size(params.hex_cell_width, px(ROW_HEIGHT - 2.0)),
+                        size(params.hex_cell_width, px(row_height - 2.0)),
                     );
                     let empty_slot_width =
                         px(digit_count(params.radix, params.group_size) as f32 / params.group_size.byte_count() as f32 * f32::from(params.hex_cell_width));
                     match params.active_column {
                         EditColumn::Hex if params.cursor_visible => {
-                            paint_insert_cursor_at(window, item_box_bounds, text_origin_x, cursor_border_color);
+                            paint_insert_cursor_at(window, item_box_bounds, text_origin_x, row_height, cursor_border_color);
                         }
                         EditColumn::Ascii => {
                             paint_underscore_cursor_at(window, item_box_bounds, text_origin_x, empty_slot_width, cursor_border_color);
@@ -1216,7 +1235,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     if params.show_ascii && chunk_len > 0 && !is_collapsed_struct_row {
         let ascii_mask_bounds = clip_column_mask(
             scrollable_mask_bounds,
-            Bounds::new(point(ascii_start_x, params.bounds.top()), size(px(ascii_width), px(ROW_HEIGHT))),
+            Bounds::new(point(ascii_start_x, params.bounds.top()), size(px(ascii_width), line_height)),
         );
         if ascii_mask_bounds.size.width > px(0.0) {
             let ascii_content_start_x = ascii_start_x - px(params.ascii_scroll_x);
@@ -1242,8 +1261,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 // 1. Coalesced Background Quads Pass & Glyph Color Collection for ASCII Cells
                 let mut paint_ascii_hl = |start: usize, end: usize, color: Hsla| {
                     let hl_bounds = Bounds::new(
-                        point(ascii_content_start_x + px(start as f32 * ASCII_CELL_WIDTH), params.bounds.top() + px(1.0)),
-                        size(px((end - start + 1) as f32 * ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)),
+                        point(ascii_content_start_x + px(start as f32 * ascii_cell_width), params.bounds.top() + px(1.0)),
+                        size(px((end - start + 1) as f32 * ascii_cell_width), px(row_height - 2.0)),
                     );
                     window.paint_quad(fill(hl_bounds, color));
                 };
@@ -1283,10 +1302,10 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     if ul_end > ul_start {
                         let underline_bounds = Bounds::new(
                             point(
-                                ascii_content_start_x + px(ul_start as f32 * ASCII_CELL_WIDTH),
-                                params.bounds.top() + px(ROW_HEIGHT - 2.0),
+                                ascii_content_start_x + px(ul_start as f32 * ascii_cell_width),
+                                params.bounds.top() + px(row_height - 2.0),
                             ),
-                            size(px((ul_end - ul_start) as f32 * ASCII_CELL_WIDTH), px(2.0)),
+                            size(px((ul_end - ul_start) as f32 * ascii_cell_width), px(2.0)),
                         );
                         window.paint_quad(fill(underline_bounds, field_hsla));
                     }
@@ -1295,8 +1314,8 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 // Translucent selection quad (overlaid on top of highlight & underline)
                 if sel_end_j > sel_start_j && selection_bg.a > 0.0 {
                     let sel_bounds = Bounds::new(
-                        point(ascii_content_start_x + px(sel_start_j as f32 * ASCII_CELL_WIDTH), params.bounds.top() + px(1.0)),
-                        size(px((sel_end_j - sel_start_j) as f32 * ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)),
+                        point(ascii_content_start_x + px(sel_start_j as f32 * ascii_cell_width), params.bounds.top() + px(1.0)),
+                        size(px((sel_end_j - sel_start_j) as f32 * ascii_cell_width), px(row_height - 2.0)),
                     );
                     window.paint_quad(fill(sel_bounds, selection_bg));
                 }
@@ -1309,15 +1328,15 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             let cell_end = (char_range.end.saturating_sub(offset)).min(chunk.len());
                             if cell_end > cell_start {
                                 let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
-                                let char_start_x = ascii_content_start_x + px(cell_start as f32 * ASCII_CELL_WIDTH);
-                                let char_width = px((cell_end - cell_start) as f32 * ASCII_CELL_WIDTH);
-                                let ascii_char_bounds = Bounds::new(point(char_start_x, params.bounds.top() + px(1.0)), size(char_width, px(ROW_HEIGHT - 2.0)));
+                                let char_start_x = ascii_content_start_x + px(cell_start as f32 * ascii_cell_width);
+                                let char_width = px((cell_end - cell_start) as f32 * ascii_cell_width);
+                                let ascii_char_bounds = Bounds::new(point(char_start_x, params.bounds.top() + px(1.0)), size(char_width, px(row_height - 2.0)));
                                 paint_cursor_border(window, ascii_char_bounds, cursor_border_color);
                             }
                         } else if is_eof_on_this_row {
                             let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
-                            let ascii_x = ascii_content_start_x + px(chunk_len as f32 * ASCII_CELL_WIDTH);
-                            let ascii_box_bounds = Bounds::new(point(ascii_x, params.bounds.top() + px(1.0)), size(px(ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)));
+                            let ascii_x = ascii_content_start_x + px(chunk_len as f32 * ascii_cell_width);
+                            let ascii_box_bounds = Bounds::new(point(ascii_x, params.bounds.top() + px(1.0)), size(px(ascii_cell_width), px(row_height - 2.0)));
                             paint_cursor_border(window, ascii_box_bounds, cursor_border_color);
                         }
                     } else {
@@ -1326,18 +1345,18 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                             let item_end_offset = offset + group.chunk_end;
                             if params.cursor_offset >= item_start_offset && params.cursor_offset < item_end_offset {
                                 let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
-                                let group_start_x = ascii_content_start_x + px(group.chunk_start as f32 * ASCII_CELL_WIDTH);
-                                let group_width = px((group.chunk_end - group.chunk_start) as f32 * ASCII_CELL_WIDTH);
+                                let group_start_x = ascii_content_start_x + px(group.chunk_start as f32 * ascii_cell_width);
+                                let group_width = px((group.chunk_end - group.chunk_start) as f32 * ascii_cell_width);
                                 let ascii_group_bounds =
-                                    Bounds::new(point(group_start_x, params.bounds.top() + px(1.0)), size(group_width, px(ROW_HEIGHT - 2.0)));
+                                    Bounds::new(point(group_start_x, params.bounds.top() + px(1.0)), size(group_width, px(row_height - 2.0)));
                                 paint_underscore_cursor_at(window, ascii_group_bounds, group_start_x, group_width, cursor_border_color);
                             }
                         }
                         if is_eof_on_this_row {
                             let cursor_border_color = if params.is_focused { caret_color } else { darken_cursor_color(muted_color) };
-                            let ascii_x = ascii_content_start_x + px(chunk_len as f32 * ASCII_CELL_WIDTH);
-                            let ascii_box_bounds = Bounds::new(point(ascii_x, params.bounds.top() + px(1.0)), size(px(ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)));
-                            paint_underscore_cursor_at(window, ascii_box_bounds, ascii_x, px(ASCII_CELL_WIDTH), cursor_border_color);
+                            let ascii_x = ascii_content_start_x + px(chunk_len as f32 * ascii_cell_width);
+                            let ascii_box_bounds = Bounds::new(point(ascii_x, params.bounds.top() + px(1.0)), size(px(ascii_cell_width), px(row_height - 2.0)));
+                            paint_underscore_cursor_at(window, ascii_box_bounds, ascii_x, px(ascii_cell_width), cursor_border_color);
                         }
                     }
                 }
@@ -1355,12 +1374,12 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
                 if insert_cursor_active && is_cursor_row {
                     let cursor_x = if params.insert_cursor_offset >= offset && params.insert_cursor_offset < next_offset {
-                        Some(ascii_content_start_x + px((params.insert_cursor_offset - offset) as f32 * ASCII_CELL_WIDTH))
+                        Some(ascii_content_start_x + px((params.insert_cursor_offset - offset) as f32 * ascii_cell_width))
                     } else if params.insert_cursor_offset == params.doc.buffer.len()
                         && next_offset == params.doc.buffer.len()
                         && params.insert_cursor_offset == next_offset
                     {
-                        Some(ascii_content_start_x + px(chunk_len as f32 * ASCII_CELL_WIDTH))
+                        Some(ascii_content_start_x + px(chunk_len as f32 * ascii_cell_width))
                     } else if chunk_len == 0 && params.insert_cursor_offset == offset {
                         Some(ascii_content_start_x)
                     } else {
@@ -1369,13 +1388,13 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
                     if let Some(cursor_x) = cursor_x {
                         let cursor_border_color = caret_color;
-                        let ascii_cursor_bounds = Bounds::new(point(cursor_x, params.bounds.top() + px(1.0)), size(px(ASCII_CELL_WIDTH), px(ROW_HEIGHT - 2.0)));
+                        let ascii_cursor_bounds = Bounds::new(point(cursor_x, params.bounds.top() + px(1.0)), size(px(ascii_cell_width), px(row_height - 2.0)));
                         match params.active_column {
                             EditColumn::Ascii if params.cursor_visible => {
-                                paint_insert_cursor_at(window, ascii_cursor_bounds, cursor_x, cursor_border_color);
+                                paint_insert_cursor_at(window, ascii_cursor_bounds, cursor_x, row_height, cursor_border_color);
                             }
                             EditColumn::Hex => {
-                                paint_underscore_cursor_at(window, ascii_cursor_bounds, cursor_x, px(ASCII_CELL_WIDTH), cursor_border_color);
+                                paint_underscore_cursor_at(window, ascii_cursor_bounds, cursor_x, px(ascii_cell_width), cursor_border_color);
                             }
                             EditColumn::Ascii => {}
                         }
@@ -1394,7 +1413,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                     row_bottom_y,
                 );
             }
-            if params.ascii_scroll_x + ascii_width < chunk.len() as f32 * ASCII_CELL_WIDTH - 1.0 {
+            if params.ascii_scroll_x + ascii_width < chunk.len() as f32 * ascii_cell_width - 1.0 {
                 params.scratch.fade_runs.push(
                     FadeEdgeKind::AsciiRight,
                     params.row_idx,
@@ -1411,7 +1430,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     if let Some(ref desc) = cached.desc {
         let desc_mask_bounds = clip_column_mask(
             scrollable_mask_bounds,
-            Bounds::new(point(desc_start_x, params.bounds.top()), size(px(params.desc_col_width), px(ROW_HEIGHT))),
+            Bounds::new(point(desc_start_x, params.bounds.top()), size(px(params.desc_col_width), line_height)),
         );
         if desc_mask_bounds.size.width > px(0.0) {
             window.with_content_mask(Some(ContentMask { bounds: desc_mask_bounds }), |window| {
@@ -1421,7 +1440,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                         let guide_x = desc_start_x - px(params.desc_scroll_x) + px((lvl - 1) as f32 * 14.0 + 5.0);
                         if guide_x >= desc_start_x && guide_x < desc_end_x {
                             window.paint_quad(fill(
-                                Bounds::new(point(guide_x, params.bounds.top()), size(px(1.0), px(ROW_HEIGHT))),
+                                Bounds::new(point(guide_x, params.bounds.top()), size(px(1.0), line_height)),
                                 desc_palette.tree_guide,
                             ));
                         }
@@ -1431,7 +1450,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
                 // Paint Lucide chevron icon if container header
                 if let Some(ref icon_path) = desc.chevron_icon_path {
                     let icon_x = desc_start_x - px(params.desc_scroll_x) + px(desc.indent_px);
-                    let icon_y = params.bounds.top() + px((ROW_HEIGHT - CHEVRON_ICON_SIZE) / 2.0);
+                    let icon_y = params.bounds.top() + px((row_height - CHEVRON_ICON_SIZE) / 2.0);
                     let icon_bounds = Bounds::new(point(icon_x, icon_y), size(px(CHEVRON_ICON_SIZE), px(CHEVRON_ICON_SIZE)));
                     let _ = window.paint_svg(icon_bounds, icon_path.clone(), None, TransformationMatrix::unit(), desc_palette.header_icon, cx);
                 }
@@ -1475,7 +1494,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
     if !params.bookmark_comments.is_empty() {
         let comment_mask_bounds = clip_column_mask(
             scrollable_mask_bounds,
-            Bounds::new(point(comment_start_x, params.bounds.top()), size(px(params.comment_col_width), px(ROW_HEIGHT))),
+            Bounds::new(point(comment_start_x, params.bounds.top()), size(px(params.comment_col_width), line_height)),
         );
         if comment_mask_bounds.size.width > px(0.0) {
             let comment_end_x = comment_start_x + px(params.comment_col_width);
@@ -1494,7 +1513,7 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
             window.with_content_mask(Some(ContentMask { bounds: comment_mask_bounds }), |window| {
                 let mut cur_x = comment_start_x - px(params.comment_scroll_x) + px(4.0);
-                let dot_y = params.bounds.top() + px((ROW_HEIGHT - dot_size) / 2.0);
+                let dot_y = params.bounds.top() + px((row_height - dot_size) / 2.0);
 
                 for item in params.bookmark_comments {
                     let Some((shaped_comment, text_w)) = comment_shapes.get(item.clean_text, muted_color, params.font_size) else {

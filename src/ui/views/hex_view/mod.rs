@@ -102,6 +102,7 @@ pub struct HexView {
     row_cache: std::rc::Rc<std::cell::RefCell<RowRenderCache>>,
     paint_row_scratch: std::rc::Rc<std::cell::RefCell<PaintRowScratch>>,
     cursor_reveal_pending: bool,
+    hovered_desc_tooltip: Option<(usize, SharedString, Point<Pixels>)>,
     pub category_palette: Option<ByteCategoryPalette>,
     _editor_subscription: Subscription,
     _insert_mode_subscription: Subscription,
@@ -323,6 +324,7 @@ impl HexView {
             row_cache,
             paint_row_scratch,
             cursor_reveal_pending: true,
+            hovered_desc_tooltip: None,
             category_palette: None,
             _editor_subscription,
             _insert_mode_subscription,
@@ -658,15 +660,31 @@ impl HexView {
         self.comment_scroll_for_width(max_content_w)
     }
 
-    fn default_ascii_col_width(max_bytes_per_row: usize) -> f32 {
-        max_bytes_per_row.max(1) as f32 * ASCII_CELL_WIDTH + ASCII_EXTRA_WIDTH
+    #[inline]
+    pub(super) fn row_height(&self) -> f32 {
+        row_height_for_font_size(f32::from(self.font_size_prop))
+    }
+
+    #[inline]
+    pub(super) fn header_height(&self) -> f32 {
+        header_height_for_font_size(f32::from(self.font_size_prop))
+    }
+
+    #[inline]
+    pub(super) fn ascii_cell_width(&self) -> f32 {
+        ascii_cell_width_for_font_size(f32::from(self.font_size_prop))
+    }
+
+    fn default_ascii_col_width(&self, max_bytes_per_row: usize) -> f32 {
+        let cell_w = self.ascii_cell_width();
+        max_bytes_per_row.max(1) as f32 * cell_w + cell_w * 0.5
     }
 
     fn effective_ascii_col_width(&self, max_bytes_per_row: usize) -> f32 {
         if self.ascii_col_width > 0.0 {
             self.ascii_col_width
         } else {
-            Self::default_ascii_col_width(max_bytes_per_row)
+            self.default_ascii_col_width(max_bytes_per_row)
         }
     }
 
@@ -733,17 +751,11 @@ impl HexView {
             show_ascii: self.show_ascii,
             ascii_col_width: self.effective_ascii_col_width(max_bytes_per_row),
             ascii_inner_max: if self.show_ascii {
-                (Self::default_ascii_col_width(max_bytes_per_row) - self.effective_ascii_col_width(max_bytes_per_row)).max(0.0)
+                (self.default_ascii_col_width(max_bytes_per_row) - self.effective_ascii_col_width(max_bytes_per_row)).max(0.0)
             } else {
                 0.0
             },
-            fixed_column_width: if is_struct_mode {
-                self.address_col_width
-            } else if self.show_offset {
-                OFFSET_WIDTH
-            } else {
-                0.0
-            },
+            fixed_column_width: if is_struct_mode || self.show_offset { self.address_col_width } else { 0.0 },
             hex_col_width: self.hex_col_width,
             desc_col_width: self.desc_col_width,
             comment_col_width: self.comment_col_width,
@@ -809,7 +821,16 @@ impl HexView {
     pub fn auto_fit_column(&mut self, col: ResizingColumn, cx: &mut Context<Self>) {
         match col {
             ResizingColumn::Address => {
-                self.address_col_width = ADDRESS_WIDTH;
+                let max_address = {
+                    let editor = self.editor.read(cx);
+                    editor
+                        .document
+                        .read()
+                        .ok()
+                        .map(|doc| doc.offset_to_address(doc.buffer.len().saturating_sub(1)))
+                        .unwrap_or(0)
+                };
+                self.address_col_width = address_col_width_for_font_size(f32::from(self.font_size_prop), max_address);
             }
             ResizingColumn::Hex => {
                 if self.hex_content_width > 0.0 {
@@ -818,7 +839,7 @@ impl HexView {
             }
             ResizingColumn::Ascii => {
                 let max_bytes_per_row = self.editor.read(cx).line_starts().max_bytes_per_row();
-                self.ascii_col_width = Self::default_ascii_col_width(max_bytes_per_row);
+                self.ascii_col_width = self.default_ascii_col_width(max_bytes_per_row);
                 self.scroll.ascii_scroll_x = 0.0;
             }
             ResizingColumn::Description => {
@@ -854,14 +875,19 @@ impl HexView {
                 self.scroll.comment_scroll_x = 0.0;
             }
         }
+        self.hovered_desc_tooltip = None;
         self.cursor_reveal_pending = true;
         self.clamp_scroll_offsets(cx);
         cx.notify();
     }
 
     fn on_scroll(&mut self, event: &ScrollEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.hovered_desc_tooltip.is_some() {
+            self.hovered_desc_tooltip = None;
+        }
         let now = std::time::Instant::now();
-        let pixel_delta = event.delta.pixel_delta(px(ROW_HEIGHT));
+        let row_height = self.row_height();
+        let pixel_delta = event.delta.pixel_delta(px(row_height));
         let mut delta_x = f32::from(pixel_delta.x);
         let delta_y = f32::from(pixel_delta.y);
         let column_only_horizontal = event.modifiers.shift;
@@ -897,10 +923,10 @@ impl HexView {
         if self.scroll.scroll_lock_axis == Some(ScrollAxisLock::Vertical) {
             let total_rows = self.effective_total_rows(cx);
             let list_h = self.list_bounds.get().map(|b| f32::from(b.size.height)).unwrap_or(600.0);
-            let visible_rows = (list_h / ROW_HEIGHT).floor() as usize;
+            let visible_rows = (list_h / row_height).floor() as usize;
             let max_top_row = total_rows.saturating_sub(visible_rows.max(1));
 
-            if let Some(new_offset) = self.scroll.handle_wheel_vertical(delta_y, max_top_row) {
+            if let Some(new_offset) = self.scroll.handle_wheel_vertical(delta_y, max_top_row, row_height) {
                 cx.notify();
                 cx.emit(HexViewEvent::Scrolled(new_offset));
             }
@@ -944,10 +970,10 @@ impl HexView {
         } else if !is_horizontal && abs_y > 0.01 {
             let total_rows = self.effective_total_rows(cx);
             let list_h = self.list_bounds.get().map(|b| f32::from(b.size.height)).unwrap_or(600.0);
-            let visible_rows = (list_h / ROW_HEIGHT).floor() as usize;
+            let visible_rows = (list_h / row_height).floor() as usize;
             let max_top_row = total_rows.saturating_sub(visible_rows.max(1));
 
-            if let Some(new_offset) = self.scroll.handle_wheel_vertical(delta_y, max_top_row) {
+            if let Some(new_offset) = self.scroll.handle_wheel_vertical(delta_y, max_top_row, row_height) {
                 cx.notify();
                 cx.emit(HexViewEvent::Scrolled(new_offset));
             }
@@ -957,7 +983,7 @@ impl HexView {
     fn update_scrollbar_drag(&mut self, current_y: f32, cx: &mut Context<Self>) {
         let total_rows = self.effective_total_rows(cx);
         let list_h = self.list_bounds.get().map(|b| f32::from(b.size.height)).unwrap_or(600.0);
-        if let Some(new_row) = self.scroll.update_scrollbar_drag(current_y, total_rows, list_h) {
+        if let Some(new_row) = self.scroll.update_scrollbar_drag(current_y, total_rows, list_h, self.row_height()) {
             self.scroll_to_row(new_row, cx);
         }
     }
@@ -1024,11 +1050,36 @@ impl HexView {
     }
 
     pub fn set_font_size(&mut self, font_size: impl Into<Pixels>, cx: &mut Context<Self>) {
-        self.font_size_prop = font_size.into();
+        let new_font_size = font_size.into();
+        if self.font_size_prop == new_font_size {
+            return;
+        }
+        let old_font_px = f32::from(self.font_size_prop);
+        let new_font_px = f32::from(new_font_size);
+        let max_bytes_per_row = self.editor.read(cx).line_starts().max_bytes_per_row();
+        let old_default_ascii = self.default_ascii_col_width(max_bytes_per_row);
+        let old_default_addr = address_col_width_for_font_size(old_font_px, 0);
+
+        let hex_was_auto = self.hex_col_width <= 0.0 || (self.hex_col_width - self.hex_content_width).abs() < 1.0;
+        let ascii_was_auto = self.ascii_col_width <= 0.0 || (self.ascii_col_width - old_default_ascii).abs() < 1.0;
+        let addr_was_auto = (self.address_col_width - old_default_addr).abs() < 1.0 || self.address_col_width <= old_default_addr;
+
+        self.font_size_prop = new_font_size;
         self.hex_cell_width = 0.0;
         self.hex_content_width = 0.0;
+        if hex_was_auto {
+            self.hex_col_width = 0.0;
+        }
+        if ascii_was_auto {
+            self.ascii_col_width = 0.0;
+        }
+        if addr_was_auto {
+            self.address_col_width = address_col_width_for_font_size(new_font_px, 0);
+        }
         self.cached_comment_content_width.set(None);
         self.clear_desc_content_width_cache();
+        self.hovered_desc_tooltip = None;
+        self.row_cache.borrow_mut().clear();
         self.cursor_reveal_pending = true;
         cx.notify();
     }
@@ -1117,7 +1168,7 @@ impl HexView {
         let end_row = Editor::find_line_index(end_byte_last, &line_starts);
 
         let list_h = self.list_bounds.get().map(|b| f32::from(b.size.height)).unwrap_or(600.0);
-        let visible_rows = (list_h / ROW_HEIGHT).floor() as usize;
+        let visible_rows = (list_h / self.row_height()).floor() as usize;
         let total_rows = line_starts.len().max(1);
 
         if let Some(target_top) = calculate_scroll_top_for_range(self.scroll.scroll_offset, visible_rows, total_rows, start_row, end_row) {
@@ -1144,7 +1195,7 @@ impl HexView {
     #[inline]
     fn viewport_visible_rows(&self) -> usize {
         if let Some(bounds) = self.list_bounds.get() {
-            (f32::from(bounds.size.height) / ROW_HEIGHT).ceil() as usize
+            (f32::from(bounds.size.height) / self.row_height()).ceil() as usize
         } else {
             30
         }
@@ -1208,9 +1259,10 @@ impl HexView {
     pub fn scroll_to_row(&mut self, row: usize, cx: &mut Context<Self>) {
         let total_rows = self.effective_total_rows(cx);
         let list_h = self.list_bounds.get().map(|b| f32::from(b.size.height)).unwrap_or(600.0);
-        let visible_rows = (list_h / ROW_HEIGHT).floor() as usize;
+        let visible_rows = (list_h / self.row_height()).floor() as usize;
 
         if self.scroll.scroll_to_row(row, total_rows, visible_rows) {
+            self.hovered_desc_tooltip = None;
             cx.notify();
             cx.emit(HexViewEvent::Scrolled(self.scroll.scroll_offset));
         }
@@ -1218,7 +1270,7 @@ impl HexView {
 
     pub fn scroll_to_bottom_row(&mut self, row: usize, cx: &mut Context<Self>) {
         let list_h = self.list_bounds.get().map(|b| f32::from(b.size.height)).unwrap_or(600.0);
-        let visible_rows = (list_h / ROW_HEIGHT).floor() as usize;
+        let visible_rows = (list_h / self.row_height()).floor() as usize;
         let target_top = row.saturating_sub(visible_rows.saturating_sub(1));
         self.scroll_to_row(target_top, cx);
     }
@@ -1244,7 +1296,7 @@ impl HexView {
         };
 
         let list_h = self.list_bounds.get().map(|b| f32::from(b.size.height)).unwrap_or(600.0);
-        let visible_rows = (list_h / ROW_HEIGHT).floor() as usize;
+        let visible_rows = (list_h / self.row_height()).floor() as usize;
         let top_row = self.scroll.scroll_offset;
         let bottom_row = top_row + visible_rows.saturating_sub(1);
 

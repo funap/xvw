@@ -115,14 +115,14 @@ pub fn paint_cursor_border(window: &mut Window, bounds: Bounds<Pixels>, color: H
 }
 
 #[inline]
-pub(super) fn paint_insert_cursor_at(window: &mut Window, bounds: Bounds<Pixels>, cursor_x: Pixels, color: Hsla) {
+pub(super) fn paint_insert_cursor_at(window: &mut Window, bounds: Bounds<Pixels>, cursor_x: Pixels, row_height: f32, color: Hsla) {
     if bounds.size.height <= px(0.0) {
         return;
     }
 
     // Match gpui-kit's default TextInput cursor: a 1.5px vertical
     // caret centered in the line and sized to 85% of its line height.
-    let cursor_height = px(ROW_HEIGHT * TEXT_INPUT_CURSOR_HEIGHT_RATIO);
+    let cursor_height = px(row_height * TEXT_INPUT_CURSOR_HEIGHT_RATIO);
     let cursor_y = bounds.top() + (bounds.size.height - cursor_height) / 2.0;
     window.paint_quad(fill(
         Bounds::new(point(cursor_x, cursor_y), size(TEXT_INPUT_CURSOR_WIDTH, cursor_height)),
@@ -253,7 +253,7 @@ pub fn build_cached_hex_glyphs(shaped: &ShapedLine, groups: &[HexGroupInfo], cel
 }
 
 /// Precomputes centered per-cell ASCII glyph coordinates from a batched shaped line.
-pub fn build_cached_ascii_glyphs(shaped: &ShapedLine, cells: &[CachedAsciiCell], cell_spans: &[(usize, usize)]) -> CachedAsciiGlyphs {
+pub fn build_cached_ascii_glyphs(shaped: &ShapedLine, cells: &[CachedAsciiCell], cell_spans: &[(usize, usize)], ascii_cell_width: f32) -> CachedAsciiGlyphs {
     let natural_width = shaped.width;
     let mut glyphs_out = Vec::with_capacity(cells.len());
     let mut entry_idx = 0;
@@ -266,7 +266,7 @@ pub fn build_cached_ascii_glyphs(shaped: &ShapedLine, cells: &[CachedAsciiCell],
     while let Some((font_id, glyph)) = glyphs.next() {
         let natural_end = glyphs.peek().map(|(_, next)| next.position.x).unwrap_or(natural_width);
         let glyph_width = f32::from(natural_end - glyph.position.x).max(0.0);
-        let centered_offset = centered_glyph_offset(ASCII_CELL_WIDTH, glyph_width);
+        let centered_offset = centered_glyph_offset(ascii_cell_width, glyph_width);
 
         while entry_idx < cell_spans.len() && glyph.index >= cell_spans[entry_idx].1 {
             entry_idx += 1;
@@ -277,7 +277,7 @@ pub fn build_cached_ascii_glyphs(shaped: &ShapedLine, cells: &[CachedAsciiCell],
             glyphs_out.push(CachedAsciiGlyph {
                 font_id,
                 glyph_id: glyph.id,
-                x_offset: px(cell_idx as f32 * ASCII_CELL_WIDTH + centered_offset),
+                x_offset: px(cell_idx as f32 * ascii_cell_width + centered_offset),
                 cell_index: entry_idx,
                 is_emoji: glyph.is_emoji,
             });

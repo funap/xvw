@@ -13,12 +13,13 @@ impl HexView {
         let editor = self.editor.read(cx);
         let doc = editor.document.read().ok()?;
         let line_starts = editor.line_starts();
+        let row_height = self.row_height();
         let rel_y = f32::from(point.y - list_bounds.top()).max(0.0);
-        let top_overscroll_px = self.scroll.top_overscroll_rows as f32 * ROW_HEIGHT;
+        let top_overscroll_px = self.scroll.top_overscroll_rows as f32 * row_height;
         if rel_y < top_overscroll_px {
             return None;
         }
-        let row_offset_in_view = ((rel_y - top_overscroll_px) / ROW_HEIGHT).floor() as usize;
+        let row_offset_in_view = ((rel_y - top_overscroll_px) / row_height).floor() as usize;
         let row_idx = self.scroll.scroll_offset + row_offset_in_view;
         let total_size = doc.buffer.len();
         let bytes_per_row = line_starts.max_bytes_per_row();
@@ -79,7 +80,7 @@ impl HexView {
             && world_x >= ascii_column.start
             && world_x < ascii_column.end()
         {
-            let raw_idx = ascii_byte_index_from_world_x(world_x, ascii_column, self.scroll.ascii_scroll_x);
+            let raw_idx = ascii_byte_index_from_world_x(world_x, ascii_column, self.scroll.ascii_scroll_x, self.ascii_cell_width());
             if raw_idx < chunk_len {
                 let abs_offset = line_offset + raw_idx;
                 let char_range = self.encoding.char_range_at(doc.buffer.data(), abs_offset);
@@ -164,7 +165,7 @@ impl HexView {
 
     pub(super) fn offset_from_point(&self, point: Point<Pixels>, _window: &Window, cx: &App) -> Option<usize> {
         let root_bounds = self.bounds.get()?;
-        let header_h = if self.show_header { HEADER_HEIGHT } else { 0.0 };
+        let header_h = if self.show_header { self.header_height() } else { 0.0 };
 
         if point.x < root_bounds.left() || point.y < root_bounds.top() + px(header_h) {
             return None;
@@ -183,12 +184,13 @@ impl HexView {
             return Some(0);
         }
 
+        let row_height = self.row_height();
         let rel_y = f32::from(point.y - list_bounds.top()).max(0.0);
-        let top_overscroll_px = self.scroll.top_overscroll_rows as f32 * ROW_HEIGHT;
+        let top_overscroll_px = self.scroll.top_overscroll_rows as f32 * row_height;
         if rel_y < top_overscroll_px {
             return None;
         }
-        let row_offset_in_view = ((rel_y - top_overscroll_px) / ROW_HEIGHT).floor() as usize;
+        let row_offset_in_view = ((rel_y - top_overscroll_px) / row_height).floor() as usize;
         let row_idx = self.scroll.scroll_offset + row_offset_in_view;
         let total_size = buffer_len;
         let bytes_per_row = line_starts.max_bytes_per_row();
@@ -245,7 +247,7 @@ impl HexView {
             && world_x >= ascii_column.start
             && world_x < ascii_column.end()
         {
-            let raw_idx = ascii_byte_index_from_world_x(world_x, ascii_column, self.scroll.ascii_scroll_x);
+            let raw_idx = ascii_byte_index_from_world_x(world_x, ascii_column, self.scroll.ascii_scroll_x, self.ascii_cell_width());
             let is_last_row = row_idx + 1 == line_starts.len();
             if is_last_row && raw_idx >= chunk_len {
                 return Some(buffer_len);

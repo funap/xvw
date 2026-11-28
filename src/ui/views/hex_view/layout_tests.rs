@@ -136,8 +136,9 @@ fn check_layout_and_scrolling() {
     assert_eq!(l_ascii_scroll.max_offset(HorizontalScrollTarget::Column(ScrollColumn::Ascii)), 80.0);
     assert_eq!(l_ascii_scroll.progress(HorizontalScrollTarget::Column(ScrollColumn::Ascii), 40.0), 0.5);
     let ascii_col = l_ascii_scroll.ascii.expect("ASCII column");
-    assert_eq!(ascii_byte_index_from_world_x(ascii_col.start + 5.0, ascii_col, 0.0), 0);
-    assert_eq!(ascii_byte_index_from_world_x(ascii_col.start + 5.0, ascii_col, 20.0), 2);
+    assert_eq!(ascii_byte_index_from_world_x(ascii_col.start + 5.0, ascii_col, 0.0, 10.0), 0);
+    assert_eq!(ascii_byte_index_from_world_x(ascii_col.start + 5.0, ascii_col, 20.0, 10.0), 2);
+    assert_eq!(ascii_byte_index_from_world_x(ascii_col.start + 16.0, ascii_col, 0.0, 14.0), 1);
 
     for column in [ScrollColumn::Hex, ScrollColumn::Ascii, ScrollColumn::Description, ScrollColumn::Comment] {
         assert!(can_chain_to_outer(HorizontalScrollTarget::Column(column), 1.0));
@@ -307,6 +308,33 @@ fn check_structure_and_highlights() {
     let upper_src = build_hex_text_source(&[0xAB, 0xCD, 0xEF], 0, DisplayRadix::Hexadecimal, ByteGroupSize::One, true, HexCase::Upper);
     assert_eq!(lower_src.text.as_ref(), "ab cd ef");
     assert_eq!(upper_src.text.as_ref(), "AB CD EF");
+
+    // 8-byte midpoint gap in 16-byte rows (and no extra gap for 8-byte rows)
+    let bytes16: Vec<u8> = (0..16).collect();
+    let src16_g1 = build_hex_text_source(&bytes16, 0, DisplayRadix::Hexadecimal, ByteGroupSize::One, true, HexCase::Upper);
+    assert_eq!(src16_g1.text.as_ref(), "00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F");
+    assert_eq!(src16_g1.groups[8].text_start - src16_g1.groups[7].text_end, 2);
+    assert_eq!(src16_g1.groups[1].text_start - src16_g1.groups[0].text_end, 1);
+
+    let src16_g4 = build_hex_text_source(&bytes16, 0, DisplayRadix::Hexadecimal, ByteGroupSize::Four, true, HexCase::Upper);
+    assert_eq!(src16_g4.text.as_ref(), "00010203 04050607  08090A0B 0C0D0E0F");
+    assert_eq!(src16_g4.groups[2].text_start - src16_g4.groups[1].text_end, 2);
+
+    let src8_g1 = build_hex_text_source(&bytes16[..8], 0, DisplayRadix::Hexadecimal, ByteGroupSize::One, true, HexCase::Upper);
+    assert_eq!(src8_g1.text.as_ref(), "00 01 02 03 04 05 06 07");
+
+    // Dynamic font-size scaling helpers match defaults at 14px and scale cleanly
+    assert_eq!(super::types::row_height_for_font_size(14.0), super::types::ROW_HEIGHT);
+    assert_eq!(super::types::header_height_for_font_size(14.0), super::types::HEADER_HEIGHT);
+    assert_eq!(super::types::ascii_cell_width_for_font_size(14.0), super::types::ASCII_CELL_WIDTH);
+    assert!(super::types::row_height_for_font_size(20.0) > super::types::ROW_HEIGHT);
+    assert!(super::types::header_height_for_font_size(20.0) > super::types::HEADER_HEIGHT);
+    assert!(super::types::ascii_cell_width_for_font_size(20.0) > super::types::ASCII_CELL_WIDTH);
+    assert!(super::types::row_height_for_font_size(8.0) >= 18.0);
+    assert!(super::types::ascii_cell_width_for_font_size(8.0) >= 7.0);
+    assert_eq!(super::types::address_col_width_for_font_size(14.0, 0x1000), super::types::ADDRESS_WIDTH);
+    assert!(super::types::address_col_width_for_font_size(20.0, 0x1000) > super::types::ADDRESS_WIDTH);
+    assert!(super::types::address_col_width_for_font_size(14.0, 0x1_0000_0000) > super::types::ADDRESS_WIDTH);
 
     assert_eq!(centered_glyph_offset(10.0, 6.0), 2.0);
     assert_eq!(centered_glyph_offset(10.0, 12.0), 0.0);

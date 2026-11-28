@@ -694,7 +694,7 @@ impl HexView {
 
     pub(super) fn page_up(&mut self, _: &PageUp, window: &mut Window, cx: &mut Context<Self>) {
         let visible_rows = if let Some(bounds) = self.list_bounds.get() {
-            (f32::from(bounds.size.height) / ROW_HEIGHT).floor() as usize
+            (f32::from(bounds.size.height) / self.row_height()).floor() as usize
         } else {
             30
         };
@@ -708,7 +708,7 @@ impl HexView {
 
     pub(super) fn page_down(&mut self, _: &PageDown, window: &mut Window, cx: &mut Context<Self>) {
         let visible_rows = if let Some(bounds) = self.list_bounds.get() {
-            (f32::from(bounds.size.height) / ROW_HEIGHT).floor() as usize
+            (f32::from(bounds.size.height) / self.row_height()).floor() as usize
         } else {
             30
         };
@@ -771,7 +771,7 @@ impl HexView {
 
     pub(super) fn select_page_up(&mut self, _: &SelectPageUp, window: &mut Window, cx: &mut Context<Self>) {
         let visible_rows = if let Some(bounds) = self.list_bounds.get() {
-            (f32::from(bounds.size.height) / ROW_HEIGHT).floor() as usize
+            (f32::from(bounds.size.height) / self.row_height()).floor() as usize
         } else {
             30
         };
@@ -790,7 +790,7 @@ impl HexView {
 
     pub(super) fn select_page_down(&mut self, _: &SelectPageDown, window: &mut Window, cx: &mut Context<Self>) {
         let visible_rows = if let Some(bounds) = self.list_bounds.get() {
-            (f32::from(bounds.size.height) / ROW_HEIGHT).floor() as usize
+            (f32::from(bounds.size.height) / self.row_height()).floor() as usize
         } else {
             30
         };
