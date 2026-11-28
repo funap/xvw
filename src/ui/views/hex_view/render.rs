@@ -245,7 +245,7 @@ impl Render for HexView {
                             .items_center()
                             .justify_center()
                             .cursor(CursorStyle::ResizeLeftRight)
-                            .hover(|s| s.bg(theme.accent))
+                            .hover(|s| s.bg(theme.drag_border.opacity(0.25)))
                             .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -302,7 +302,7 @@ impl Render for HexView {
                                 .items_center()
                                 .justify_center()
                                 .cursor(CursorStyle::ResizeLeftRight)
-                                .hover(|s| s.bg(theme.accent))
+                                .hover(|s| s.bg(theme.drag_border.opacity(0.25)))
                                 .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                                 .on_mouse_down(
                                     MouseButton::Left,
@@ -410,7 +410,7 @@ impl Render for HexView {
                                             .items_center()
                                             .justify_center()
                                             .cursor(CursorStyle::ResizeLeftRight)
-                                            .hover(|s| s.bg(theme.accent))
+                                            .hover(|s| s.bg(theme.drag_border.opacity(0.25)))
                                             .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                                             .on_mouse_down(
                                                 MouseButton::Left,
@@ -486,7 +486,7 @@ impl Render for HexView {
                                                 .items_center()
                                                 .justify_center()
                                                 .cursor(CursorStyle::ResizeLeftRight)
-                                                .hover(|s| s.bg(theme.accent))
+                                                .hover(|s| s.bg(theme.drag_border.opacity(0.25)))
                                                 .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                                                 .on_mouse_down(
                                                     MouseButton::Left,
@@ -538,7 +538,7 @@ impl Render for HexView {
                                                 .items_center()
                                                 .justify_center()
                                                 .cursor(CursorStyle::ResizeLeftRight)
-                                                .hover(|s| s.bg(theme.accent))
+                                                .hover(|s| s.bg(theme.drag_border.opacity(0.25)))
                                                 .child(div().w(px(1.0)).h(px(16.0)).bg(theme.border))
                                                 .on_mouse_down(
                                                     MouseButton::Left,
@@ -713,45 +713,38 @@ impl Render for HexView {
                             return;
                         }
                         let click_x = f32::from(event.position.x);
-                        let bar_x = f32::from(list_b.right()) - 12.0;
+                        let bar_x = f32::from(list_b.right()) - VERTICAL_SCROLLBAR_WIDTH;
                         if click_x >= bar_x {
                             let click_y = f32::from(event.position.y);
                             let list_top = f32::from(list_b.top());
                             let rel_y = click_y - list_top;
                             let list_h = f32::from(list_b.size.height);
-
                             let total_rows = this.effective_total_rows(cx);
-                            let visible_rows = (list_h / ROW_HEIGHT).floor() as usize;
-                            let max_top_row = total_rows.saturating_sub(visible_rows.max(1));
-                            let ratio = (visible_rows as f64 / total_rows as f64).clamp(0.0, 1.0);
-                            let thumb_h = (list_h as f64 * ratio).clamp(24.0, list_h as f64) as f32;
-                            let max_thumb_top = (list_h - thumb_h).max(0.0);
 
-                            let cur_thumb_top = if max_top_row > 0 {
-                                ((this.scroll.scroll_offset as f64 / max_top_row as f64) * max_thumb_top as f64) as f32
-                            } else {
-                                0.0
-                            };
-
-                            if rel_y >= cur_thumb_top && rel_y <= cur_thumb_top + thumb_h {
-                                this.scroll.is_dragging_scrollbar = true;
-                                this.scroll.scrollbar_drag_start_y = click_y;
-                                this.scroll.scrollbar_drag_start_row = this.scroll.scroll_offset;
-                            } else {
-                                let target_thumb_top = (rel_y - thumb_h / 2.0).clamp(0.0, max_thumb_top);
-                                let new_ratio = if max_thumb_top > 0.0 {
-                                    target_thumb_top as f64 / max_thumb_top as f64
+                            if let Some(geom) =
+                                crate::ui::components::scrollbar::calculate_scrollbar_geometry(list_h, this.scroll.scroll_offset, total_rows, ROW_HEIGHT)
+                            {
+                                let max_thumb_top = (list_h - geom.thumb_height).max(0.0);
+                                if rel_y >= geom.thumb_top && rel_y <= geom.thumb_top + geom.thumb_height {
+                                    this.scroll.is_dragging_scrollbar = true;
+                                    this.scroll.scrollbar_drag_start_y = click_y;
+                                    this.scroll.scrollbar_drag_start_row = this.scroll.scroll_offset;
                                 } else {
-                                    0.0
-                                };
-                                let new_row = (new_ratio * max_top_row as f64).round() as usize;
-                                this.scroll_to_row(new_row, cx);
-                                this.scroll.is_dragging_scrollbar = true;
-                                this.scroll.scrollbar_drag_start_y = click_y;
-                                this.scroll.scrollbar_drag_start_row = new_row;
+                                    let target_thumb_top = (rel_y - geom.thumb_height / 2.0).clamp(0.0, max_thumb_top);
+                                    let new_ratio = if max_thumb_top > 0.0 {
+                                        target_thumb_top as f64 / max_thumb_top as f64
+                                    } else {
+                                        0.0
+                                    };
+                                    let new_row = (new_ratio * geom.max_top_row as f64).round() as usize;
+                                    this.scroll_to_row(new_row, cx);
+                                    this.scroll.is_dragging_scrollbar = true;
+                                    this.scroll.scrollbar_drag_start_y = click_y;
+                                    this.scroll.scrollbar_drag_start_row = new_row;
+                                }
+                                cx.notify();
+                                return;
                             }
-                            cx.notify();
-                            return;
                         }
                     }
 

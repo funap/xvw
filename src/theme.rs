@@ -275,4 +275,55 @@ mod tests {
         assert!(names.contains(&SharedString::from("Tokyo Night")));
         assert!(names.contains(&SharedString::from("Twilight")));
     }
+
+    fn contrast_ratio(c1: gpui_kit::Hsla, c2: gpui_kit::Hsla) -> f32 {
+        fn channel_to_linear(c: f32) -> f32 {
+            if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        }
+        fn rel_luminance(c: gpui_kit::Hsla) -> f32 {
+            let rgba = gpui_kit::Rgba::from(c);
+            0.2126 * channel_to_linear(rgba.r) + 0.7152 * channel_to_linear(rgba.g) + 0.0722 * channel_to_linear(rgba.b)
+        }
+        let l1 = rel_luminance(c1);
+        let l2 = rel_luminance(c2);
+        let (lighter, darker) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+        (lighter + 0.05) / (darker + 0.05)
+    }
+
+    #[test]
+    fn test_default_themes_semantic_badge_and_surface_contrast() {
+        let registry = load_themes_from_assets(&Assets);
+        for name in [DEFAULT_LIGHT_THEME, DEFAULT_DARK_THEME] {
+            let config = registry.themes().get(name).expect("default theme should exist");
+            let mut theme = Theme::default();
+            theme.apply_config(config);
+
+            // Semantic badge pairs must meet WCAG AA normal text contrast (>= 4.5:1)
+            for (label, bg, fg) in [
+                ("danger", theme.danger, theme.danger_foreground),
+                ("info", theme.info, theme.info_foreground),
+                ("success", theme.success, theme.success_foreground),
+                ("warning", theme.warning, theme.warning_foreground),
+            ] {
+                let ratio = contrast_ratio(bg, fg);
+                assert!(ratio >= 4.5, "{name} {label} badge contrast {ratio:.2}:1 is below 4.5:1");
+            }
+
+            // Table header foreground must meet WCAG AA (>= 4.5:1) against table background
+            let head_ratio = contrast_ratio(theme.table_head_foreground, theme.table);
+            assert!(head_ratio >= 4.5, "{name} table.head.foreground contrast {head_ratio:.2}:1 is below 4.5:1");
+
+            // Sidebar surface must be visually distinct from main editor background
+            assert_ne!(
+                theme.sidebar, theme.background,
+                "{name} sidebar background should be subtly elevated from editor background"
+            );
+
+            // Scrollbar thumb hover must differ from idle thumb color
+            assert_ne!(
+                theme.scrollbar_thumb_hover, theme.scrollbar_thumb,
+                "{name} scrollbar thumb hover should be distinct from idle thumb"
+            );
+        }
+    }
 }

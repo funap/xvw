@@ -2,8 +2,11 @@
 
 use super::VisualMapPanel;
 use super::cache::VisualMapCacheKey;
+use super::legend::VisualMapByteCategoryExt;
 use crate::core::visual_map::geometry::VisualMapGeometry;
-use crate::core::visual_map::{CategoryPalette, VisualMapColorMode as ColorMode, VisualMapRenderParams, category_bgra_lut, render_visual_map_bgra};
+use crate::core::visual_map::{
+    CategoryPalette, VisualMapByteCategory, VisualMapColorMode as ColorMode, VisualMapRenderParams, category_bgra_lut, render_visual_map_bgra,
+};
 use crate::ui::components::scrollbar::CanvasScrollbar;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::prelude::*;
@@ -22,11 +25,11 @@ pub(crate) fn category_palette_from_theme(theme: &gpui_kit::component::Theme) ->
         ]
     };
     CategoryPalette {
-        null: to_bgra(theme.muted_foreground),
-        control: to_bgra(theme.red),
-        space: to_bgra(theme.blue),
-        ascii: to_bgra(theme.green),
-        extended: to_bgra(theme.accent),
+        null: to_bgra(VisualMapByteCategory::Null.color(theme)),
+        control: to_bgra(VisualMapByteCategory::Control.color(theme)),
+        space: to_bgra(VisualMapByteCategory::Space.color(theme)),
+        ascii: to_bgra(VisualMapByteCategory::Ascii.color(theme)),
+        extended: to_bgra(VisualMapByteCategory::Extended.color(theme)),
     }
 }
 
@@ -206,7 +209,7 @@ impl Element for VisualMapElement {
                     let sel_y = bounds.origin.y + px((r - start_row) as f32 * pixel_size);
                     let sel_w = px(c_count as f32 * pixel_size);
                     let sel_h = px(pixel_size);
-                    window.paint_quad(fill(Bounds::new(point(sel_x, sel_y), size(sel_w, sel_h)), theme.accent.opacity(0.35)));
+                    window.paint_quad(fill(Bounds::new(point(sel_x, sel_y), size(sel_w, sel_h)), theme.selection.opacity(0.45)));
                 }
             }
         }
@@ -247,11 +250,11 @@ impl Element for VisualMapElement {
                         point(center_x - indicator_size * 0.5, center_y - indicator_size * 0.5),
                         size(indicator_size, indicator_size),
                     );
-                    window.paint_quad(outline(cur_bounds, theme.accent, BorderStyle::Solid).border_widths(px(1.5)));
+                    window.paint_quad(outline(cur_bounds, theme.caret, BorderStyle::Solid).border_widths(px(1.5)));
                     window.paint_quad(fill(Bounds::new(point(cell_x, cell_y), size(px(pixel_size), px(pixel_size))), theme.foreground));
                 } else {
                     let cur_bounds = Bounds::new(point(cell_x, cell_y), size(w, h));
-                    window.paint_quad(outline(cur_bounds, theme.accent, BorderStyle::Solid).border_widths(px(1.5)));
+                    window.paint_quad(outline(cur_bounds, theme.caret, BorderStyle::Solid).border_widths(px(1.5)));
                 }
             }
         }

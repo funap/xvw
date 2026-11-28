@@ -119,17 +119,14 @@ impl ScrollController {
             return None;
         }
 
+        let geom = crate::ui::components::scrollbar::calculate_scrollbar_geometry(list_h, self.scroll_offset, total_rows, ROW_HEIGHT)?;
         let delta_y = current_y - self.scrollbar_drag_start_y;
-        let visible_rows = (list_h / ROW_HEIGHT).floor() as usize;
-        let max_top_row = total_rows.saturating_sub(visible_rows.max(1));
-        let ratio = (visible_rows as f64 / total_rows as f64).clamp(0.0, 1.0);
-        let thumb_h = (list_h as f64 * ratio).clamp(24.0, list_h as f64) as f32;
-        let max_thumb_top = (list_h - thumb_h).max(0.0);
+        let max_thumb_top = (list_h - geom.thumb_height).max(0.0);
 
-        if max_thumb_top > 0.0 && max_top_row > 0 {
+        if max_thumb_top > 0.0 && geom.max_top_row > 0 {
             let delta_ratio = delta_y as f64 / max_thumb_top as f64;
-            let delta_rows = delta_ratio * max_top_row as f64;
-            let new_row = ((self.scrollbar_drag_start_row as f64 + delta_rows).round() as isize).clamp(0, max_top_row as isize) as usize;
+            let delta_rows = delta_ratio * geom.max_top_row as f64;
+            let new_row = ((self.scrollbar_drag_start_row as f64 + delta_rows).round() as isize).clamp(0, geom.max_top_row as isize) as usize;
             Some(new_row)
         } else {
             None

@@ -824,7 +824,7 @@ pub(crate) fn strings_row_colors(is_selected: bool, is_table_focused: bool, them
         if is_table_focused {
             StringsRowColors {
                 bg_color: theme.selection,
-                border_color: theme.accent,
+                border_color: theme.list_active_border,
                 hover_bg: theme.selection,
                 address_color: theme.accent_foreground,
                 size_color: theme.accent_foreground,
@@ -1084,7 +1084,7 @@ mod tests {
         let theme = super::Theme::default();
         let colors = strings_row_colors(true, true, &theme);
         assert_eq!(colors.bg_color, theme.selection);
-        assert_eq!(colors.border_color, theme.accent);
+        assert_eq!(colors.border_color, theme.list_active_border);
         assert_eq!(colors.address_color, theme.accent_foreground);
         assert_eq!(colors.size_color, theme.accent_foreground);
         assert_eq!(colors.value_color, theme.accent_foreground);
