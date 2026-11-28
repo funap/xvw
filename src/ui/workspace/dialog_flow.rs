@@ -777,8 +777,13 @@ impl Workspace {
         });
     }
 
+    fn active_document_editor(&self, cx: &App) -> Option<Entity<Editor>> {
+        self.active_editor(cx)
+            .or_else(|| self.active_diff_view(cx).map(|diff| diff.read(cx).active_side_editor()))
+    }
+
     pub(crate) fn on_action_save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(editor) = self.active_editor(cx) else {
+        let Some(editor) = self.active_document_editor(cx) else {
             return;
         };
         let (document, state_id, is_read_only, path) = {
@@ -831,7 +836,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_toggle_read_only(&mut self, _: &ToggleReadOnly, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(editor) = self.active_editor(cx) else {
+        let Some(editor) = self.active_document_editor(cx) else {
             return;
         };
         let (document, is_read_only, is_dirty, title) = {
@@ -912,7 +917,7 @@ impl Workspace {
     }
 
     pub(crate) fn on_action_save_as(&mut self, _: &SaveAs, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(editor) = self.active_editor(cx) else {
+        let Some(editor) = self.active_document_editor(cx) else {
             return;
         };
         let (document, state_id, default_name, parent_dir, default_ext) = {
@@ -1019,7 +1024,7 @@ impl Workspace {
                     .tabs
                     .iter()
                     .filter(|tab| !closing_ids.contains(&tab.id))
-                    .filter_map(|tab| tab.content.document(cx))
+                    .flat_map(|tab| tab.content.documents(cx).into_iter().map(|(doc, _)| doc))
                     .collect::<Vec<_>>()
             })
             .collect();
@@ -1340,7 +1345,8 @@ pub(crate) fn collect_dirty_documents(tabs: &[crate::ui::pane::TabItem], cx: &Ap
     let raw: Vec<_> = tabs
         .iter()
         .filter(|tab| tab.is_dirty(cx))
-        .filter_map(|tab| tab.content.document(cx).map(|doc| (doc, tab.title(cx))))
+        .flat_map(|tab| tab.content.documents(cx))
+        .filter(|(doc, _)| doc.read().map(|d| d.is_dirty()).unwrap_or(false))
         .collect();
     deduplicate_dirty_documents(raw)
 }
