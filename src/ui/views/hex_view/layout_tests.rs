@@ -336,16 +336,6 @@ fn check_structure_and_highlights() {
     assert!(super::types::address_col_width_for_font_size(20.0, 0x1000) > super::types::ADDRESS_WIDTH);
     assert!(super::types::address_col_width_for_font_size(14.0, 0x1_0000_0000) > super::types::ADDRESS_WIDTH);
 
-    // Column focus flash curve holds briefly then smoothly fades to 0
-    assert_eq!(super::types::column_focus_flash_alpha(-0.1), 1.0);
-    assert_eq!(super::types::column_focus_flash_alpha(0.0), 1.0);
-    assert_eq!(super::types::column_focus_flash_alpha(0.2), 1.0);
-    let mid = super::types::column_focus_flash_alpha(0.6);
-    assert!(mid > 0.0 && mid < 1.0);
-    assert!(super::types::column_focus_flash_alpha(0.8) < mid);
-    assert_eq!(super::types::column_focus_flash_alpha(1.0), 0.0);
-    assert_eq!(super::types::column_focus_flash_alpha(1.5), 0.0);
-
     assert_eq!(centered_glyph_offset(10.0, 6.0), 2.0);
     assert_eq!(centered_glyph_offset(10.0, 12.0), 0.0);
 

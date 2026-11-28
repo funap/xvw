@@ -46,17 +46,6 @@ fn header_clip_indicator(is_left: bool, theme: &gpui_kit::component::Theme) -> D
     }
 }
 
-fn header_focus_flash_overlay(id_prefix: &'static str, epoch: usize, primary: Hsla) -> impl IntoElement {
-    div()
-        .absolute()
-        .inset_0()
-        .with_animation((id_prefix, epoch), Animation::new(super::COLUMN_FOCUS_FLASH_DURATION), move |el, progress| {
-            let alpha = column_focus_flash_alpha(progress);
-            el.bg(primary.opacity(alpha * 0.10))
-                .child(div().absolute().left_0().right_0().bottom_0().h(px(2.0)).bg(primary.opacity(alpha)))
-        })
-}
-
 impl Render for HexView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity().clone();
@@ -368,10 +357,10 @@ impl Render for HexView {
                                             .overflow_hidden()
                                             .relative()
                                             .when(can_switch_edit_col, |el| el.cursor_pointer())
-                                            .children(hex_cols)
                                             .when(flash_is_hex, |el| {
-                                                el.child(header_focus_flash_overlay("hex-col-flash", flash_epoch, flash_primary))
+                                                el.child(crate::ui::panels::header_focus_flash_overlay(("hex-col-flash", flash_epoch), flash_primary))
                                             })
+                                            .children(hex_cols)
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -431,10 +420,10 @@ impl Render for HexView {
                                                 .text_color(theme.muted_foreground)
                                                 .when(can_switch_edit_col, |el| el.cursor_pointer())
                                                 .when(is_ascii_clipped_left, |el| el.pl(px(16.0)))
-                                                .child(label)
                                                 .when(flash_is_ascii, |el| {
-                                                    el.child(header_focus_flash_overlay("ascii-col-flash", flash_epoch, flash_primary))
+                                                    el.child(crate::ui::panels::header_focus_flash_overlay(("ascii-col-flash", flash_epoch), flash_primary))
                                                 })
+                                                .child(label)
                                                 .when(is_ascii_clipped_left, |el| el.child(header_clip_indicator(true, theme)))
                                                 .when(is_ascii_clipped_right, |el| el.child(header_clip_indicator(false, theme)))
                                                 .on_mouse_down(
