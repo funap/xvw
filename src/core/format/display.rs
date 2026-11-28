@@ -147,70 +147,69 @@ pub fn format_binary_repr(val: u64, byte_len: usize) -> String {
     format!("0b{}", parts.join(" "))
 }
 
-/// Decodes up to 8 bytes into a uint value and formatted hex string according to endianness.
+/// Decodes up to 8 bytes into a uint value and formatted hex string using uppercase hex digits.
+#[allow(dead_code)]
 pub fn decode_uint_value(slice: &[u8], is_big_endian: bool) -> (u64, String) {
+    decode_uint_value_with_case(slice, is_big_endian, super::HexCase::Upper)
+}
+
+/// Decodes up to 8 bytes into a uint value and formatted hex string according to endianness and `HexCase`.
+pub fn decode_uint_value_with_case(slice: &[u8], is_big_endian: bool, hex_case: super::HexCase) -> (u64, String) {
     let len = slice.len();
-    match len {
-        1 => {
-            let val = slice[0] as u64;
-            let hex_str = format!("0x{:02X}", val);
-            (val, hex_str)
-        }
+    let val = match len {
+        1 => slice[0] as u64,
         2 => {
-            let val = if is_big_endian {
+            if is_big_endian {
                 u16::from_be_bytes([slice[0], slice[1]]) as u64
             } else {
                 u16::from_le_bytes([slice[0], slice[1]]) as u64
-            };
-            let hex_str = format!("0x{:04X}", val);
-            (val, hex_str)
+            }
         }
         3 => {
-            let val = if is_big_endian {
+            if is_big_endian {
                 ((slice[0] as u64) << 16) | ((slice[1] as u64) << 8) | (slice[2] as u64)
             } else {
                 (slice[0] as u64) | ((slice[1] as u64) << 8) | ((slice[2] as u64) << 16)
-            };
-            let hex_str = format!("0x{:06X}", val);
-            (val, hex_str)
+            }
         }
         4 => {
-            let val = if is_big_endian {
+            if is_big_endian {
                 u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]) as u64
             } else {
                 u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]) as u64
-            };
-            let hex_str = format!("0x{:08X}", val);
-            (val, hex_str)
+            }
         }
         5..=7 => {
             let mut buf = [0u8; 8];
-            let val = if is_big_endian {
+            if is_big_endian {
                 buf[8 - len..].copy_from_slice(slice);
                 u64::from_be_bytes(buf)
             } else {
                 buf[..len].copy_from_slice(slice);
                 u64::from_le_bytes(buf)
-            };
-            let hex_str = format!("0x{:0width$X}", val, width = len * 2);
-            (val, hex_str)
+            }
         }
         8 => {
-            let val = if is_big_endian {
+            if is_big_endian {
                 u64::from_be_bytes([slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7]])
             } else {
                 u64::from_le_bytes([slice[0], slice[1], slice[2], slice[3], slice[4], slice[5], slice[6], slice[7]])
-            };
-            let hex_str = format!("0x{:016X}", val);
-            (val, hex_str)
+            }
         }
-        _ => (0, "0x0".to_string()),
-    }
+        _ => return (0, "0x0".to_string()),
+    };
+    let width = len * 2;
+    let hex_str = match hex_case {
+        super::HexCase::Lower => format!("0x{:0width$x}", val, width = width),
+        super::HexCase::Upper => format!("0x{:0width$X}", val, width = width),
+    };
+    (val, hex_str)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::format::HexCase;
 
     #[test]
     fn test_format_binary_repr_spacing() {
@@ -238,6 +237,13 @@ mod tests {
         let (be_val4, be_hex4) = decode_uint_value(&bytes4, true);
         assert_eq!(be_val4, 0x01020304);
         assert_eq!(be_hex4, "0x01020304");
+
+        assert_eq!(decode_uint_value_with_case(&[0xAB], false, HexCase::Lower), (0xAB, "0xab".to_string()));
+        assert_eq!(decode_uint_value_with_case(&[0xAB], false, HexCase::Upper), (0xAB, "0xAB".to_string()));
+        assert_eq!(
+            decode_uint_value_with_case(&[0xDE, 0xAD, 0xBE, 0xEF], true, HexCase::Lower),
+            (0xDEADBEEF, "0xdeadbeef".to_string())
+        );
     }
 
     #[test]

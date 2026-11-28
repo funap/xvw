@@ -208,6 +208,12 @@ impl Render for Workspace {
                             .map(|s| s.panel_width)
                             .unwrap_or(crate::settings::DEFAULT_SCRATCHPAD_PANEL_WIDTH);
 
+                        let center_content = if self.pane_tree.read(cx).is_empty() {
+                            super::welcome::render_welcome_screen(self.recent_file_history.entries(), cx)
+                        } else {
+                            self.pane_tree.clone().into_any_element()
+                        };
+
                         let center_and_right = if self.is_right_panel_visible {
                             h_resizable("workspace-scratchpad-resize")
                                 .with_state(&self.workspace_resizable_state)
@@ -228,7 +234,7 @@ impl Render for Workspace {
                                         }
                                     }
                                 })
-                                .child(resizable_panel().child(self.pane_tree.clone()))
+                                .child(resizable_panel().child(center_content))
                                 .child(
                                     resizable_panel()
                                         .size(px(scratchpad_panel_width))
@@ -247,7 +253,7 @@ impl Render for Workspace {
                                 )
                                 .into_any_element()
                         } else {
-                            self.pane_tree.clone().into_any_element()
+                            center_content
                         };
 
                         let main_layout = if self.is_left_panel_visible {
