@@ -4,6 +4,7 @@
 //! (Hex, signed/unsigned integers, floating-point numbers) with endianness support
 //! and strict validation.
 
+use crate::core::format::HexCase;
 use serde::{Deserialize, Serialize};
 
 /// Supported field types in the data inspector.
@@ -77,26 +78,32 @@ impl InspectorField {
     }
 
     /// Formats raw bytes as an input value string according to this field type and endianness.
+    #[allow(dead_code)]
     pub fn current_input_value(&self, bytes: &[u8], is_big_endian: bool) -> String {
+        self.current_input_value_with_case(bytes, is_big_endian, HexCase::Upper)
+    }
+
+    /// Formats raw bytes as an input value string respecting `hex_case` for hexadecimal fields.
+    pub fn current_input_value_with_case(&self, bytes: &[u8], is_big_endian: bool, hex_case: HexCase) -> String {
         if bytes.len() < self.byte_len() {
             return String::new();
         }
         match self {
-            Self::Hex8 => format!("0x{:02X}", bytes[0]),
+            Self::Hex8 => format_prefixed_u64(bytes[0] as u64, 2, hex_case),
             Self::Hex16 => {
                 let arr: [u8; 2] = bytes[0..2].try_into().expect("2-byte slice");
                 let val = if is_big_endian { u16::from_be_bytes(arr) } else { u16::from_le_bytes(arr) };
-                format!("0x{:04X}", val)
+                format_prefixed_u64(val as u64, 4, hex_case)
             }
             Self::Hex32 => {
                 let arr: [u8; 4] = bytes[0..4].try_into().expect("4-byte slice");
                 let val = if is_big_endian { u32::from_be_bytes(arr) } else { u32::from_le_bytes(arr) };
-                format!("0x{:08X}", val)
+                format_prefixed_u64(val as u64, 8, hex_case)
             }
             Self::Hex64 => {
                 let arr: [u8; 8] = bytes[0..8].try_into().expect("8-byte slice");
                 let val = if is_big_endian { u64::from_be_bytes(arr) } else { u64::from_le_bytes(arr) };
-                format!("0x{:016X}", val)
+                format_prefixed_u64(val, 16, hex_case)
             }
             Self::Int8 => format!("{}", bytes[0] as i8),
             Self::UInt8 => format!("{}", bytes[0]),
@@ -299,33 +306,46 @@ impl InspectorField {
     }
 }
 
+fn format_prefixed_u64(value: u64, width: usize, hex_case: HexCase) -> String {
+    match hex_case {
+        HexCase::Upper => format!("0x{:0width$X}", value, width = width),
+        HexCase::Lower => format!("0x{:0width$x}", value, width = width),
+    }
+}
+
 /// Formats up to 8 bytes into hex strings for 8-bit, 16-bit, 32-bit, and 64-bit representations.
+#[allow(dead_code)]
 pub fn format_hex_values(bytes: &[u8], is_big_endian: bool) -> (String, String, String, String) {
+    format_hex_values_with_case(bytes, is_big_endian, HexCase::Upper)
+}
+
+/// Formats up to 8 bytes into hex strings respecting `hex_case`.
+pub fn format_hex_values_with_case(bytes: &[u8], is_big_endian: bool, hex_case: HexCase) -> (String, String, String, String) {
     let mut hex8 = "--".to_string();
     let mut hex16 = "--".to_string();
     let mut hex32 = "--".to_string();
     let mut hex64 = "--".to_string();
 
     if !bytes.is_empty() {
-        hex8 = format!("0x{:02X}", bytes[0]);
+        hex8 = format_prefixed_u64(bytes[0] as u64, 2, hex_case);
     }
 
     if bytes.len() >= 2 {
         let arr: [u8; 2] = bytes[0..2].try_into().expect("2-byte slice");
         let val = if is_big_endian { u16::from_be_bytes(arr) } else { u16::from_le_bytes(arr) };
-        hex16 = format!("0x{:04X}", val);
+        hex16 = format_prefixed_u64(val as u64, 4, hex_case);
     }
 
     if bytes.len() >= 4 {
         let arr: [u8; 4] = bytes[0..4].try_into().expect("4-byte slice");
         let val = if is_big_endian { u32::from_be_bytes(arr) } else { u32::from_le_bytes(arr) };
-        hex32 = format!("0x{:08X}", val);
+        hex32 = format_prefixed_u64(val as u64, 8, hex_case);
     }
 
     if bytes.len() >= 8 {
         let arr: [u8; 8] = bytes[0..8].try_into().expect("8-byte slice");
         let val = if is_big_endian { u64::from_be_bytes(arr) } else { u64::from_le_bytes(arr) };
-        hex64 = format!("0x{:016X}", val);
+        hex64 = format_prefixed_u64(val, 16, hex_case);
     }
 
     (hex8, hex16, hex32, hex64)
@@ -478,5 +498,17 @@ mod tests {
     fn test_empty_string_error() {
         assert!(InspectorField::Hex8.parse_and_serialize("", false).is_err());
         assert!(InspectorField::Hex8.parse_and_serialize("   ", false).is_err());
+    }
+
+    #[test]
+    fn test_hex_values_respect_hex_case() {
+        let bytes = [0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89];
+        let (h8, h16, h32, h64) = format_hex_values_with_case(&bytes, true, HexCase::Lower);
+        assert_eq!(h8, "0xab");
+        assert_eq!(h16, "0xabcd");
+        assert_eq!(h32, "0xabcdef01");
+        assert_eq!(h64, "0xabcdef0123456789");
+        assert_eq!(InspectorField::Hex16.current_input_value_with_case(&bytes, true, HexCase::Lower), "0xabcd");
+        assert_eq!(InspectorField::Hex16.current_input_value_with_case(&bytes, true, HexCase::Upper), "0xABCD");
     }
 }
