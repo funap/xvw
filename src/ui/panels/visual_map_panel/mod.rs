@@ -13,6 +13,7 @@ pub mod toolbar;
 pub use self::cache::{CachedImage, VisualMapCacheKey};
 use self::element::VisualMapElement;
 use crate::core::editor::Editor;
+use crate::core::format::HexCase;
 use crate::core::visual_map::geometry::VisualMapGeometry;
 #[allow(unused_imports)]
 pub use crate::core::visual_map::{HoveredPixel, VisualMapByteCategory};
@@ -75,6 +76,7 @@ pub struct VisualMapPanel {
     is_panel_active: bool,
     needs_editor_sync: bool,
     _editor_subscription: Option<Subscription>,
+    _hex_case_subscription: Subscription,
     _width_repeat_task: Option<Task<()>>,
     _offset_repeat_task: Option<Task<()>>,
 }
@@ -92,6 +94,9 @@ impl EventEmitter<VisualMapPanelEvent> for VisualMapPanel {}
 impl VisualMapPanel {
     pub fn new(editor: Option<Entity<Editor>>, cx: &mut Context<Self>) -> Self {
         let _editor_subscription = editor.as_ref().map(|ed| Self::subscribe_editor(ed, cx));
+        let _hex_case_subscription = cx.observe_global::<HexCase>(|_this, cx| {
+            cx.notify();
+        });
 
         let is_big_endian = editor.as_ref().map(|ed| ed.read(cx).options.is_big_endian).unwrap_or(false);
 
@@ -117,6 +122,7 @@ impl VisualMapPanel {
             is_panel_active: true,
             needs_editor_sync: false,
             _editor_subscription,
+            _hex_case_subscription,
             _width_repeat_task: None,
             _offset_repeat_task: None,
         }
@@ -150,6 +156,9 @@ impl VisualMapPanel {
         if let Some(ed) = &editor {
             self._editor_subscription = Some(Self::subscribe_editor(ed, cx));
         }
+        self.hovered_info = None;
+        self.scroll_offset = 0;
+        self.scroll_remainder = 0.0;
         self.cached_image.borrow_mut().take();
         if self.is_panel_active {
             self.needs_editor_sync = false;
@@ -174,6 +183,10 @@ impl VisualMapPanel {
 
     pub fn active_buffer_len(&self, cx: &App) -> usize {
         self.buffer_len(cx).saturating_sub(self.header_offset)
+    }
+
+    pub(crate) fn min_cols(&self) -> usize {
+        if self.color_mode == ColorMode::Planar4bpp { 8 } else { 1 }
     }
 
     pub fn max_header_offset(&self) -> usize {
@@ -469,8 +482,8 @@ impl VisualMapPanel {
     }
 
     pub(crate) fn decrement_width(&mut self, cx: &mut Context<Self>) {
-        let min_cols = if self.color_mode == ColorMode::Planar4bpp { 8 } else { 1 };
-        let step = if self.color_mode == ColorMode::Planar4bpp { 8 } else { 1 };
+        let min_cols = self.min_cols();
+        let step = min_cols;
         if self.cols > min_cols {
             self.cols = cmp::max(min_cols, self.cols.saturating_sub(step));
             let max_offset = self.max_header_offset();
@@ -514,6 +527,27 @@ impl VisualMapPanel {
             self.update_scrollbar(cx);
             cx.notify();
         }
+    }
+
+    pub(crate) fn set_color_mode(&mut self, mode: ColorMode, cx: &mut Context<Self>) {
+        if self.color_mode == mode {
+            return;
+        }
+        self.color_mode = mode;
+        if mode == ColorMode::Planar4bpp && !self.cols.is_multiple_of(8) {
+            self.cols = (self.cols / 8).max(1) * 8;
+        }
+        let max_offset = self.max_header_offset();
+        if self.header_offset > max_offset {
+            self.header_offset = max_offset;
+        }
+        if self.editor.is_some() {
+            self.scroll_to_cursor(cx);
+        } else {
+            self.update_scrollbar(cx);
+        }
+        self.cached_image.borrow_mut().take();
+        cx.notify();
     }
 }
 
@@ -606,8 +640,9 @@ impl Render for VisualMapPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let is_focused = self.focus_handle.is_focused(window);
+        let buffer_len = self.buffer_len(cx);
 
-        let header_actions = self.editor.as_ref().map(|_| {
+        let header_actions = (self.editor.is_some() && buffer_len > 0).then(|| {
             Button::new("center_cursor")
                 .ghost()
                 .with_size(Size::XSmall)
@@ -648,7 +683,30 @@ impl Render for VisualMapPanel {
             }
         };
 
-        let buffer_len = self.buffer_len(cx);
+        if buffer_len == 0 {
+            let container = crate::ui::panels::panel_container(is_focused, &theme);
+
+            return container
+                .id("visual-map-panel")
+                .key_context(CONTEXT)
+                .track_focus(&self.focus_handle)
+                .on_action(cx.listener(Self::dismiss))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        this.focus_handle.focus(window, cx);
+                    }),
+                )
+                .child(header)
+                .child(crate::ui::panels::panel_empty_state(
+                    IconName::Map,
+                    "Empty File",
+                    Some("The active file contains 0 bytes"),
+                    None,
+                    &theme,
+                ));
+        }
+
         let active_len = self.active_buffer_len(cx);
         let state_id = self.state_id(cx);
         let total_pixels = self.color_mode.total_pixels(active_len);
@@ -673,6 +731,7 @@ impl Render for VisualMapPanel {
 
         let ed_ref = editor.read(cx);
         let cursor_offset = ed_ref.cursor.offset.checked_sub(self.header_offset);
+        let viewport_range = ed_ref.viewport_byte_range.clone();
         let selection_range = ed_ref.selection_range().and_then(|sel| {
             if sel.end > self.header_offset {
                 let start = sel.start.saturating_sub(self.header_offset);
@@ -719,6 +778,7 @@ impl Render for VisualMapPanel {
                 header_offset: self.header_offset,
                 state_id,
                 cursor_offset,
+                viewport_range,
                 selection_range,
                 hovered_pixel,
                 is_dragging_scrollbar: self.is_dragging_scrollbar,

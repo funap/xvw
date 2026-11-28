@@ -1,11 +1,17 @@
 use crate::core::appearance::Appearance;
 use crate::core::editor::Editor;
+use crate::core::format::HexCase;
+use crate::core::inspector::format_hex_values_with_case;
 use crate::core::selection::Selection;
 use crate::ui::icon::IconName;
 use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::input::{self, Input, InputState};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, button::Button, button::ButtonVariants, h_flex, v_flex};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, WindowExt as _, button::Button, button::ButtonVariants, h_flex, v_flex,
+};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
@@ -22,6 +28,7 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
+#[allow(unused_imports)]
 pub use crate::core::inspector::{InspectorField, format_hex_values};
 
 pub struct DataInspectorPanel {
@@ -29,6 +36,7 @@ pub struct DataInspectorPanel {
     pub focus_handle: FocusHandle,
     pub is_big_endian: bool,
     _editor_subscription: Option<Subscription>,
+    _hex_case_subscription: Subscription,
     pub editing_field: Option<InspectorField>,
     pub editing_offset: usize,
     pub original_selection: Option<Selection>,
@@ -43,6 +51,9 @@ impl DataInspectorPanel {
     pub fn new(editor: Option<Entity<Editor>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle();
         let _editor_subscription = editor.as_ref().map(|ed| Self::subscribe_editor(ed, cx));
+        let _hex_case_subscription = cx.observe_global::<HexCase>(|_this, cx| {
+            cx.notify();
+        });
 
         let edit_input = cx.new(|cx| InputState::new(window, cx));
         let _input_subscription = cx.subscribe_in(&edit_input, window, |this, input, event: &input::InputEvent, window, cx| match event {
@@ -76,6 +87,7 @@ impl DataInspectorPanel {
             focus_handle,
             is_big_endian: false,
             _editor_subscription,
+            _hex_case_subscription,
             editing_field: None,
             editing_offset: 0,
             original_selection: None,
@@ -195,10 +207,12 @@ impl DataInspectorPanel {
             cx.notify();
         });
 
-        let initial_val = field.current_input_value(&bytes, self.is_big_endian);
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
+        let initial_val = field.current_input_value_with_case(&bytes, self.is_big_endian, hex_case);
         self.edit_input.update(cx, |input, cx| {
             input.set_value(initial_val, window, cx);
             input.focus(window, cx);
+            input.select_all(window, cx);
         });
 
         cx.notify();
@@ -347,7 +361,9 @@ impl DataInspectorPanel {
                 )
                 .into_any_element()
         } else {
-            let mut action_buttons = h_flex().items_center().gap_0p5().flex_shrink_0();
+            let mut action_buttons = h_flex().items_center().gap_0p5().flex_shrink_0().on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            });
 
             if let Some(f) = field
                 && can_copy
@@ -372,12 +388,18 @@ impl DataInspectorPanel {
                     Clipboard::new(SharedString::from(format!("inspector-copy-{}", label)))
                         .value(val_for_click.clone())
                         .tooltip("Copy Value")
-                        .with_size(gpui_kit::component::Size::XSmall),
+                        .with_size(gpui_kit::component::Size::XSmall)
+                        .on_copied(move |_, window, cx| {
+                            window.push_notification(Notification::info(format!("Copied {label}")), cx);
+                        }),
                 );
             }
 
+            let tooltip_val = val_for_click.clone();
             let value_text_el = div()
+                .id(SharedString::from(format!("inspector-value-{}", label)))
                 .flex_1()
+                .min_w_0()
                 .text_right()
                 .font_family(font_family.to_string())
                 .text_xs()
@@ -385,6 +407,7 @@ impl DataInspectorPanel {
                 .text_ellipsis()
                 .whitespace_nowrap()
                 .text_color(value_color)
+                .when(can_copy, |el| el.tooltip(move |window, cx| Tooltip::new(tooltip_val.clone()).build(window, cx)))
                 .child(value);
 
             h_flex()
@@ -499,8 +522,9 @@ impl Render for DataInspectorPanel {
 
         let is_read_only = active_editor.is_none_or(|ed| ed.read(cx).is_read_only());
         let is_big_endian = self.is_big_endian;
+        let hex_case = cx.try_global::<HexCase>().copied().unwrap_or_default();
 
-        let (hex8_val, hex16_val, hex32_val, hex64_val) = format_hex_values(&bytes_at_cursor, is_big_endian);
+        let (hex8_val, hex16_val, hex32_val, hex64_val) = format_hex_values_with_case(&bytes_at_cursor, is_big_endian, hex_case);
 
         // Data conversion logic
         let mut i8_val = "--".to_string();
@@ -667,9 +691,197 @@ impl Render for DataInspectorPanel {
         let view = cx.entity().clone();
 
         let font_family = cx.global::<Appearance>().font_family.clone();
-        let header_title = if is_read_only { "DATA INSPECTOR (READ ONLY)" } else { "DATA INSPECTOR" };
-        let header = crate::ui::panels::panel_header(header_title, is_focused, theme, None, Some(endian_controls.into_any_element()));
+        let read_only_badge = (active_editor.is_some() && is_read_only).then(|| crate::ui::panels::panel_badge("Read-only", theme).into_any_element());
+        let header = crate::ui::panels::panel_header("DATA INSPECTOR", is_focused, theme, read_only_badge, Some(endian_controls.into_any_element()));
         let container = crate::ui::panels::panel_container(is_focused, theme);
+
+        let body: AnyElement = if active_editor.is_none() {
+            crate::ui::panels::panel_empty_state(
+                IconName::Binary,
+                "No Active File",
+                Some("Open a binary file to inspect values at the cursor"),
+                None,
+                theme,
+            )
+            .into_any_element()
+        } else if bytes_at_cursor.is_empty() {
+            crate::ui::panels::panel_empty_state(
+                IconName::Binary,
+                "No Bytes at Cursor",
+                Some("The file is empty or the cursor is past the end of data"),
+                None,
+                theme,
+            )
+            .into_any_element()
+        } else {
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .min_w_0()
+                .overflow_y_scrollbar()
+                .py_2()
+                .pl_2()
+                .pr_1()
+                .child(self.render_section_header("HEXADECIMAL", theme))
+                .child(self.render_row(
+                    Some(InspectorField::Hex8),
+                    1,
+                    "Hex (1 byte)",
+                    hex8_val,
+                    &font_family,
+                    &view,
+                    window,
+                    theme,
+                    is_read_only,
+                ))
+                .child(self.render_row(
+                    Some(InspectorField::Hex16),
+                    2,
+                    "Hex (2 bytes)",
+                    hex16_val,
+                    &font_family,
+                    &view,
+                    window,
+                    theme,
+                    is_read_only,
+                ))
+                .child(self.render_row(
+                    Some(InspectorField::Hex32),
+                    4,
+                    "Hex (4 bytes)",
+                    hex32_val,
+                    &font_family,
+                    &view,
+                    window,
+                    theme,
+                    is_read_only,
+                ))
+                .child(self.render_row(
+                    Some(InspectorField::Hex64),
+                    8,
+                    "Hex (8 bytes)",
+                    hex64_val,
+                    &font_family,
+                    &view,
+                    window,
+                    theme,
+                    is_read_only,
+                ))
+                .child(self.render_section_header("INTEGERS", theme))
+                .child(self.render_row(Some(InspectorField::Int8), 1, "Int8", i8_val, &font_family, &view, window, theme, is_read_only))
+                .child(self.render_row(
+                    Some(InspectorField::UInt8),
+                    1,
+                    "UInt8",
+                    u8_val,
+                    &font_family,
+                    &view,
+                    window,
+                    theme,
+                    is_read_only,
+                ))
+                .child(self.render_row(
+                    Some(InspectorField::Int16),
+                    2,
+                    "Int16",
+                    i16_val,
+                    &font_family,
+                    &view,
+                    window,
+                    theme,
+                    is_read_only,
+                ))
+                .child(self.render_row(
+                    Some(InspectorField::UInt16),
+                    2,
+                    "UInt16",
+                    u16_val,
+                    &font_family,
+                    &view,
+                    window,
+                    theme,
+                    is_read_only,
+                ))
+                .child(self.render_row(
+                    Some(InspectorField::Int32),
+                    4,
+                    "Int32",
+                    i32_val,
+                    &font_family,
+                    &view,
+                    window,
+                    theme,
+                    is_read_only,
+                ))
+                .child(self.render_row(
+                    Some(InspectorField::UInt32),
+                    4,
+                    "UInt32",
+                    u32_val,
+                    &font_family,
+                    &view,
+                    window,
+                    theme,
+                    is_read_only,
+                ))
+                .child(self.render_row(
+                    Some(InspectorField::Int64),
+                    8,
+                    "Int64",
+                    i64_val,
+                    &font_family,
+                    &view,
+                    window,
+                    theme,
+                    is_read_only,
+                ))
+                .child(self.render_row(
+                    Some(InspectorField::UInt64),
+                    8,
+                    "UInt64",
+                    u64_val,
+                    &font_family,
+                    &view,
+                    window,
+                    theme,
+                    is_read_only,
+                ))
+                .child(self.render_section_header("FLOATS", theme))
+                .child(self.render_row(
+                    Some(InspectorField::Float32),
+                    4,
+                    "Float32",
+                    f32_val,
+                    &font_family,
+                    &view,
+                    window,
+                    theme,
+                    is_read_only,
+                ))
+                .child(self.render_row(
+                    Some(InspectorField::Float64),
+                    8,
+                    "Float64",
+                    f64_val,
+                    &font_family,
+                    &view,
+                    window,
+                    theme,
+                    is_read_only,
+                ))
+                .child(self.render_section_header("TIME", theme))
+                .child(self.render_row(None, 4, "UnixTime32", unix_time_32, &font_family, &view, window, theme, is_read_only))
+                .child(self.render_row(None, 8, "UnixTime64", unix_time_64, &font_family, &view, window, theme, is_read_only))
+                .child(self.render_section_header("TEXT", theme))
+                .child(self.render_row(None, 1, "ASCII", ascii_val, &font_family, &view, window, theme, is_read_only))
+                .child(self.render_row(None, 1, "UTF-8", utf8_val, &font_family, &view, window, theme, is_read_only))
+                .child(self.render_row(None, 2, "UTF-16", utf16_val, &font_family, &view, window, theme, is_read_only))
+                .when_some(current_encoding.zip(current_enc_val), |parent, (enc_label, enc_val)| {
+                    parent.child(self.render_row(None, 1, enc_label, enc_val, &font_family, &view, window, theme, is_read_only))
+                })
+                .into_any_element()
+        };
 
         container
             .id("data-inspector")
@@ -685,172 +897,7 @@ impl Render for DataInspectorPanel {
                 }),
             )
             .child(header)
-            .child(
-                v_flex()
-                    .size_full()
-                    .min_w_0()
-                    .overflow_y_scrollbar()
-                    .py_2()
-                    .pl_2()
-                    .pr_1()
-                    .child(self.render_section_header("HEXADECIMAL", theme))
-                    .child(self.render_row(
-                        Some(InspectorField::Hex8),
-                        1,
-                        "Hex (1 byte)",
-                        hex8_val,
-                        &font_family,
-                        &view,
-                        window,
-                        theme,
-                        is_read_only,
-                    ))
-                    .child(self.render_row(
-                        Some(InspectorField::Hex16),
-                        2,
-                        "Hex (2 bytes)",
-                        hex16_val,
-                        &font_family,
-                        &view,
-                        window,
-                        theme,
-                        is_read_only,
-                    ))
-                    .child(self.render_row(
-                        Some(InspectorField::Hex32),
-                        4,
-                        "Hex (4 bytes)",
-                        hex32_val,
-                        &font_family,
-                        &view,
-                        window,
-                        theme,
-                        is_read_only,
-                    ))
-                    .child(self.render_row(
-                        Some(InspectorField::Hex64),
-                        8,
-                        "Hex (8 bytes)",
-                        hex64_val,
-                        &font_family,
-                        &view,
-                        window,
-                        theme,
-                        is_read_only,
-                    ))
-                    .child(self.render_section_header("INTEGERS", theme))
-                    .child(self.render_row(Some(InspectorField::Int8), 1, "Int8", i8_val, &font_family, &view, window, theme, is_read_only))
-                    .child(self.render_row(
-                        Some(InspectorField::UInt8),
-                        1,
-                        "UInt8",
-                        u8_val,
-                        &font_family,
-                        &view,
-                        window,
-                        theme,
-                        is_read_only,
-                    ))
-                    .child(self.render_row(
-                        Some(InspectorField::Int16),
-                        2,
-                        "Int16",
-                        i16_val,
-                        &font_family,
-                        &view,
-                        window,
-                        theme,
-                        is_read_only,
-                    ))
-                    .child(self.render_row(
-                        Some(InspectorField::UInt16),
-                        2,
-                        "UInt16",
-                        u16_val,
-                        &font_family,
-                        &view,
-                        window,
-                        theme,
-                        is_read_only,
-                    ))
-                    .child(self.render_row(
-                        Some(InspectorField::Int32),
-                        4,
-                        "Int32",
-                        i32_val,
-                        &font_family,
-                        &view,
-                        window,
-                        theme,
-                        is_read_only,
-                    ))
-                    .child(self.render_row(
-                        Some(InspectorField::UInt32),
-                        4,
-                        "UInt32",
-                        u32_val,
-                        &font_family,
-                        &view,
-                        window,
-                        theme,
-                        is_read_only,
-                    ))
-                    .child(self.render_row(
-                        Some(InspectorField::Int64),
-                        8,
-                        "Int64",
-                        i64_val,
-                        &font_family,
-                        &view,
-                        window,
-                        theme,
-                        is_read_only,
-                    ))
-                    .child(self.render_row(
-                        Some(InspectorField::UInt64),
-                        8,
-                        "UInt64",
-                        u64_val,
-                        &font_family,
-                        &view,
-                        window,
-                        theme,
-                        is_read_only,
-                    ))
-                    .child(self.render_section_header("FLOATS", theme))
-                    .child(self.render_row(
-                        Some(InspectorField::Float32),
-                        4,
-                        "Float32",
-                        f32_val,
-                        &font_family,
-                        &view,
-                        window,
-                        theme,
-                        is_read_only,
-                    ))
-                    .child(self.render_row(
-                        Some(InspectorField::Float64),
-                        8,
-                        "Float64",
-                        f64_val,
-                        &font_family,
-                        &view,
-                        window,
-                        theme,
-                        is_read_only,
-                    ))
-                    .child(self.render_section_header("TIME", theme))
-                    .child(self.render_row(None, 4, "UnixTime32", unix_time_32, &font_family, &view, window, theme, is_read_only))
-                    .child(self.render_row(None, 8, "UnixTime64", unix_time_64, &font_family, &view, window, theme, is_read_only))
-                    .child(self.render_section_header("TEXT", theme))
-                    .child(self.render_row(None, 1, "ASCII", ascii_val, &font_family, &view, window, theme, is_read_only))
-                    .child(self.render_row(None, 1, "UTF-8", utf8_val, &font_family, &view, window, theme, is_read_only))
-                    .child(self.render_row(None, 2, "UTF-16", utf16_val, &font_family, &view, window, theme, is_read_only))
-                    .when_some(current_encoding.zip(current_enc_val), |parent, (enc_label, enc_val)| {
-                        parent.child(self.render_row(None, 1, enc_label, enc_val, &font_family, &view, window, theme, is_read_only))
-                    }),
-            )
+            .child(body)
     }
 }
 

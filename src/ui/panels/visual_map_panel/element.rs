@@ -45,6 +45,7 @@ pub(crate) struct VisualMapElement {
     pub(crate) header_offset: usize,
     pub(crate) state_id: usize,
     pub(crate) cursor_offset: Option<usize>,
+    pub(crate) viewport_range: Option<Range<usize>>,
     pub(crate) selection_range: Option<Range<usize>>,
     pub(crate) hovered_pixel: Option<usize>,
     pub(crate) is_dragging_scrollbar: bool,
@@ -197,6 +198,34 @@ impl Element for VisualMapElement {
             let logical_height = physical_height as f32 / scale_factor;
             let image_bounds = Bounds::new(bounds.origin, size(px(logical_width), px(logical_height)));
             window.paint_image(image_bounds, image_bounds, Corners::default(), img, 0, false).ok();
+        }
+
+        // HexView Viewport Frame Overlay
+        if let Some(vp) = &self.viewport_range
+            && let Some((vp_start_row, vp_end_row)) =
+                VisualMapGeometry::byte_range_to_row_span(vp.start, vp.end, self.header_offset, cols, self.color_mode, total_pixels)
+        {
+            let vis_start = vp_start_row.max(start_row);
+            let vis_end = vp_end_row.min(end_row);
+            if vis_start < vis_end {
+                let max_map_w = (f32::from(bounds.size.width) - f32::from(crate::ui::components::scrollbar::SCROLLBAR_WIDTH)).max(0.0);
+                let frame_w = (cols as f32 * pixel_size).min(max_map_w);
+                if frame_w > 0.0 {
+                    let frame_y = bounds.origin.y + px((vis_start - start_row) as f32 * pixel_size);
+                    let frame_h = px(((vis_end - vis_start) as f32 * pixel_size).max(2.0));
+                    let frame_bounds = Bounds::new(point(bounds.origin.x, frame_y), size(px(frame_w), frame_h));
+
+                    window.paint_quad(fill(frame_bounds, theme.primary.opacity(0.08)));
+                    let top_w = if vp_start_row >= start_row { px(1.5) } else { px(0.0) };
+                    let bottom_w = if vp_end_row <= end_row { px(1.5) } else { px(0.0) };
+                    window.paint_quad(outline(frame_bounds, theme.primary.opacity(0.85), BorderStyle::Solid).border_widths(Edges {
+                        top: top_w,
+                        right: px(1.5),
+                        bottom: bottom_w,
+                        left: px(1.5),
+                    }));
+                }
+            }
         }
 
         // Selection Highlight Overlay

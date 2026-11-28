@@ -298,7 +298,7 @@ impl TableDelegate for StringsTableDelegate {
 
         menu.action_context(self.focus_handle.clone())
             .menu_with_icon("Copy Address", IconName::Hash, Box::new(CopyAddress { value: offset_value }))
-            .menu_with_icon("Copy Value", IconName::Binary, Box::new(CopyValue { value: text_value }))
+            .menu_with_icon("Copy Value", IconName::Copy, Box::new(CopyValue { value: text_value }))
     }
 
     fn render_td(&mut self, row_ix: usize, col_ix: usize, _window: &mut Window, cx: &mut Context<TableState<Self>>) -> impl IntoElement {
@@ -368,6 +368,7 @@ pub struct StringsPanel {
     _input_subscription: Option<Subscription>,
     _filter_subscription: Option<Subscription>,
     _editor_subscription: Option<Subscription>,
+    _hex_case_subscription: Subscription,
 }
 
 impl EventEmitter<StringsPanelEvent> for StringsPanel {}
@@ -422,12 +423,16 @@ impl StringsPanel {
 
         let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter by value..."));
 
-        let input_subscription = cx.subscribe_in(&min_length_input, window, |this, _, event: &input::InputEvent, _window, cx| {
-            if let input::InputEvent::Change = event {
+        let input_subscription = cx.subscribe_in(&min_length_input, window, |this, _, event: &input::InputEvent, _window, cx| match event {
+            input::InputEvent::PressEnter { .. } => {
+                this.trigger_scan(cx);
+            }
+            input::InputEvent::Change => {
                 this.invalidate_scan();
                 this.sync_selection_to_filter(cx);
                 cx.notify();
             }
+            _ => {}
         });
 
         let filter_subscription = cx.subscribe_in(&filter_input, window, |this, _, event: &input::InputEvent, _window, cx| {
@@ -435,6 +440,13 @@ impl StringsPanel {
                 this.sync_selection_to_filter(cx);
                 cx.notify();
             }
+        });
+
+        let hex_case_subscription = cx.observe_global::<HexCase>(|this, cx| {
+            this.table_state.update(cx, |table, cx| {
+                table.refresh(cx);
+            });
+            cx.notify();
         });
 
         let mut this = Self {
@@ -461,6 +473,7 @@ impl StringsPanel {
             _input_subscription: Some(input_subscription),
             _filter_subscription: Some(filter_subscription),
             _editor_subscription: None,
+            _hex_case_subscription: hex_case_subscription,
         };
 
         this.set_editor(editor, cx);
@@ -666,15 +679,6 @@ impl StringsPanel {
         self.table_state.read(cx).delegate().visible_indices.get(row_ix).copied()
     }
 
-    fn result_summary(&self) -> String {
-        if self.is_truncated {
-            format!("{}+ entries found (showing first {} entries)", MAX_STRING_RESULTS, MAX_STRING_RESULTS)
-        } else {
-            let label = if self.results.len() == 1 { "entry" } else { "entries" };
-            format!("{} {label} found", self.results.len())
-        }
-    }
-
     fn sync_selection_to_filter(&mut self, cx: &mut Context<Self>) {
         let visible_indices = self.sorted_indices(cx);
         if let Some(index) = self.selected_index {
@@ -861,6 +865,28 @@ impl Render for StringsPanel {
         let is_focused = self.focus_handle.is_focused(window) || is_input_focused || is_table_focused;
         let has_editor = self.editor.is_some();
         let minimum_length_is_valid = self.minimum_length(cx).is_some();
+        let total_count = self.results.len();
+        let visible_count = self.table_state.read(cx).delegate().visible_indices.len();
+        let is_filtered = !self.filter_query(cx).is_empty();
+
+        let badge = if self.is_scanning {
+            Some(crate::ui::panels::panel_badge("Scanning...", theme).into_any_element())
+        } else if self.has_scanned {
+            let text = if is_filtered {
+                if self.is_truncated {
+                    format!("{visible_count}/{MAX_STRING_RESULTS}+")
+                } else {
+                    format!("{visible_count}/{total_count}")
+                }
+            } else if self.is_truncated {
+                format!("{MAX_STRING_RESULTS}+")
+            } else {
+                total_count.to_string()
+            };
+            Some(crate::ui::panels::panel_badge(text, theme).into_any_element())
+        } else {
+            None
+        };
 
         let actions = Button::new("clear-strings")
             .ghost()
@@ -873,15 +899,38 @@ impl Render for StringsPanel {
                 this.sync_selection_to_filter(cx);
                 cx.notify();
             }));
-        let header = crate::ui::panels::panel_header("STRINGS", is_focused, theme, None, Some(actions.into_any_element()));
+        let header = crate::ui::panels::panel_header("STRINGS", is_focused, theme, badge, Some(actions.into_any_element()));
+
+        let scan_button = if self.is_scanning {
+            Button::new("cancel-strings-scan")
+                .label("Cancel")
+                .danger()
+                .with_size(Size::Small)
+                .tooltip("Cancel string scan")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.invalidate_scan();
+                    this.sync_selection_to_filter(cx);
+                    cx.notify();
+                }))
+        } else {
+            Button::new("scan-strings")
+                .label("Scan")
+                .primary()
+                .with_size(Size::Small)
+                .disabled(!has_editor || !minimum_length_is_valid)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.trigger_scan(cx);
+                }))
+        };
 
         let scan_controls = h_flex()
             .p_2()
             .gap_2()
+            .flex_wrap()
             .border_b_1()
             .border_color(theme.border)
             .items_center()
-            .child(div().text_xs().text_color(theme.muted_foreground).child("Min chars"))
+            .child(div().text_xs().text_color(theme.muted_foreground).whitespace_nowrap().child("Min chars"))
             .child(
                 div().w_24().child(
                     NumberInput::new(&self.min_length_input)
@@ -889,80 +938,102 @@ impl Render for StringsPanel {
                         .disabled(!has_editor || self.is_scanning),
                 ),
             )
-            .child(
-                Button::new("scan-strings")
-                    .label("Scan")
-                    .primary()
-                    .with_size(Size::Small)
-                    .disabled(self.is_scanning || !has_editor || !minimum_length_is_valid)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.trigger_scan(cx);
-                    })),
-            );
+            .child(scan_button);
 
-        let result_summary = div()
-            .px_2()
-            .py_1()
-            .bg(theme.secondary)
-            .border_b_1()
-            .border_color(theme.border)
-            .text_xs()
-            .text_color(theme.muted_foreground)
-            .child(self.result_summary());
-
-        let filter_controls = h_flex()
-            .p_2()
-            .gap_1p5()
-            .items_center()
-            .border_b_1()
-            .border_color(theme.border)
-            .child(div().flex_1().child(Input::new(&self.filter_input)))
-            .child(
-                Button::new("clear-strings-filter")
-                    .ghost()
-                    .icon(IconName::Close)
-                    .with_size(Size::XSmall)
-                    .tooltip("Clear filter")
-                    .disabled(self.filter_query(cx).is_empty())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.filter_input.update(cx, |input, cx| {
-                            input.set_value(String::new(), window, cx);
-                        });
-                        this.sync_selection_to_filter(cx);
-                        cx.notify();
-                    })),
-            );
-
-        let body = if self.is_scanning {
+        let truncation_notice = (self.has_scanned && !self.is_scanning && self.is_truncated).then(|| {
             div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_sm()
+                .w_full()
+                .px_2()
+                .py_1()
+                .bg(theme.secondary)
+                .border_b_1()
+                .border_color(theme.border)
+                .text_xs()
                 .text_color(theme.muted_foreground)
-                .child("Scanning...")
-                .into_any_element()
+                .truncate()
+                .child(format!("{}+ strings found (showing first {} entries)", MAX_STRING_RESULTS, MAX_STRING_RESULTS))
+        });
+
+        let filter_controls = (self.has_scanned && !self.is_scanning && !self.results.is_empty()).then(|| {
+            h_flex().w_full().p_2().items_center().border_b_1().border_color(theme.border).child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(Input::new(&self.filter_input).prefix(IconName::Search).cleanable(true).with_size(Size::Small)),
+            )
+        });
+
+        let body = if !has_editor {
+            crate::ui::panels::panel_empty_state(
+                IconName::TextInitial,
+                "No Active File",
+                Some("Open a binary file to extract printable strings"),
+                None,
+                theme,
+            )
+            .into_any_element()
+        } else if self.is_scanning {
+            let cancel_btn = Button::new("empty-cancel-strings-scan")
+                .label("Cancel Scan")
+                .ghost()
+                .with_size(Size::Small)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.invalidate_scan();
+                    this.sync_selection_to_filter(cx);
+                    cx.notify();
+                }));
+            crate::ui::panels::panel_empty_state(
+                IconName::LoaderCircle,
+                "Scanning Strings...",
+                Some("Extracting printable strings in the background"),
+                Some(cancel_btn.into_any_element()),
+                theme,
+            )
+            .into_any_element()
         } else if self.results.is_empty() {
-            let message = if self.has_scanned {
-                "No strings found"
-            } else if has_editor {
-                "Click Scan to find strings"
-            } else {
-                "Open a file to scan strings"
-            };
-            div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child(message)
+            if self.has_scanned {
+                crate::ui::panels::panel_empty_state(
+                    IconName::TextInitial,
+                    "No Strings Found",
+                    Some("Try lowering Min chars or switching the text encoding"),
+                    None,
+                    theme,
+                )
                 .into_any_element()
+            } else {
+                crate::ui::panels::panel_empty_state(
+                    IconName::TextInitial,
+                    "Ready to Scan",
+                    Some("Click Scan to find printable strings in this file"),
+                    None,
+                    theme,
+                )
+                .into_any_element()
+            }
+        } else if visible_count == 0 {
+            let clear_filter_btn = Button::new("clear-strings-filter-empty")
+                .label("Clear Filter")
+                .ghost()
+                .with_size(Size::Small)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.filter_input.update(cx, |input, cx| {
+                        input.set_value(String::new(), window, cx);
+                    });
+                    this.sync_selection_to_filter(cx);
+                    cx.notify();
+                }));
+            crate::ui::panels::panel_empty_state(
+                IconName::Search,
+                "No Matching Strings",
+                Some("No scanned strings match the current filter"),
+                Some(clear_filter_btn.into_any_element()),
+                theme,
+            )
+            .into_any_element()
         } else {
             div()
                 .flex_1()
+                .min_h_0()
                 .overflow_hidden()
                 .child(DataTable::new(&self.table_state).bordered(false))
                 .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -977,6 +1048,14 @@ impl Render for StringsPanel {
         crate::ui::panels::panel_container(is_focused, theme)
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    if !this.min_length_input.read(cx).focus_handle(cx).is_focused(window) && !this.filter_input.read(cx).focus_handle(cx).is_focused(window) {
+                        this.focus_handle.focus(window, cx);
+                    }
+                }),
+            )
             .on_action(cx.listener(Self::focus_table))
             .on_action(cx.listener(Self::confirm_select))
             .on_action(cx.listener(Self::dismiss_table))
@@ -988,7 +1067,8 @@ impl Render for StringsPanel {
             .on_action(cx.listener(Self::clear_results))
             .child(header)
             .child(scan_controls)
-            .when(self.has_scanned || self.is_scanning, |this| this.child(result_summary).child(filter_controls))
+            .children(truncation_notice)
+            .children(filter_controls)
             .child(body)
     }
 }

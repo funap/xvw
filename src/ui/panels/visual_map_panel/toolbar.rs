@@ -5,6 +5,7 @@ use crate::core::appearance::Appearance;
 use crate::core::visual_map::VisualMapColorMode as ColorMode;
 use crate::ui::icon::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::{Disableable, Icon, Sizable, Size, StyledExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -52,7 +53,7 @@ impl VisualMapPanel {
                 this.cols < 4096
             } else {
                 this.decrement_width(cx);
-                this.cols > 1
+                this.cols > this.min_cols()
             }
         }));
     }
@@ -176,6 +177,59 @@ impl VisualMapPanel {
     pub(crate) fn render_width_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let muted_color = theme.muted_foreground;
         let font_family = cx.global::<Appearance>().font_family.clone();
+        let is_at_min = self.cols <= self.min_cols();
+        let is_at_max = self.cols >= 4096;
+
+        let mut dec_btn = Button::new("dec_w").label("-").ghost().with_size(Size::XSmall).tooltip("Decrease width");
+        if is_at_min {
+            dec_btn = dec_btn.disabled(true);
+        } else {
+            dec_btn = dec_btn
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.start_width_repeat(false, cx);
+                    }),
+                )
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.stop_width_repeat();
+                    }),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.stop_width_repeat();
+                    }),
+                );
+        }
+
+        let mut inc_btn = Button::new("inc_w").label("+").ghost().with_size(Size::XSmall).tooltip("Increase width");
+        if is_at_max {
+            inc_btn = inc_btn.disabled(true);
+        } else {
+            inc_btn = inc_btn
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.start_width_repeat(true, cx);
+                    }),
+                )
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.stop_width_repeat();
+                    }),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.stop_width_repeat();
+                    }),
+                );
+        }
+
         h_flex()
             .justify_between()
             .items_center()
@@ -191,31 +245,7 @@ impl VisualMapPanel {
                 h_flex()
                     .items_center()
                     .gap_1()
-                    .child(
-                        Button::new("dec_w")
-                            .label("-")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .tooltip("Decrease width")
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.start_width_repeat(false, cx);
-                                }),
-                            )
-                            .on_mouse_up(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, _| {
-                                    this.stop_width_repeat();
-                                }),
-                            )
-                            .on_mouse_up_out(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, _| {
-                                    this.stop_width_repeat();
-                                }),
-                            ),
-                    )
+                    .child(dec_btn)
                     .child(
                         div()
                             .px_2()
@@ -239,31 +269,7 @@ impl VisualMapPanel {
                                 format!("{} B", self.cols)
                             }),
                     )
-                    .child(
-                        Button::new("inc_w")
-                            .label("+")
-                            .ghost()
-                            .with_size(Size::XSmall)
-                            .tooltip("Increase width")
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.start_width_repeat(true, cx);
-                                }),
-                            )
-                            .on_mouse_up(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, _| {
-                                    this.stop_width_repeat();
-                                }),
-                            )
-                            .on_mouse_up_out(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, _| {
-                                    this.stop_width_repeat();
-                                }),
-                            ),
-                    ),
+                    .child(inc_btn),
             )
             .into_any_element()
     }
@@ -299,6 +305,8 @@ impl VisualMapPanel {
             )
             .child(
                 h_flex()
+                    .flex_wrap()
+                    .justify_end()
                     .gap_1()
                     .child(pixel_button(1, "x1", cx))
                     .child(pixel_button(2, "x2", cx))
@@ -310,63 +318,69 @@ impl VisualMapPanel {
 
     pub(crate) fn render_palette_section(&self, theme: &gpui_kit::component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let muted_color = theme.muted_foreground;
-        let color_button = |mode: ColorMode, id_str: &'static str, cx: &mut Context<Self>| {
-            let is_selected = self.color_mode == mode;
-            let mut btn = Button::new(id_str).label(mode.label()).with_size(Size::XSmall);
-            if is_selected {
-                btn = btn.primary();
-            } else {
-                btn = btn.ghost();
-            }
-            btn.on_click(cx.listener(move |this, _, _, cx| {
-                this.color_mode = mode;
-                if mode == ColorMode::Planar4bpp && this.cols % 8 != 0 {
-                    this.cols = (this.cols / 8).max(1) * 8;
-                }
-                if this.editor.is_some() {
-                    this.scroll_to_cursor(cx);
-                } else {
-                    this.update_scrollbar(cx);
-                }
-                this.cached_image.borrow_mut().take();
-                cx.notify();
-            }))
-        };
+        let current_mode = self.color_mode;
+        let panel_weak = cx.entity().downgrade();
+
+        let dropdown = Button::new("visual_map_palette_dropdown")
+            .label(current_mode.label())
+            .outline()
+            .dropdown_caret(true)
+            .with_size(Size::XSmall)
+            .tooltip("Select color palette mode")
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
+                let add_modes = |menu: gpui_kit::component::menu::PopupMenu, modes: &[ColorMode]| {
+                    modes.iter().copied().fold(menu, |menu, mode| {
+                        let panel_weak = panel_weak.clone();
+                        menu.item(PopupMenuItem::new(mode.label()).checked(mode == current_mode).on_click(move |_, _, cx| {
+                            if let Some(panel) = panel_weak.upgrade() {
+                                panel.update(cx, |this, cx| {
+                                    this.set_color_mode(mode, cx);
+                                });
+                            }
+                        }))
+                    })
+                };
+
+                let menu = menu.label("Analysis");
+                let menu = add_modes(menu, &[ColorMode::DataCategory, ColorMode::Grayscale, ColorMode::Rainbow, ColorMode::Entropy]);
+                let menu = menu.separator().label("Indexed / Bitplane");
+                let menu = add_modes(
+                    menu,
+                    &[
+                        ColorMode::Mono1bpp,
+                        ColorMode::Indexed2bpp,
+                        ColorMode::Indexed4bpp,
+                        ColorMode::Planar4bpp,
+                        ColorMode::Vga256,
+                    ],
+                );
+                let menu = menu.separator().label("RGB / RGBA");
+                add_modes(
+                    menu,
+                    &[
+                        ColorMode::Rgb565,
+                        ColorMode::Rgb555,
+                        ColorMode::Rgb888,
+                        ColorMode::Bgr888,
+                        ColorMode::Rgba,
+                        ColorMode::Argb,
+                        ColorMode::Bgra,
+                    ],
+                )
+            });
 
         h_flex()
             .justify_between()
-            .items_start()
+            .items_center()
             .gap_2()
             .child(
                 h_flex()
                     .items_center()
                     .gap_1p5()
-                    .pt_1()
                     .child(Icon::new(IconName::Palette).size(px(13.0)).text_color(muted_color))
                     .child(div().text_xs().font_medium().text_color(muted_color).child("Palette")),
             )
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .justify_end()
-                    .gap_1()
-                    .child(color_button(ColorMode::Grayscale, "c_gray", cx))
-                    .child(color_button(ColorMode::DataCategory, "c_type", cx))
-                    .child(color_button(ColorMode::Rainbow, "c_rainbow", cx))
-                    .child(color_button(ColorMode::Entropy, "c_entropy", cx))
-                    .child(color_button(ColorMode::Mono1bpp, "c_1bpp", cx))
-                    .child(color_button(ColorMode::Indexed2bpp, "c_2bpp", cx))
-                    .child(color_button(ColorMode::Indexed4bpp, "c_4bpp", cx))
-                    .child(color_button(ColorMode::Planar4bpp, "c_4bpp_planar", cx))
-                    .child(color_button(ColorMode::Vga256, "c_8bpp", cx))
-                    .child(color_button(ColorMode::Rgb565, "c_rgb565", cx))
-                    .child(color_button(ColorMode::Rgb555, "c_rgb555", cx))
-                    .child(color_button(ColorMode::Rgb888, "c_rgb888", cx))
-                    .child(color_button(ColorMode::Bgr888, "c_bgr888", cx))
-                    .child(color_button(ColorMode::Rgba, "c_rgba", cx))
-                    .child(color_button(ColorMode::Argb, "c_argb", cx))
-                    .child(color_button(ColorMode::Bgra, "c_bgra", cx)),
-            )
+            .child(dropdown)
             .into_any_element()
     }
 
@@ -400,6 +414,8 @@ impl VisualMapPanel {
             )
             .child(
                 h_flex()
+                    .flex_wrap()
+                    .justify_end()
                     .gap_1()
                     .child(window_button(64, "64B", cx))
                     .child(window_button(128, "128B", cx))

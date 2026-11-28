@@ -221,6 +221,7 @@ pub struct SearchPanel {
     pub error_message: Option<String>,
     pub search_task: Option<Task<()>>,
     cancel_flag: Option<Arc<AtomicBool>>,
+    search_content_state: Option<(usize, usize)>,
     is_panel_active: bool,
     needs_editor_sync: bool,
     _table_subscription: Option<Subscription>,
@@ -298,6 +299,7 @@ impl SearchPanel {
             error_message: None,
             search_task: None,
             cancel_flag: None,
+            search_content_state: None,
             is_panel_active: true,
             needs_editor_sync: false,
             _table_subscription: Some(table_subscription),
@@ -308,6 +310,22 @@ impl SearchPanel {
 
         this.set_editor(editor, cx);
         this
+    }
+
+    fn current_content_state(&self, cx: &App) -> Option<(usize, usize)> {
+        let editor = self.editor.as_ref()?.read(cx);
+        let doc = editor.document.read().ok()?;
+        Some((doc.history.state_id(), doc.buffer.len()))
+    }
+
+    fn is_results_stale(&self, cx: &App) -> bool {
+        if self.results.is_empty() && self.last_query.is_empty() {
+            return false;
+        }
+        match (self.search_content_state, self.current_content_state(cx)) {
+            (Some(searched), Some(current)) => searched != current,
+            _ => false,
+        }
     }
 
     /// Controls whether editor cursor updates sync search selection immediately or defer until activated.
@@ -350,6 +368,7 @@ impl SearchPanel {
         self.selected_index = None;
         self.is_searching = false;
         self.error_message = None;
+        self.search_content_state = None;
         self.needs_editor_sync = false;
         self.sync_table_state(cx);
 
@@ -359,7 +378,8 @@ impl SearchPanel {
                     this.needs_editor_sync = true;
                     return;
                 }
-                if this.sync_selected_index_from_editor(&ed, cx) {
+                let selection_changed = this.sync_selected_index_from_editor(&ed, cx);
+                if selection_changed || this.is_results_stale(cx) {
                     cx.notify();
                 }
             }));
@@ -384,13 +404,21 @@ impl SearchPanel {
     fn toggle_case_insensitive(&mut self, cx: &mut Context<Self>) {
         self.flags.case_insensitive = !self.flags.case_insensitive;
         self.error_message = None;
-        cx.notify();
+        if (!self.last_query.is_empty() || self.is_searching) && !self.input.read(cx).value().trim().is_empty() {
+            self.trigger_search(cx);
+        } else {
+            cx.notify();
+        }
     }
 
     fn toggle_regex(&mut self, cx: &mut Context<Self>) {
         self.flags.regex = !self.flags.regex;
         self.error_message = None;
-        cx.notify();
+        if (!self.last_query.is_empty() || self.is_searching) && !self.input.read(cx).value().trim().is_empty() {
+            self.trigger_search(cx);
+        } else {
+            cx.notify();
+        }
     }
 
     pub fn trigger_search(&mut self, cx: &mut Context<Self>) {
@@ -423,6 +451,7 @@ impl SearchPanel {
         self.results.clear();
         self.is_truncated = false;
         self.selected_index = None;
+        self.search_content_state = self.current_content_state(cx);
         self.sync_table_state(cx);
 
         // Update editor search query so visible ranges in HexView are highlighted
@@ -570,6 +599,7 @@ impl SearchPanel {
         self.selected_index = None;
         self.last_query.clear();
         self.error_message = None;
+        self.search_content_state = None;
         self.sync_table_state(cx);
         if let Some(ed) = &self.editor {
             ed.update(cx, |ed, cx| {
@@ -764,12 +794,14 @@ impl Render for SearchPanel {
                 h_flex()
                     .gap_1()
                     .items_center()
+                    .flex_wrap()
                     .child(
                         if self.mode == SearchMode::Hex {
                             Button::new("mode_hex").label("Hex").primary().with_size(Size::XSmall)
                         } else {
                             Button::new("mode_hex").label("Hex").ghost().with_size(Size::XSmall)
                         }
+                        .tooltip("Search hexadecimal byte pattern (supports ?? wildcards)")
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.set_mode(SearchMode::Hex, window, cx);
                         })),
@@ -780,6 +812,7 @@ impl Render for SearchPanel {
                         } else {
                             Button::new("mode_text").label("Text").ghost().with_size(Size::XSmall)
                         }
+                        .tooltip("Search text using the active file encoding")
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.set_mode(SearchMode::Text, window, cx);
                         })),
@@ -818,15 +851,55 @@ impl Render for SearchPanel {
             )
             .child(
                 h_flex()
+                    .w_full()
                     .gap_1p5()
                     .items_center()
-                    .child(div().flex_1().child(Input::new(&self.input).prefix(IconName::Search).cleanable(true)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Input::new(&self.input).prefix(IconName::Search).cleanable(true).with_size(Size::Small)),
+                    )
                     .child(action_button),
             );
+
+        let is_stale = !self.is_searching && self.is_results_stale(cx);
+        let stale_notice = is_stale.then(|| {
+            h_flex()
+                .w_full()
+                .justify_between()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_1()
+                .bg(theme.secondary)
+                .border_b_1()
+                .border_color(theme.border)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(theme.warning)
+                        .child("File changed — results may be outdated"),
+                )
+                .child(
+                    Button::new("rescan-stale-search")
+                        .label("Re-scan")
+                        .ghost()
+                        .with_size(Size::XSmall)
+                        .disabled(is_query_empty)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.trigger_search(cx);
+                        })),
+                )
+        });
 
         let truncation_notice = if self.is_truncated {
             Some(
                 div()
+                    .w_full()
                     .px_2()
                     .py_1()
                     .bg(theme.secondary)
@@ -834,6 +907,7 @@ impl Render for SearchPanel {
                     .border_color(theme.border)
                     .text_xs()
                     .text_color(theme.muted_foreground)
+                    .truncate()
                     .child(format!(
                         "{}+ occurrences found (showing first {} entries)",
                         MAX_SEARCH_RESULTS, MAX_SEARCH_RESULTS
@@ -880,7 +954,9 @@ impl Render for SearchPanel {
         } else {
             v_flex()
                 .flex_1()
+                .min_h_0()
                 .overflow_hidden()
+                .children(stale_notice)
                 .children(truncation_notice)
                 .child(DataTable::new(&self.table_state).bordered(false))
                 .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -895,6 +971,14 @@ impl Render for SearchPanel {
         crate::ui::panels::panel_container(is_focused, theme)
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    if !this.input.read(cx).focus_handle(cx).is_focused(window) {
+                        this.focus_handle.focus(window, cx);
+                    }
+                }),
+            )
             .on_action(cx.listener(Self::focus_table))
             .on_action(cx.listener(Self::confirm_select))
             .on_action(cx.listener(Self::dismiss_table))

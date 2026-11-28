@@ -561,8 +561,11 @@ pub fn render_footer(
 
     h_flex()
         .w_full()
+        .flex_wrap()
         .justify_between()
         .items_center()
+        .gap_x_2()
+        .gap_y_1()
         .p_2()
         .border_t_1()
         .border_color(border_color)

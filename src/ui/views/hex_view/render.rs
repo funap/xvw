@@ -52,7 +52,6 @@ impl Render for HexView {
         let is_focused = self.focus_handle.is_focused(window);
         let insert_mode = InsertModeState::is_enabled(cx);
         let cursor_visible = insert_mode && is_focused && window.is_window_active() && self.cursor_blink.read(cx).visible();
-        let theme = cx.theme();
         let font_family = self.font_family_prop.clone();
         let font_size = self.font_size_prop;
         let row_height = self.row_height();
@@ -90,7 +89,7 @@ impl Render for HexView {
             .relative()
             .flex()
             .flex_col()
-            .bg(theme.background)
+            .bg(cx.theme().background)
             .font_family(font_family.clone())
             .size_full()
             .min_w_0()
@@ -176,6 +175,29 @@ impl Render for HexView {
             self.last_cursor_offset = Some(reveal_cursor_offset);
             self.cursor_reveal_pending = false;
         }
+        {
+            let visible_rows = self.viewport_visible_rows();
+            let current_top = self.scroll.scroll_offset;
+            let vp_start = line_starts.get(current_top).unwrap_or(total_size);
+            let vp_end_row = (current_top + visible_rows).min(line_starts.len());
+            let vp_end = if vp_end_row < line_starts.len() {
+                line_starts.get(vp_end_row).unwrap_or(total_size)
+            } else {
+                total_size
+            };
+            let next_viewport = (vp_start < vp_end).then_some(vp_start..vp_end);
+            if self.editor.read(cx).viewport_byte_range != next_viewport {
+                let editor_entity = self.editor.clone();
+                cx.defer(move |cx| {
+                    editor_entity.update(cx, |editor, cx| {
+                        if editor.set_viewport_byte_range(next_viewport) {
+                            cx.notify();
+                        }
+                    });
+                });
+            }
+        }
+        let theme = cx.theme();
         let is_hex_clipped_left = self.scroll.hex_scroll_x > 1.0;
         let is_hex_clipped_right = self.scroll.hex_scroll_x < max_hex_scroll - 1.0;
         let is_ascii_clipped_left = self.scroll.ascii_scroll_x > 1.0;
