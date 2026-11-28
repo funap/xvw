@@ -92,6 +92,14 @@ impl Workspace {
         }
     }
 
+    pub(crate) fn on_action_toggle_replace(&mut self, action: &ToggleReplace, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(panel) = self.active_editor_view(cx) {
+            panel.update(cx, |panel, cx| {
+                panel.toggle_replace(action, window, cx);
+            });
+        }
+    }
+
     pub(crate) fn on_action_toggle_goto_address(&mut self, action: &ToggleGoToAddress, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(panel) = self.active_editor_view(cx) {
             panel.update(cx, |panel, cx| {

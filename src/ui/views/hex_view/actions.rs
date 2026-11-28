@@ -1,7 +1,7 @@
 use super::types::CONTEXT;
 use crate::actions::{
-    AddCustomBreak, ClearAllCustomBreaks, Copy, CopyAsHexDump, Cut, GoToBeginning, GoToEnd, JoinLine, Paste, Redo, RemoveCustomBreaksInRange, SearchNext,
-    SearchPrev, SelectToBeginning, SelectToEnd, ToggleEditColumn, ToggleGoToAddress, ToggleSearch, Undo, UnfoldBookmarkAtCursor,
+    AddCustomBreak, ClearAllCustomBreaks, Copy, CopyAsHexDump, Cut, GoToBeginning, GoToEnd, JoinLine, Paste, Redo, RemoveCustomBreaksInRange,
+    SelectToBeginning, SelectToEnd, ToggleEditColumn, Undo, UnfoldBookmarkAtCursor,
 };
 use gpui_kit::*;
 
@@ -160,24 +160,6 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("/", TriggerSearch, Some(CONTEXT)),
         KeyBinding::new("n", TriggerSearchNext, Some(CONTEXT)),
         KeyBinding::new("shift-n", TriggerSearchPrev, Some(CONTEXT)),
-        // Standard search shortcuts
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-f", ToggleSearch, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-f", ToggleSearch, Some(CONTEXT)),
-        KeyBinding::new("f3", SearchNext, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-g", SearchNext, Some(CONTEXT)),
-        KeyBinding::new("shift-f3", SearchPrev, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-shift-g", SearchPrev, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-shift-g", SearchPrev, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-l", ToggleGoToAddress, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-l", ToggleGoToAddress, Some(CONTEXT)),
-        KeyBinding::new("ctrl-g", ToggleGoToAddress, Some(CONTEXT)),
         // Custom line breaks & joins
         KeyBinding::new("enter", AddCustomBreak, Some(CONTEXT)),
         KeyBinding::new("shift-enter", RemoveCustomBreaksInRange, Some(CONTEXT)),
