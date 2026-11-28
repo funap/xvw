@@ -672,6 +672,10 @@ fn build_view_menu() -> MenuDef {
                 ],
             ),
             MenuItemDef::separator(),
+            MenuItemDef::action("Zoom In", crate::actions::ZoomIn),
+            MenuItemDef::action("Zoom Out", crate::actions::ZoomOut),
+            MenuItemDef::action("Reset Zoom", crate::actions::ResetZoom),
+            MenuItemDef::separator(),
             MenuItemDef::submenu(
                 "Radix",
                 vec![
@@ -774,8 +778,12 @@ fn build_go_menu() -> MenuDef {
         items: vec![
             MenuItemDef::action_with_condition("Go to Address...", crate::actions::ToggleGoToAddress, |s| s.has_doc),
             MenuItemDef::separator(),
+            MenuItemDef::action_with_condition("Navigate Back", crate::actions::NavigateBack, |s| s.has_doc),
+            MenuItemDef::action_with_condition("Navigate Forward", crate::actions::NavigateForward, |s| s.has_doc),
+            MenuItemDef::separator(),
             MenuItemDef::action_with_condition("Go to Beginning", crate::actions::GoToBeginning, |s| s.has_doc),
             MenuItemDef::action_with_condition("Go to End", crate::actions::GoToEnd, |s| s.has_doc),
+            MenuItemDef::action_with_condition("Switch Hex / ASCII Column", crate::actions::ToggleEditColumn, |s| s.has_doc),
             MenuItemDef::separator(),
             MenuItemDef::action_with_condition("Next Difference", crate::actions::NextDifference, |s| s.has_diff),
             MenuItemDef::action_with_condition("Previous Difference", crate::actions::PrevDifference, |s| s.has_diff),

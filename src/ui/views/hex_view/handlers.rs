@@ -167,14 +167,30 @@ impl HexView {
     }
 
     pub(super) fn delete_backward_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::core::editor::OverwriteDeleteBehavior;
+        use gpui_kit::component::WindowExt as _;
+        use gpui_kit::component::notification::Notification;
+
         cx.focus_self(window);
         if self.edit_column_is_hex() && self.input.cancel_pending() {
             cx.notify();
             return;
         }
         self.input.clear_pending();
+        if self.editor.read(cx).is_read_only() {
+            return;
+        }
+        let insert_mode = InsertModeState::is_enabled(cx);
+        let overwrite_behavior = cx.try_global::<OverwriteDeleteBehavior>().copied().unwrap_or_default();
+        if !insert_mode && overwrite_behavior == OverwriteDeleteBehavior::Disallow {
+            window.push_notification(
+                Notification::warning("Overwrite mode protects file size — switch to Insert mode or enable Zero-Fill in Settings"),
+                cx,
+            );
+            return;
+        }
         let changed = self.editor.update(cx, |ed, editor_cx| {
-            let changed = ed.delete_backward();
+            let changed = if insert_mode { ed.delete_backward() } else { ed.zero_fill_backward() };
             if changed {
                 editor_cx.notify();
             }
@@ -184,10 +200,26 @@ impl HexView {
     }
 
     pub(super) fn delete_forward_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::core::editor::OverwriteDeleteBehavior;
+        use gpui_kit::component::WindowExt as _;
+        use gpui_kit::component::notification::Notification;
+
         cx.focus_self(window);
         self.input.clear_pending();
+        if self.editor.read(cx).is_read_only() {
+            return;
+        }
+        let insert_mode = InsertModeState::is_enabled(cx);
+        let overwrite_behavior = cx.try_global::<OverwriteDeleteBehavior>().copied().unwrap_or_default();
+        if !insert_mode && overwrite_behavior == OverwriteDeleteBehavior::Disallow {
+            window.push_notification(
+                Notification::warning("Overwrite mode protects file size — switch to Insert mode or enable Zero-Fill in Settings"),
+                cx,
+            );
+            return;
+        }
         let changed = self.editor.update(cx, |ed, editor_cx| {
-            let changed = ed.delete_forward();
+            let changed = if insert_mode { ed.delete_forward() } else { ed.zero_fill_forward() };
             if changed {
                 editor_cx.notify();
             }
@@ -213,8 +245,20 @@ impl HexView {
                 return;
             }
             "escape" => {
-                self.clear_pending_hex_input();
-                cx.notify();
+                if self.input.cancel_pending() {
+                    cx.notify();
+                    return;
+                }
+                if self.editor.read(cx).has_selection() {
+                    self.editor.update(cx, |editor, cx| {
+                        editor.clear_selection();
+                        cx.notify();
+                    });
+                    cx.emit(HexViewEvent::SelectionChanged { start: None, end: None });
+                    cx.notify();
+                    return;
+                }
+                cx.emit(HexViewEvent::EscapePressed);
                 return;
             }
             _ => {}
@@ -677,19 +721,47 @@ impl HexView {
     }
 
     pub(super) fn home(&mut self, _: &Home, window: &mut Window, cx: &mut Context<Self>) {
-        self.exec_move(window, cx, |e| e.set_cursor_offset(0));
+        self.exec_move(window, cx, |e| e.move_to_line_start());
     }
 
     pub(super) fn end(&mut self, _: &End, window: &mut Window, cx: &mut Context<Self>) {
         let insert_mode = InsertModeState::is_enabled(cx);
-        self.exec_move(window, cx, |e| {
-            let total = e.total_size();
-            if insert_mode {
-                e.set_cursor_offset_exact(total);
-            } else {
-                e.set_cursor_offset(total.saturating_sub(1));
-            }
-        });
+        self.exec_move(window, cx, move |e| e.move_to_line_end(insert_mode));
+    }
+
+    pub(super) fn move_group_left(&mut self, _: &MoveGroupLeft, window: &mut Window, cx: &mut Context<Self>) {
+        self.exec_move(window, cx, |e| e.move_group_left());
+    }
+
+    pub(super) fn move_group_right(&mut self, _: &MoveGroupRight, window: &mut Window, cx: &mut Context<Self>) {
+        let insert_mode = InsertModeState::is_enabled(cx);
+        self.exec_move(window, cx, move |e| e.move_group_right(insert_mode));
+    }
+
+    pub(super) fn select_group_left(&mut self, _: &SelectGroupLeft, window: &mut Window, cx: &mut Context<Self>) {
+        let insert_mode = InsertModeState::is_enabled(cx);
+        self.exec_select(window, cx, move |e| e.select_group_left(insert_mode));
+    }
+
+    pub(super) fn select_group_right(&mut self, _: &SelectGroupRight, window: &mut Window, cx: &mut Context<Self>) {
+        let insert_mode = InsertModeState::is_enabled(cx);
+        self.exec_select(window, cx, move |e| e.select_group_right(insert_mode));
+    }
+
+    pub fn toggle_edit_column(&mut self, _: &crate::actions::ToggleEditColumn, window: &mut Window, cx: &mut Context<Self>) {
+        cx.focus_self(window);
+        let is_struct_mode = {
+            let ed = self.editor.read(cx);
+            ed.structure.show_inline_structure_view && ed.parse_result().is_some()
+        };
+        if !self.show_ascii || is_struct_mode {
+            return;
+        }
+        self.commit_pending_hex_with_zero(cx);
+        let next = if self.input.is_hex() { EditColumn::Ascii } else { EditColumn::Hex };
+        self.input.set_active_column(next);
+        self.pause_cursor_blink(cx);
+        cx.notify();
     }
 
     pub(super) fn select_page_up(&mut self, _: &SelectPageUp, window: &mut Window, cx: &mut Context<Self>) {
@@ -733,22 +805,14 @@ impl HexView {
     pub(super) fn select_home(&mut self, _: &SelectHome, window: &mut Window, cx: &mut Context<Self>) {
         let insert_mode = InsertModeState::is_enabled(cx);
         self.exec_select(window, cx, move |editor| {
-            if insert_mode {
-                editor.select_home_for_insert();
-            } else {
-                editor.select_home();
-            }
+            editor.select_to_line_start(insert_mode);
         });
     }
 
     pub(super) fn select_end(&mut self, _: &SelectEnd, window: &mut Window, cx: &mut Context<Self>) {
         let insert_mode = InsertModeState::is_enabled(cx);
         self.exec_select(window, cx, move |editor| {
-            if insert_mode {
-                editor.select_end_for_insert();
-            } else {
-                editor.select_end();
-            }
+            editor.select_to_line_end(insert_mode);
         });
     }
 

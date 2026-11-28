@@ -369,6 +369,40 @@ pub fn init(cx: &mut App) {
     cx.on_action::<ToggleInsertMode>(|_, cx| {
         InsertModeState::toggle(cx);
     });
+    cx.on_action::<ZoomIn>(|_, cx| {
+        cx.update_global::<crate::core::appearance::Appearance, _>(|appearance, _| {
+            appearance.font_size = (appearance.font_size + 1.0).min(crate::core::appearance::MAX_FONT_SIZE);
+        });
+        crate::settings::save_current(cx);
+    });
+    cx.on_action::<ZoomOut>(|_, cx| {
+        cx.update_global::<crate::core::appearance::Appearance, _>(|appearance, _| {
+            appearance.font_size = (appearance.font_size - 1.0).max(crate::core::appearance::MIN_FONT_SIZE);
+        });
+        crate::settings::save_current(cx);
+    });
+    cx.on_action::<ResetZoom>(|_, cx| {
+        let default_size = crate::core::appearance::Appearance::default().font_size;
+        cx.update_global::<crate::core::appearance::Appearance, _>(|appearance, _| {
+            appearance.font_size = default_size;
+        });
+        crate::settings::save_current(cx);
+    });
+    cx.on_action::<NavigateBack>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_navigate_back(&NavigateBack, window, cx);
+        });
+    });
+    cx.on_action::<NavigateForward>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_navigate_forward(&NavigateForward, window, cx);
+        });
+    });
+    cx.on_action::<ToggleEditColumn>(|_, cx| {
+        defer_in_active_workspace(cx, |workspace, window, cx| {
+            workspace.on_action_toggle_edit_column(&ToggleEditColumn, window, cx);
+        });
+    });
 
     cx.activate(true);
 }

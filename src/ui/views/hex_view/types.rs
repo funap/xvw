@@ -57,6 +57,7 @@ pub enum HexViewEvent {
     HorizontalScrolled { target: HorizontalScrollTarget, progress: f32 },
     SelectionChanged { start: Option<usize>, end: Option<usize> },
     CursorMoved(usize),
+    EscapePressed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

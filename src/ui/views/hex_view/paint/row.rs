@@ -106,6 +106,7 @@ pub struct RowPaintParams<'a> {
     pub ascii_cursor_char_range: Option<Range<usize>>,
     pub cursor_visible: bool,
     pub pending_hex_digit: Option<(usize, u8)>,
+    pub low_nibble_offset: Option<usize>,
     pub outer_scroll_x: f32,
     pub hex_scroll_x: f32,
     pub desc_scroll_x: f32,
@@ -1041,6 +1042,15 @@ pub fn paint_hex_row(params: RowPaintParams, window: &mut Window, cx: &mut App) 
 
                         if params.active_column == EditColumn::Hex {
                             paint_cursor_border(window, byte_box_bounds, cursor_border_color);
+                            if params.low_nibble_offset == Some(params.cursor_offset) {
+                                paint_underscore_cursor_at(
+                                    window,
+                                    byte_box_bounds,
+                                    byte_start_x + params.hex_cell_width,
+                                    params.hex_cell_width,
+                                    cursor_border_color,
+                                );
+                            }
                         } else {
                             paint_underscore_cursor_at(window, byte_box_bounds, byte_start_x, byte_width, cursor_border_color);
                         }

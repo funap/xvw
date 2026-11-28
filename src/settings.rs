@@ -1,4 +1,5 @@
 use crate::core::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
+use crate::core::editor::OverwriteDeleteBehavior;
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
 use crate::core::radix::{ByteCategoryColors, ByteColoring, ByteGroupSize, ByteOrder, DisplayRadix, HexCase};
@@ -110,6 +111,8 @@ pub struct Settings {
     pub structure_yaml_include_offsets: bool,
     #[serde(default, deserialize_with = "deserialize_or_default")]
     pub hex_case: HexCase,
+    #[serde(default, deserialize_with = "deserialize_or_default")]
+    pub overwrite_delete_behavior: OverwriteDeleteBehavior,
     #[serde(default, deserialize_with = "deserialize_or_default")]
     pub recent_definition_paths: Vec<PathBuf>,
     #[serde(default, deserialize_with = "deserialize_or_default")]
@@ -259,6 +262,7 @@ impl Default for Settings {
             structure_yaml_sha_threshold: DEFAULT_STRUCTURE_YAML_SHA_THRESHOLD,
             structure_yaml_include_offsets: true,
             hex_case: HexCase::default(),
+            overwrite_delete_behavior: OverwriteDeleteBehavior::default(),
             recent_definition_paths: Vec::new(),
             recent_file_paths: Vec::new(),
             recent_files: Vec::new(),
@@ -326,6 +330,7 @@ impl Settings {
             structure_yaml_sha_threshold: cx.global::<crate::core::structure::StructureYamlShaThreshold>().0,
             structure_yaml_include_offsets: cx.global::<crate::core::structure::StructureYamlIncludeOffsets>().0,
             hex_case: cx.try_global::<HexCase>().copied().unwrap_or_default(),
+            overwrite_delete_behavior: cx.try_global::<OverwriteDeleteBehavior>().copied().unwrap_or_default(),
             recent_definition_paths: recent_history.definitions.paths().to_vec(),
             recent_file_paths: recent_history.files.paths(),
             recent_files: recent_history.files.entries().to_vec(),
@@ -555,6 +560,7 @@ mod tests {
             structure_yaml_sha_threshold: 64,
             structure_yaml_include_offsets: false,
             hex_case: HexCase::Upper,
+            overwrite_delete_behavior: OverwriteDeleteBehavior::ZeroFill,
             recent_definition_paths: vec![PathBuf::from("definition.ksy")],
             recent_file_paths: vec![PathBuf::from("binary.bin")],
             recent_files: vec![RecentFileEntry::new(PathBuf::from("binary.bin"), None)],
@@ -947,5 +953,21 @@ panel_width = "wide"
         assert_eq!(backup_content, "this is not valid toml = [[{\n");
 
         let _ = fs::remove_file(&backup_path);
+    }
+
+    #[test]
+    fn overwrite_delete_behavior_persists_and_falls_back_on_invalid() {
+        let file = TestSettingsFile::new("overwrite-delete");
+        let mut settings = Settings::default();
+        assert_eq!(settings.overwrite_delete_behavior, OverwriteDeleteBehavior::Disallow);
+
+        settings.overwrite_delete_behavior = OverwriteDeleteBehavior::ZeroFill;
+        settings.save_to(&file.path).expect("save settings");
+        let loaded = Settings::load_from(&file.path).expect("load settings");
+        assert_eq!(loaded.overwrite_delete_behavior, OverwriteDeleteBehavior::ZeroFill);
+
+        fs::write(&file.path, "overwrite_delete_behavior = \"UnknownMode\"\n").expect("write invalid behavior");
+        let fallback = Settings::load_from(&file.path).expect("load fallback settings");
+        assert_eq!(fallback.overwrite_delete_behavior, OverwriteDeleteBehavior::Disallow);
     }
 }

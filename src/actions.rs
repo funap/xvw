@@ -236,6 +236,30 @@ pub struct GoToBeginning;
 #[derive(Clone, PartialEq, Action)]
 pub struct GoToEnd;
 
+#[derive(Clone, PartialEq, Action)]
+pub struct SelectToBeginning;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct SelectToEnd;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct ToggleEditColumn;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct NavigateBack;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct NavigateForward;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct ZoomIn;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct ZoomOut;
+
+#[derive(Clone, PartialEq, Action)]
+pub struct ResetZoom;
+
 #[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
 #[action(namespace = app)]
 #[serde(deny_unknown_fields)]

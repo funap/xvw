@@ -4,6 +4,7 @@ mod theme_selector;
 mod tests;
 
 use crate::core::appearance::{Appearance, MAX_FONT_SIZE, MIN_FONT_SIZE};
+use crate::core::editor::OverwriteDeleteBehavior;
 use crate::core::encoding::Encoding;
 use crate::core::layout::{BytesPerRow, DEFAULT_BYTES_PER_ROW, MAX_BYTES_PER_ROW, MIN_BYTES_PER_ROW};
 use crate::core::radix::{ByteCategoryColors, ByteColoring, ByteGroupSize, ByteOrder, CategoryColor, DisplayRadix, HexByteCategory, HexCase};
@@ -146,6 +147,10 @@ impl SettingsView {
         }));
 
         subscriptions.push(cx.observe_global::<StructureYamlIncludeOffsets>(|_, cx| {
+            cx.notify();
+        }));
+
+        subscriptions.push(cx.observe_global::<OverwriteDeleteBehavior>(|_, cx| {
             cx.notify();
         }));
 
@@ -744,6 +749,53 @@ impl Render for SettingsView {
                                             });
                                             crate::settings::save_current(cx);
                                             window.push_notification(Notification::info("Reset Default Byte Order to default"), cx);
+                                        })),
+                                )
+                            })
+                    })
+                    .child({
+                        let overwrite_delete = *cx.global::<OverwriteDeleteBehavior>();
+                        let is_modified = overwrite_delete != OverwriteDeleteBehavior::default();
+
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(row_gap)
+                            .child(div().w(label_width).flex_shrink_0().whitespace_nowrap().child("Overwrite Delete / Cut"))
+                            .child(
+                                div().w(control_width).child(
+                                    Button::new("overwrite-delete-behavior")
+                                        .label(overwrite_delete.label())
+                                        .outline()
+                                        .dropdown_caret(true)
+                                        .with_size(Size::Small)
+                                        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _window, _cx| {
+                                            OverwriteDeleteBehavior::ALL.iter().copied().fold(menu, |menu, behavior| {
+                                                menu.item(PopupMenuItem::new(behavior.label()).checked(behavior == overwrite_delete).on_click(
+                                                    move |_, _, cx| {
+                                                        cx.update_global::<OverwriteDeleteBehavior, _>(|current, _| {
+                                                            *current = behavior;
+                                                        });
+                                                        crate::settings::save_current(cx);
+                                                    },
+                                                ))
+                                            })
+                                        }),
+                                ),
+                            )
+                            .when(is_modified, |row| {
+                                row.child(
+                                    Button::new("reset-overwrite-delete")
+                                        .icon(IconName::Undo2)
+                                        .ghost()
+                                        .with_size(Size::Small)
+                                        .tooltip("Reset to default")
+                                        .on_click(cx.listener(|_, _, window, cx| {
+                                            cx.update_global::<OverwriteDeleteBehavior, _>(|current, _| {
+                                                *current = OverwriteDeleteBehavior::default();
+                                            });
+                                            crate::settings::save_current(cx);
+                                            window.push_notification(Notification::info("Reset Overwrite Delete / Cut to default"), cx);
                                         })),
                                 )
                             })
